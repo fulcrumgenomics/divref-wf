@@ -85,6 +85,39 @@ def _form_parent_blocks(
     return combined.select("col_idx", "pop_int", "strand", "parent_block")
 
 
+def _enumerate_subfragments(parents_ht: hl.Table) -> hl.Table:
+    """
+    Enumerate every adjacency-contiguous sub-fragment of length ≥ 2 from each parent block.
+
+    For a parent block of length N, emits N(N-1)/2 sub-fragments — one per `(i, j)` index
+    pair with `0 ≤ i < j < N`, namely `parent_block[i : j + 1]`. The full parent block is
+    included as the case `i = 0, j = N - 1`.
+
+    Args:
+        parents_ht: Hail table with one row per (sample, strand, parent block) — the output
+            of `_form_parent_blocks`. Required fields:
+            - `col_idx` (int)
+            - `pop_int` (int)
+            - `strand` (int)
+            - `parent_block` (array of struct(locus, row_idx, ref_len)), length ≥ 2.
+
+    Returns:
+        Hail table with one row per (sample, strand, parent block, sub-fragment) and fields:
+            - `col_idx`, `pop_int`, `strand` inherited from input.
+            - `sub_fragment` (array of struct(locus, row_idx, ref_len)): the sub-fragment,
+              length ≥ 2, preserving the parent's variant order.
+        Output is unkeyed.
+    """
+    parents_ht = parents_ht.key_by()
+    n = hl.len(parents_ht.parent_block)
+    sub_fragments = hl.range(0, n).flatmap(
+        lambda i: hl.range(i + 1, n).map(lambda j: parents_ht.parent_block[i : j + 1])
+    )
+    parents_ht = parents_ht.annotate(sub_fragments=sub_fragments)
+    parents_ht = parents_ht.explode("sub_fragments")
+    return parents_ht.select("col_idx", "pop_int", "strand", sub_fragment=parents_ht.sub_fragments)
+
+
 def _get_haplotypes(
     ht: hl.Table,
     windower_f: Callable[[hl.Expression], hl.Expression],

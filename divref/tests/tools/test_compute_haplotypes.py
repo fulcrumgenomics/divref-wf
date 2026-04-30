@@ -8,6 +8,7 @@ from unittest.mock import patch
 import hail as hl
 import pytest
 
+from divref.tools.compute_haplotypes import _enumerate_subfragments
 from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import compute_haplotypes
 
@@ -185,6 +186,154 @@ def test_form_parent_blocks_left_and_right_independent(
     assert [v.row_idx for v in rows[0].parent_block] == [0, 1]
     assert rows[1].strand == 1
     assert [v.row_idx for v in rows[1].parent_block] == [2, 3]
+
+
+@dataclass
+class ParentInfo:
+    """Helper to define a single parent block for testing `_enumerate_subfragments`."""
+
+    col_index: int
+    pop_int: int
+    strand: int
+    block: list[CarrierPos]
+
+
+def _make_parents_ht(parents: list[ParentInfo]) -> hl.Table:
+    """
+    Construct a synthetic parents Hail Table for testing `_enumerate_subfragments`.
+
+    Args:
+        parents: list of `ParentInfo` rows; each becomes one (sample, strand, parent block) row.
+
+    Returns:
+        Hail Table with the schema produced by `_form_parent_blocks`.
+    """
+    carrier_type = hl.tstruct(
+        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+        row_idx=hl.tint64,
+        ref_len=hl.tint32,
+    )
+    row_type = hl.tstruct(
+        col_idx=hl.tint32,
+        pop_int=hl.tint32,
+        strand=hl.tint32,
+        parent_block=hl.tarray(carrier_type),
+    )
+    rows = [
+        {
+            "col_idx": p.col_index,
+            "pop_int": p.pop_int,
+            "strand": p.strand,
+            "parent_block": [
+                {
+                    "locus": {"contig": "chr1", "position": c.position},
+                    "row_idx": c.row_index,
+                    "ref_len": c.ref_len,
+                }
+                for c in p.block
+            ],
+        }
+        for p in parents
+    ]
+    return hl.Table.parallelize(rows, schema=row_type)
+
+
+def test_enumerate_subfragments_length_two(hail_context: None) -> None:  # noqa: ARG001
+    """A parent of length 2 emits one sub-fragment (the full block itself)."""
+    parents = _make_parents_ht([
+        ParentInfo(
+            col_index=0,
+            pop_int=0,
+            strand=0,
+            block=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+        )
+    ])
+    rows = _enumerate_subfragments(parents).collect()
+    assert len(rows) == 1
+    assert [v.row_idx for v in rows[0].sub_fragment] == [0, 1]
+
+
+def test_enumerate_subfragments_length_three(hail_context: None) -> None:  # noqa: ARG001
+    """A parent of length 3 emits 3 sub-fragments: [0,1], [0,1,2], [1,2]."""
+    parents = _make_parents_ht([
+        ParentInfo(
+            col_index=0,
+            pop_int=0,
+            strand=0,
+            block=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1), CarrierPos(120, 2, 1)],
+        )
+    ])
+    rows = _enumerate_subfragments(parents).collect()
+    seen = sorted([tuple(v.row_idx for v in r.sub_fragment) for r in rows])
+    assert seen == [(0, 1), (0, 1, 2), (1, 2)]
+
+
+def test_enumerate_subfragments_length_four(hail_context: None) -> None:  # noqa: ARG001
+    """A parent of length 4 emits 6 sub-fragments — every contiguous slice of length ≥ 2."""
+    parents = _make_parents_ht([
+        ParentInfo(
+            col_index=0,
+            pop_int=0,
+            strand=0,
+            block=[
+                CarrierPos(100, 0, 1),
+                CarrierPos(110, 1, 1),
+                CarrierPos(120, 2, 1),
+                CarrierPos(130, 3, 1),
+            ],
+        )
+    ])
+    rows = _enumerate_subfragments(parents).collect()
+    seen = sorted([tuple(v.row_idx for v in r.sub_fragment) for r in rows])
+    assert seen == [
+        (0, 1),
+        (0, 1, 2),
+        (0, 1, 2, 3),
+        (1, 2),
+        (1, 2, 3),
+        (2, 3),
+    ]
+
+
+def test_enumerate_subfragments_preserves_metadata(hail_context: None) -> None:  # noqa: ARG001
+    """Each sub-fragment row inherits col_idx, pop_int, strand from its parent."""
+    parents = _make_parents_ht([
+        ParentInfo(
+            col_index=42,
+            pop_int=3,
+            strand=1,
+            block=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1), CarrierPos(120, 2, 1)],
+        )
+    ])
+    rows = _enumerate_subfragments(parents).collect()
+    assert len(rows) == 3
+    assert all(r.col_idx == 42 for r in rows)
+    assert all(r.pop_int == 3 for r in rows)
+    assert all(r.strand == 1 for r in rows)
+
+
+def test_enumerate_subfragments_multiple_parents(hail_context: None) -> None:  # noqa: ARG001
+    """Sub-fragments from different parents are emitted independently."""
+    parents = _make_parents_ht([
+        ParentInfo(
+            col_index=0,
+            pop_int=0,
+            strand=0,
+            block=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+        ),
+        ParentInfo(
+            col_index=1,
+            pop_int=0,
+            strand=0,
+            block=[CarrierPos(200, 5, 1), CarrierPos(210, 6, 1), CarrierPos(220, 7, 1)],
+        ),
+    ])
+    rows = _enumerate_subfragments(parents).collect()
+    by_sample: dict[int, list[tuple[int, ...]]] = {}
+    for r in rows:
+        by_sample.setdefault(r.col_idx, []).append(tuple(v.row_idx for v in r.sub_fragment))
+    assert sorted(by_sample[0]) == [(0, 1)]
+    assert sorted(by_sample[1]) == [(5, 6), (5, 6, 7), (6, 7)]
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001
