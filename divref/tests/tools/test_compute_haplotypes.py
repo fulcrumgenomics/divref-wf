@@ -9,6 +9,7 @@ import hail as hl
 import pytest
 
 from divref.tools.compute_haplotypes import _aggregate_containment_ac
+from divref.tools.compute_haplotypes import _attach_component_info
 from divref.tools.compute_haplotypes import _enumerate_subfragments
 from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import compute_haplotypes
@@ -466,6 +467,117 @@ def test_aggregate_containment_ac_multi_population(hail_context: None) -> None: 
     assert len(result) == 1
     assert list(result[0].haplotype) == [0, 1]
     assert list(result[0].per_pop_AC) == [1, 0, 1, 0]
+
+
+def _make_hap_table(rows: list[tuple[list[int], list[int]]]) -> hl.Table:
+    """
+    Construct a synthetic haplotype Table for testing `_attach_component_info`.
+
+    Args:
+        rows: list of `(haplotype, per_pop_AC)` tuples.
+
+    Returns:
+        Hail Table keyed by `haplotype` with fields `haplotype` (array<int64>) and
+        `per_pop_AC` (array<int64>).
+    """
+    row_type = hl.tstruct(haplotype=hl.tarray(hl.tint64), per_pop_AC=hl.tarray(hl.tint64))
+    return hl.Table.parallelize(
+        [{"haplotype": h, "per_pop_AC": ac} for (h, ac) in rows], schema=row_type
+    ).key_by("haplotype")
+
+
+def _make_variants_ht(
+    variants: list[tuple[int, int, str, str, list[float], dict[int, int]]],
+) -> hl.Table:
+    """
+    Construct a synthetic variants Table mirroring the schema from `mt.rows().select(...)`.
+
+    Args:
+        variants: list of `(row_idx, position, ref, alt, freq_per_pop_AF, ANs_by_pop)`. The
+            simplified `freq` field stores just AF per population (not the full struct);
+            `frequencies_by_pop` is a dict of pop_int → struct(AN=...). These are sufficient
+            for the lookup-mechanic tests; `_compute_metrics` is tested separately with
+            richer fields.
+
+    Returns:
+        Hail Table keyed by (locus, alleles) with fields `row_idx`, `locus`, `alleles`, `freq`,
+        and `frequencies_by_pop`.
+    """
+    freq_type = hl.tstruct(AF=hl.tfloat64)
+    fbp_value_type = hl.tstruct(AN=hl.tint32)
+    row_type = hl.tstruct(
+        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+        alleles=hl.tarray(hl.tstr),
+        row_idx=hl.tint64,
+        freq=hl.tarray(freq_type),
+        frequencies_by_pop=hl.tdict(hl.tint32, fbp_value_type),
+    )
+    rows = [
+        {
+            "locus": {"contig": "chr1", "position": pos},
+            "alleles": [ref, alt],
+            "row_idx": row_idx,
+            "freq": [{"AF": af} for af in afs],
+            "frequencies_by_pop": {p: {"AN": an} for p, an in ans.items()},
+        }
+        for (row_idx, pos, ref, alt, afs, ans) in variants
+    ]
+    return hl.Table.parallelize(rows, schema=row_type).key_by("locus", "alleles")
+
+
+def test_attach_component_info_basic_lookup(hail_context: None) -> None:  # noqa: ARG001
+    """Each haplotype row gets variants/gnomad_freqs/frequencies_by_pop in haplotype order."""
+    hap_table = _make_hap_table([([0, 2], [1, 0]), ([1], [3, 0])])
+    variants_ht = _make_variants_ht([
+        (0, 100, "A", "T", [0.1, 0.2], {0: 100, 1: 200}),
+        (1, 110, "C", "G", [0.3, 0.4], {0: 102, 1: 198}),
+        (2, 120, "G", "A", [0.5, 0.6], {0: 99, 1: 201}),
+    ])
+    rows = sorted(
+        _attach_component_info(hap_table, variants_ht).collect(),
+        key=lambda r: list(r.haplotype),
+    )
+
+    assert len(rows) == 2
+    # haplotype [0, 2] picks up variants at positions 100 and 120
+    assert [v.locus.position for v in rows[0].variants] == [100, 120]
+    assert [list(v.alleles) for v in rows[0].variants] == [["A", "T"], ["G", "A"]]
+    assert [[s.AF for s in r] for r in rows[0].gnomad_freqs] == [[0.1, 0.2], [0.5, 0.6]]
+    assert [{p: s.AN for p, s in fbp.items()} for fbp in rows[0].frequencies_by_pop] == [
+        {0: 100, 1: 200},
+        {0: 99, 1: 201},
+    ]
+    # haplotype [1] picks up variant at position 110
+    assert [v.locus.position for v in rows[1].variants] == [110]
+
+
+def test_attach_component_info_preserves_per_pop_ac(hail_context: None) -> None:  # noqa: ARG001
+    """`per_pop_AC` is left untouched by component lookup."""
+    hap_table = _make_hap_table([([0, 1], [3, 5])])
+    variants_ht = _make_variants_ht([
+        (0, 100, "A", "T", [0.1], {0: 10}),
+        (1, 110, "C", "G", [0.2], {0: 12}),
+    ])
+    rows = _attach_component_info(hap_table, variants_ht).collect()
+    assert len(rows) == 1
+    assert list(rows[0].per_pop_AC) == [3, 5]
+
+
+def test_attach_component_info_array_lengths_match_haplotype(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """variants/gnomad_freqs/frequencies_by_pop are parallel-length to haplotype."""
+    hap_table = _make_hap_table([([0, 1, 2, 3], [1, 0])])
+    variants_ht = _make_variants_ht([
+        (0, 100, "A", "T", [0.1], {0: 10}),
+        (1, 110, "C", "G", [0.2], {0: 11}),
+        (2, 120, "G", "A", [0.3], {0: 12}),
+        (3, 130, "T", "C", [0.4], {0: 13}),
+    ])
+    rows = _attach_component_info(hap_table, variants_ht).collect()
+    assert len(rows[0].variants) == 4
+    assert len(rows[0].gnomad_freqs) == 4
+    assert len(rows[0].frequencies_by_pop) == 4
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001

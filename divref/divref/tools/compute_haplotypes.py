@@ -153,6 +153,61 @@ def _aggregate_containment_ac(subfragments_ht: hl.Table, n_pops: int) -> hl.Tabl
     return counts.select("per_pop_AC")
 
 
+def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Table:
+    """
+    Attach per-variant component information to each haplotype row.
+
+    Looks up `(locus, alleles, freq, frequencies_by_pop)` for every `row_idx` in each row's
+    `haplotype` array and produces three parallel-length arrays.
+
+    Implementation: collects the variants table into a driver-side dict keyed by `row_idx`,
+    broadcasts it as a Hail literal, and indexes per-haplotype. Driver memory is proportional
+    to the number of variants in `variants_ht` (i.e., variants that pass `variant_freq_threshold`
+    upstream); for typical chr1 inputs this is in the hundreds of thousands of small structs.
+
+    Args:
+        hap_table: Hail table with at least these fields:
+            - `haplotype` (array<int64>): row indices into `variants_ht.row_idx`.
+        variants_ht: Hail table with one row per variant. Must contain fields `row_idx`,
+            `locus`, `alleles`, `freq`, and `frequencies_by_pop`.
+
+    Returns:
+        `hap_table` annotated with three new arrays parallel-length to `haplotype`:
+            - `variants` (array<struct(locus, alleles)>).
+            - `gnomad_freqs` (array<freq array>): the per-variant gnomAD frequency array
+              (one inner array element per population).
+            - `frequencies_by_pop` (array<dict<int, struct(AF, AC, AN)>>): the per-variant
+              call-stats grouping. Used downstream for per-population min-AN computation.
+    """
+    components_dict = hl.literal(
+        dict(
+            zip(
+                variants_ht.row_idx.collect(),
+                variants_ht.aggregate(
+                    hl.agg.collect(
+                        hl.struct(
+                            locus=variants_ht.locus,
+                            alleles=variants_ht.alleles,
+                            freq=variants_ht.freq,
+                            frequencies_by_pop=variants_ht.frequencies_by_pop,
+                        )
+                    )
+                ),
+                strict=True,
+            )
+        )
+    )
+    hap_table = hap_table.annotate(
+        _components=hap_table.haplotype.map(lambda idx: components_dict[hl.int32(idx)])
+    )
+    hap_table = hap_table.annotate(
+        variants=hap_table._components.map(lambda c: hl.struct(locus=c.locus, alleles=c.alleles)),
+        gnomad_freqs=hap_table._components.map(lambda c: c.freq),
+        frequencies_by_pop=hap_table._components.map(lambda c: c.frequencies_by_pop),
+    )
+    return hap_table.drop("_components")
+
+
 def _get_haplotypes(
     ht: hl.Table,
     windower_f: Callable[[hl.Expression], hl.Expression],
