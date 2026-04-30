@@ -8,6 +8,7 @@ from unittest.mock import patch
 import hail as hl
 import pytest
 
+from divref.tools.compute_haplotypes import _aggregate_containment_ac
 from divref.tools.compute_haplotypes import _enumerate_subfragments
 from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import compute_haplotypes
@@ -334,6 +335,137 @@ def test_enumerate_subfragments_multiple_parents(hail_context: None) -> None:  #
         by_sample.setdefault(r.col_idx, []).append(tuple(v.row_idx for v in r.sub_fragment))
     assert sorted(by_sample[0]) == [(0, 1)]
     assert sorted(by_sample[1]) == [(5, 6), (5, 6, 7), (6, 7)]
+
+
+@dataclass
+class SubFragmentInfo:
+    """Helper to define one sub-fragment row for testing `_aggregate_containment_ac`."""
+
+    col_index: int
+    pop_int: int
+    strand: int
+    sub_fragment: list[CarrierPos]
+
+
+def _make_subfragments_ht(rows: list[SubFragmentInfo]) -> hl.Table:
+    """Construct a synthetic sub-fragments Table with the schema of `_enumerate_subfragments`."""
+    carrier_type = hl.tstruct(
+        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+        row_idx=hl.tint64,
+        ref_len=hl.tint32,
+    )
+    row_type = hl.tstruct(
+        col_idx=hl.tint32,
+        pop_int=hl.tint32,
+        strand=hl.tint32,
+        sub_fragment=hl.tarray(carrier_type),
+    )
+    return hl.Table.parallelize(
+        [
+            {
+                "col_idx": r.col_index,
+                "pop_int": r.pop_int,
+                "strand": r.strand,
+                "sub_fragment": [
+                    {
+                        "locus": {"contig": "chr1", "position": c.position},
+                        "row_idx": c.row_index,
+                        "ref_len": c.ref_len,
+                    }
+                    for c in r.sub_fragment
+                ],
+            }
+            for r in rows
+        ],
+        schema=row_type,
+    )
+
+
+def test_aggregate_containment_ac_single_row(hail_context: None) -> None:  # noqa: ARG001
+    """One sub-fragment from one sample in pop 0 → AC vector with 1 at index 0, 0 elsewhere."""
+    sf = _make_subfragments_ht([
+        SubFragmentInfo(
+            col_index=0,
+            pop_int=0,
+            strand=0,
+            sub_fragment=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+        )
+    ])
+    rows = _aggregate_containment_ac(sf, n_pops=3).collect()
+    assert len(rows) == 1
+    assert list(rows[0].haplotype) == [0, 1]
+    assert list(rows[0].per_pop_AC) == [1, 0, 0]
+
+
+def test_aggregate_containment_ac_canonical_shared_subfragment(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Canonical regression for AC summation across parents that share a sub-fragment.
+
+    A's parent [V0_id=0,V1_id=1,V2_id=2] and B's parent [V0_id=99,V1_id=0,V2_id=1] both in
+    pop 0; the shared sub-fragment [V1_id=0,V2_id=1] appears in both parents and should
+    aggregate to AC=2 in pop 0.
+    """
+    # All sub-fragments enumerable from each parent (per `_enumerate_subfragments`):
+    a_subs = [[0, 1], [0, 1, 2], [1, 2]]
+    b_subs = [[99, 0], [99, 0, 1], [0, 1]]
+
+    rows_in: list[SubFragmentInfo] = []
+    for h in a_subs:
+        rows_in.append(
+            SubFragmentInfo(
+                col_index=0,
+                pop_int=0,
+                strand=0,
+                sub_fragment=[CarrierPos(position=100 + r, row_index=r, ref_len=1) for r in h],
+            )
+        )
+    for h in b_subs:
+        rows_in.append(
+            SubFragmentInfo(
+                col_index=1,
+                pop_int=0,
+                strand=0,
+                sub_fragment=[CarrierPos(position=78 + r, row_index=r, ref_len=1) for r in h],
+            )
+        )
+
+    result = _aggregate_containment_ac(_make_subfragments_ht(rows_in), n_pops=2).collect()
+    by_hap: dict[tuple[int, ...], list[int]] = {
+        tuple(r.haplotype): list(r.per_pop_AC) for r in result
+    }
+
+    # The shared [V1, V2] (row_idx tuple (0, 1)) must have AC=2 in pop 0.
+    assert by_hap[(0, 1)] == [2, 0]
+    # Each parent-unique full block has AC=1.
+    assert by_hap[(0, 1, 2)] == [1, 0]
+    assert by_hap[(99, 0, 1)] == [1, 0]
+    # The other proper sub-fragments [V2_id=1, V2_id=2] and [V0_id=99, V1_id=0] each have AC=1.
+    assert by_hap[(1, 2)] == [1, 0]
+    assert by_hap[(99, 0)] == [1, 0]
+
+
+def test_aggregate_containment_ac_multi_population(hail_context: None) -> None:  # noqa: ARG001
+    """Two samples in different populations contribute to different slots of the AC vector."""
+    rows_in = [
+        SubFragmentInfo(
+            col_index=0,
+            pop_int=0,
+            strand=0,
+            sub_fragment=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+        ),
+        SubFragmentInfo(
+            col_index=1,
+            pop_int=2,
+            strand=1,
+            sub_fragment=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+        ),
+    ]
+    result = _aggregate_containment_ac(_make_subfragments_ht(rows_in), n_pops=4).collect()
+    assert len(result) == 1
+    assert list(result[0].haplotype) == [0, 1]
+    assert list(result[0].per_pop_AC) == [1, 0, 1, 0]
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001

@@ -118,6 +118,41 @@ def _enumerate_subfragments(parents_ht: hl.Table) -> hl.Table:
     return parents_ht.select("col_idx", "pop_int", "strand", sub_fragment=parents_ht.sub_fragments)
 
 
+def _aggregate_containment_ac(subfragments_ht: hl.Table, n_pops: int) -> hl.Table:
+    """
+    Group sub-fragment rows by haplotype and produce a per-population containment AC vector.
+
+    Each (sample, strand, parent block) contributes at most one row per unique sub-fragment
+    haplotype string (sub-fragment positions within a parent are distinct), so the row count
+    per (haplotype, `pop_int`) equals the number of parent blocks in that population
+    containing the sub-fragment as adjacency-contiguous.
+
+    Args:
+        subfragments_ht: Hail table with one row per (sample, strand, parent block,
+            sub-fragment). Required fields:
+            - `pop_int` (int)
+            - `sub_fragment` (array of struct(..., row_idx, ...)): the sub-fragment carriers.
+        n_pops: Number of populations. The output `per_pop_AC` array has this length, indexed
+            by `pop_int`.
+
+    Returns:
+        Hail table keyed by `haplotype` with one row per unique sub-fragment haplotype:
+            - `haplotype` (array<int64>): row indices of the sub-fragment carriers.
+            - `per_pop_AC` (array<int64>): length `n_pops`, AC at index `p` is the count of
+              distinct parent blocks in pop `p` whose sub-fragment yielded this haplotype.
+    """
+    sf = subfragments_ht.key_by()
+    sf = sf.select(
+        haplotype=sf.sub_fragment.map(lambda v: v.row_idx),
+        pop_int=sf.pop_int,
+    )
+    counts = sf.group_by("haplotype").aggregate(per_pop_counts=hl.agg.counter(sf.pop_int))
+    counts = counts.annotate(
+        per_pop_AC=hl.range(0, n_pops).map(lambda p: counts.per_pop_counts.get(p, hl.int64(0)))
+    )
+    return counts.select("per_pop_AC")
+
+
 def _get_haplotypes(
     ht: hl.Table,
     windower_f: Callable[[hl.Expression], hl.Expression],
