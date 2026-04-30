@@ -280,6 +280,71 @@ def _compute_metrics(hap_table: hl.Table, n_pops: int) -> hl.Table:
     return hap_table.drop("_per_pop_AF")
 
 
+def _is_contiguous_subarray(short: tuple[int, ...], long_: tuple[int, ...]) -> bool:
+    """Return True if `short` appears as a strictly shorter contiguous slice of `long_`."""
+    n, m = len(short), len(long_)
+    if n >= m:
+        return False
+    for i in range(m - n + 1):
+        if long_[i : i + n] == short:
+            return True
+    return False
+
+
+def _find_subsumed_haplotypes(
+    by_ac: dict[tuple[int, ...], list[tuple[int, ...]]],
+) -> set[tuple[int, ...]]:
+    """Within each AC group, return haplotypes properly contained in a longer group member."""
+    drop: set[tuple[int, ...]] = set()
+    for haps in by_ac.values():
+        # Sort by length descending so each candidate is checked against earlier (longer) ones.
+        sorted_haps = sorted(haps, key=len, reverse=True)
+        for i, h_short in enumerate(sorted_haps):
+            for h_long in sorted_haps[:i]:
+                if _is_contiguous_subarray(h_short, h_long):
+                    drop.add(h_short)
+                    break
+    return drop
+
+
+def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
+    """
+    Drop sub-fragment rows subsumed by a larger fragment with identical per-pop AC.
+
+    For each pair of rows `X`, `Y`, drops `X` if:
+      - `X.haplotype` is a strictly shorter adjacency-contiguous sub-array of `Y.haplotype`, AND
+      - `X.per_pop_AC == Y.per_pop_AC` (element-wise across all populations).
+
+    Implementation: collects `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC
+    tuple, scans each group for proper sub-array containment, and filters the Hail table by
+    the resulting set of stringified haplotype keys. Driver memory is proportional to the
+    number of unique haplotypes; pairwise scan within each AC group is O(G²) padded-string
+    contains, which is bounded because most groups are small.
+
+    Args:
+        hap_table: Hail table with `haplotype` (array<int64>) and `per_pop_AC` (array<int64>).
+
+    Returns:
+        `hap_table` with subsumed rows removed.
+    """
+    rows = hap_table.aggregate(
+        hl.agg.collect(hl.struct(haplotype=hap_table.haplotype, per_pop_AC=hap_table.per_pop_AC))
+    )
+    by_ac: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
+    for r in rows:
+        by_ac.setdefault(tuple(r.per_pop_AC), []).append(tuple(r.haplotype))
+
+    drop = _find_subsumed_haplotypes(by_ac)
+    if not drop:
+        return hap_table
+
+    drop_strs = {",".join(str(x) for x in h) for h in drop}
+    drop_lit = hl.literal(drop_strs, dtype=hl.tset(hl.tstr))
+    hap_table = hap_table.annotate(_hap_str=hl.delimit(hap_table.haplotype.map(hl.str), ","))
+    hap_table = hap_table.filter(~drop_lit.contains(hap_table._hap_str))
+    return hap_table.drop("_hap_str")
+
+
 def _get_haplotypes(
     ht: hl.Table,
     windower_f: Callable[[hl.Expression], hl.Expression],

@@ -9,6 +9,7 @@ import hail as hl
 import pytest
 
 from divref.tools.compute_haplotypes import _aggregate_containment_ac
+from divref.tools.compute_haplotypes import _apply_containment_dedup
 from divref.tools.compute_haplotypes import _attach_component_info
 from divref.tools.compute_haplotypes import _compute_metrics
 from divref.tools.compute_haplotypes import _enumerate_subfragments
@@ -708,6 +709,97 @@ def test_compute_metrics_tie_breaks_to_smallest_index(
     ])
     rows = _compute_metrics(ht, n_pops=2).collect()
     assert rows[0].max_pop == 0
+
+
+def test_apply_containment_dedup_canonical_three_rows(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Canonical example: A's parent [V0,V1,V2] and B's parent [V99,V0,V1] both pop 0.
+
+    All sub-fragments enumerated with containment AC:
+      [V0, V1, V2]    AC=(1, ...) — A only
+      [V99, V0, V1]   AC=(1, ...) — B only
+      [V0, V1]        AC=(2, ...) — both contain it
+      [V1, V2]        AC=(1, ...) — A only, contained in [V0,V1,V2] AC=(1) → dropped
+      [V99, V0]       AC=(1, ...) — B only, contained in [V99,V0,V1] AC=(1) → dropped
+
+    Expect 3 rows out: the two full blocks (AC=1 each) and the shared 2-element overlap (AC=2).
+    """
+    hap_table = _make_hap_table([
+        ([0, 1, 2], [1, 0]),  # A's full block
+        ([99, 0, 1], [1, 0]),  # B's full block
+        ([0, 1], [2, 0]),  # shared overlap (different AC, NOT subsumed)
+        ([1, 2], [1, 0]),  # sub of A only — should drop (same AC as longer [0,1,2])
+        ([99, 0], [1, 0]),  # sub of B only — should drop (same AC as longer [99,0,1])
+    ])
+    result = sorted(_apply_containment_dedup(hap_table).collect(), key=lambda r: list(r.haplotype))
+    haps = [tuple(r.haplotype) for r in result]
+    assert haps == [(0, 1), (0, 1, 2), (99, 0, 1)]
+    by_hap: dict[tuple[int, ...], list[int]] = {
+        tuple(r.haplotype): list(r.per_pop_AC) for r in result
+    }
+    assert by_hap[(0, 1, 2)] == [1, 0]
+    assert by_hap[(99, 0, 1)] == [1, 0]
+    assert by_hap[(0, 1)] == [2, 0]
+
+
+def test_apply_containment_dedup_identical_full_block(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Two samples emit identical full block [V0,V1,V2] (AC=2 in pop 0).
+
+    Sub-fragments [V0,V1] and [V1,V2] also have AC=2 (each is contained in both parents).
+    All three have AC=2; the proper sub-fragments are subsumed by the full block.
+    Expect a single row out: the full block.
+    """
+    hap_table = _make_hap_table([
+        ([0, 1, 2], [2]),
+        ([0, 1], [2]),
+        ([1, 2], [2]),
+    ])
+    result = _apply_containment_dedup(hap_table).collect()
+    assert len(result) == 1
+    assert list(result[0].haplotype) == [0, 1, 2]
+
+
+def test_apply_containment_dedup_mixed_ac(hail_context: None) -> None:  # noqa: ARG001
+    """
+    A's parent [V0,V1,V2,V3] (AC=1) and B,C both with [V0,V1,V2] (AC=2 → 3 with A).
+
+    Containment AC for each unique haplotype:
+      [V0,V1,V2,V3]  AC=1 (A only)
+      [V0,V1,V2]     AC=3 (A as proper sub + B + C exact)
+      Other proper sub-fragments [V0,V1], [V1,V2], [V2,V3], [V1,V2,V3] each have some AC value
+        but those subsumed by [V0,V1,V2] (AC=3) are dropped if they share AC=3.
+
+    Expect [V0,V1,V2,V3] AC=1 and [V0,V1,V2] AC=3 to survive.
+    """
+    hap_table = _make_hap_table([
+        ([0, 1, 2, 3], [1]),  # A's full block, unique
+        ([0, 1, 2], [3]),  # appears in A (sub) + B (full) + C (full)
+        ([0, 1], [3]),  # in A (sub), B (sub), C (sub) — same AC as longer [0,1,2] → drop
+        ([1, 2], [3]),  # in A (sub), B (sub), C (sub) — same AC → drop
+        ([1, 2, 3], [1]),  # in A only as proper sub. Same AC as [0,1,2,3] → drop.
+        ([2, 3], [1]),  # in A only. Same AC as [0,1,2,3] → drop. (Also as longer [1,2,3].)
+    ])
+    result = sorted(_apply_containment_dedup(hap_table).collect(), key=lambda r: len(r.haplotype))
+    haps = [tuple(r.haplotype) for r in result]
+    assert haps == [(0, 1, 2), (0, 1, 2, 3)]
+
+
+def test_apply_containment_dedup_no_op_when_unique_acs(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """If every row has a distinct AC vector, nothing is dropped (no AC-equal pairs)."""
+    hap_table = _make_hap_table([
+        ([0, 1, 2], [1, 0]),
+        ([0, 1], [2, 0]),
+        ([1, 2], [3, 0]),
+    ])
+    result = _apply_containment_dedup(hap_table).collect()
+    assert len(result) == 3
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001
