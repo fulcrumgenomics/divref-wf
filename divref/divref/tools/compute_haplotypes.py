@@ -15,6 +15,76 @@ from divref import defaults
 logger = logging.getLogger(__name__)
 
 
+def _form_parent_blocks(
+    cols_ht: hl.Table,
+    window_size: int,
+) -> hl.Table:
+    """
+    Form per-(sample, strand) parent blocks via adjacency at `window_size`.
+
+    For each sample and each chromosome strand, sorts that strand's alt-carrier variants by
+    genomic position, walks the sorted list, cuts into blocks at any gap whose number of
+    intervening reference bases is ≥ `window_size` (the gap accounts for ref allele length,
+    matching `divref.haplotype.variant_distance`), and discards blocks of length < 2.
+
+    Args:
+        cols_ht: Hail table with one row per sample. Required fields:
+            - `col_idx` (int): sample identifier.
+            - `pop_int` (int): population index.
+            - `left_carriers` (array of struct(locus, row_idx, ref_len)): variants on the left
+              strand where the sample carries the alt allele. Order is not assumed.
+            - `right_carriers` (same shape): variants on the right strand.
+        window_size: Adjacency-gap threshold in bp. A gap of exactly `window_size` reference
+            bases triggers a split.
+
+    Returns:
+        Hail table with one row per (sample, strand, parent block) and fields:
+            - `col_idx` (int): inherited from input.
+            - `pop_int` (int): inherited from input.
+            - `strand` (int): 0 for left, 1 for right.
+            - `parent_block` (array of struct(locus, row_idx, ref_len)): the block, sorted by
+              `locus.position`, length ≥ 2.
+        The output is unkeyed.
+    """
+    cols_ht = cols_ht.annotate(
+        left_carriers=hl.sorted(cols_ht.left_carriers, key=lambda v: v.locus.position),
+        right_carriers=hl.sorted(cols_ht.right_carriers, key=lambda v: v.locus.position),
+    )
+
+    def _blocks_for(carriers: hl.Expression) -> hl.Expression:
+        """Build adjacency-cut blocks of length ≥ 2 from a position-sorted carrier array."""
+        n = hl.len(carriers)
+        breakpoints = hl.range(1, n).filter(
+            lambda i: carriers[i].locus.position
+            - carriers[i - 1].locus.position
+            - carriers[i - 1].ref_len
+            >= window_size
+        )
+
+        def get_range(i: hl.Expression) -> hl.Expression:
+            start = hl.if_else(i == 0, 0, breakpoints[i - 1])
+            end = hl.if_else(i == hl.len(breakpoints), n, breakpoints[i])
+            return hl.range(start, end)
+
+        block_ranges = (
+            hl.range(0, hl.len(breakpoints) + 1).map(get_range).filter(lambda r: hl.len(r) >= 2)
+        )
+        return block_ranges.map(lambda r: r.map(lambda i: carriers[i]))
+
+    cols_ht = cols_ht.annotate(
+        left_blocks=_blocks_for(cols_ht.left_carriers),
+        right_blocks=_blocks_for(cols_ht.right_carriers),
+    ).key_by()
+
+    left = cols_ht.select("col_idx", "pop_int", parent_block=cols_ht.left_blocks).annotate(strand=0)
+    right = cols_ht.select("col_idx", "pop_int", parent_block=cols_ht.right_blocks).annotate(
+        strand=1
+    )
+    combined = left.union(right)
+    combined = combined.explode("parent_block")
+    return combined.select("col_idx", "pop_int", "strand", "parent_block")
+
+
 def _get_haplotypes(
     ht: hl.Table,
     windower_f: Callable[[hl.Expression], hl.Expression],

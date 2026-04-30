@@ -1,12 +1,214 @@
 """Tests for the compute_haplotypes tool."""
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 from unittest.mock import patch
 
 import hail as hl
 import pytest
 
+from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import compute_haplotypes
+
+
+class CarrierPos(NamedTuple):
+    """Helper class to define a carrier position."""
+
+    position: int
+    row_index: int
+    ref_len: int
+
+
+@dataclass
+class CarrierInfo:
+    """
+    Helper class to define carrier info from a sample.
+
+    `left` and `right` can be any order; the function under test sorts internally.
+    """
+
+    col_index: int
+    pop_int: int
+    left: list[CarrierPos]
+    right: list[CarrierPos]
+
+
+def _make_cols_ht(
+    samples: list[CarrierInfo],
+) -> hl.Table:
+    """
+    Construct a synthetic cols Table for testing `_form_parent_blocks`.
+
+    Args:
+        samples: list of `CarrierInfo`
+
+    Returns:
+        Hail Table with the schema expected by `_form_parent_blocks`.
+    """
+    carrier_type = hl.tstruct(
+        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+        row_idx=hl.tint64,
+        ref_len=hl.tint32,
+    )
+    row_type = hl.tstruct(
+        col_idx=hl.tint32,
+        pop_int=hl.tint32,
+        left_carriers=hl.tarray(carrier_type),
+        right_carriers=hl.tarray(carrier_type),
+    )
+    rows = [
+        {
+            "col_idx": s.col_index,
+            "pop_int": s.pop_int,
+            "left_carriers": [
+                {
+                    "locus": {"contig": "chr1", "position": c.position},
+                    "row_idx": c.row_index,
+                    "ref_len": c.ref_len,
+                }
+                for c in s.left
+            ],
+            "right_carriers": [
+                {
+                    "locus": {"contig": "chr1", "position": c.position},
+                    "row_idx": c.row_index,
+                    "ref_len": c.ref_len,
+                }
+                for c in s.right
+            ],
+        }
+        for s in samples
+    ]
+    return hl.Table.parallelize(rows, schema=row_type)
+
+
+def test_form_parent_blocks_single_block(hail_context: None) -> None:  # noqa: ARG001
+    """Three carriers within window_size=25: one parent block emitted, sorted by position."""
+    cols_ht = _make_cols_ht([
+        CarrierInfo(
+            col_index=0,
+            pop_int=7,
+            left=[CarrierPos(130, 2, 1), CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+            right=[],
+        )
+    ])
+    result = sorted(_form_parent_blocks(cols_ht, window_size=25).collect(), key=lambda r: r.strand)
+    assert len(result) == 1
+    row = result[0]
+    assert row.col_idx == 0
+    assert row.pop_int == 7
+    assert row.strand == 0
+    assert [v.row_idx for v in row.parent_block] == [0, 1, 2]
+    assert [v.locus.position for v in row.parent_block] == [100, 110, 130]
+
+
+def test_form_parent_blocks_singleton_dropped(hail_context: None) -> None:  # noqa: ARG001
+    """A single carrier on a strand produces no parent block (length-< 2 filter)."""
+    cols_ht = _make_cols_ht([
+        CarrierInfo(col_index=0, pop_int=0, left=[CarrierPos(100, 0, 1)], right=[])
+    ])
+    result = _form_parent_blocks(cols_ht, window_size=25).collect()
+    assert result == []
+
+
+def test_form_parent_blocks_splits_at_large_gap(hail_context: None) -> None:  # noqa: ARG001
+    """Gap of exactly window_size triggers a split; both halves preserved when length ≥ 2."""
+    # gaps 9, 25, 3
+    cols_ht = _make_cols_ht([
+        CarrierInfo(
+            col_index=0,
+            pop_int=0,
+            left=[
+                CarrierPos(100, 0, 1),
+                CarrierPos(110, 1, 1),
+                CarrierPos(136, 2, 1),
+                CarrierPos(140, 3, 1),
+            ],
+            right=[],
+        )
+    ])
+    rows = sorted(
+        _form_parent_blocks(cols_ht, window_size=25).collect(),
+        key=lambda r: r.parent_block[0].locus.position,
+    )
+    assert len(rows) == 2
+    assert [v.row_idx for v in rows[0].parent_block] == [0, 1]
+    assert [v.row_idx for v in rows[1].parent_block] == [2, 3]
+
+
+def test_form_parent_blocks_isolates_singleton(hail_context: None) -> None:  # noqa: ARG001
+    """A carrier that breaks adjacency on both sides becomes a singleton and is dropped."""
+    # gaps 99, 9
+    cols_ht = _make_cols_ht([
+        CarrierInfo(
+            col_index=0,
+            pop_int=0,
+            left=[CarrierPos(100, 0, 1), CarrierPos(200, 1, 1), CarrierPos(210, 2, 1)],
+            right=[],
+        )
+    ])
+    rows = _form_parent_blocks(cols_ht, window_size=25).collect()
+    assert len(rows) == 1
+    assert [v.row_idx for v in rows[0].parent_block] == [1, 2]
+
+
+def test_form_parent_blocks_ref_len_closes_gap(hail_context: None) -> None:  # noqa: ARG001
+    """Ref-allele length is subtracted from gap (matches `variant_distance` semantics)."""
+    # 50 bp deletion at position 100 closes the 50 bp positional gap to V at position 150.
+    # gap = 150 - 100 - 50 = 0
+    cols_ht = _make_cols_ht([
+        CarrierInfo(
+            col_index=0, pop_int=0, left=[CarrierPos(100, 0, 50), CarrierPos(150, 1, 1)], right=[]
+        )
+    ])
+    rows = _form_parent_blocks(cols_ht, window_size=25).collect()
+    assert len(rows) == 1
+    assert [v.row_idx for v in rows[0].parent_block] == [0, 1]
+
+
+def test_form_parent_blocks_left_and_right_independent(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """Left- and right-strand carriers are not interleaved when forming blocks."""
+    cols_ht = _make_cols_ht([
+        CarrierInfo(
+            col_index=5,
+            pop_int=2,
+            left=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+            right=[CarrierPos(200, 2, 1), CarrierPos(210, 3, 1)],
+        )
+    ])
+    rows = sorted(_form_parent_blocks(cols_ht, window_size=25).collect(), key=lambda r: r.strand)
+    assert len(rows) == 2
+    assert rows[0].strand == 0
+    assert [v.row_idx for v in rows[0].parent_block] == [0, 1]
+    assert rows[1].strand == 1
+    assert [v.row_idx for v in rows[1].parent_block] == [2, 3]
+
+
+def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001
+    """Each sample produces its own parent blocks; shared positions don't cross sample lines."""
+    cols_ht = _make_cols_ht([
+        CarrierInfo(
+            col_index=0,
+            pop_int=0,
+            left=[CarrierPos(100, 0, 1), CarrierPos(110, 1, 1), CarrierPos(120, 2, 1)],
+            right=[],
+        ),
+        CarrierInfo(
+            col_index=1,
+            pop_int=1,
+            left=[CarrierPos(78, 99, 1), CarrierPos(100, 0, 1), CarrierPos(110, 1, 1)],
+            right=[],
+        ),
+    ])
+    rows = sorted(_form_parent_blocks(cols_ht, window_size=25).collect(), key=lambda r: r.col_idx)
+    assert len(rows) == 2
+    assert rows[0].col_idx == 0
+    assert [v.row_idx for v in rows[0].parent_block] == [0, 1, 2]
+    assert rows[1].col_idx == 1
+    assert [v.row_idx for v in rows[1].parent_block] == [99, 0, 1]
 
 
 @pytest.mark.parametrize(
