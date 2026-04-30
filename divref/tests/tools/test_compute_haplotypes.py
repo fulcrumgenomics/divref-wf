@@ -10,6 +10,7 @@ import pytest
 
 from divref.tools.compute_haplotypes import _aggregate_containment_ac
 from divref.tools.compute_haplotypes import _attach_component_info
+from divref.tools.compute_haplotypes import _compute_metrics
 from divref.tools.compute_haplotypes import _enumerate_subfragments
 from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import compute_haplotypes
@@ -578,6 +579,135 @@ def test_attach_component_info_array_lengths_match_haplotype(
     assert len(rows[0].variants) == 4
     assert len(rows[0].gnomad_freqs) == 4
     assert len(rows[0].frequencies_by_pop) == 4
+
+
+@dataclass
+class MetricsRow:
+    """Helper to construct one row for testing `_compute_metrics`."""
+
+    haplotype: list[int]
+    per_pop_ac: list[int]
+    # One inner list per variant, each entry is the gnomAD AF for that variant in that pop.
+    variant_pop_af: list[list[float]]
+    # One inner dict per variant, mapping pop_int -> AN.
+    variant_pop_an: list[dict[int, int]]
+
+
+def _make_metrics_input_ht(rows: list[MetricsRow]) -> hl.Table:
+    """Construct a synthetic hap_table with the schema expected by `_compute_metrics`."""
+    freq_type = hl.tstruct(AF=hl.tfloat64)
+    fbp_value_type = hl.tstruct(AN=hl.tint32)
+    row_type = hl.tstruct(
+        haplotype=hl.tarray(hl.tint64),
+        per_pop_AC=hl.tarray(hl.tint64),
+        variants=hl.tarray(
+            hl.tstruct(
+                locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+                alleles=hl.tarray(hl.tstr),
+            )
+        ),
+        gnomad_freqs=hl.tarray(hl.tarray(freq_type)),
+        frequencies_by_pop=hl.tarray(hl.tdict(hl.tint32, fbp_value_type)),
+    )
+    table_rows = [
+        {
+            "haplotype": r.haplotype,
+            "per_pop_AC": r.per_pop_ac,
+            "variants": [
+                {
+                    "locus": {"contig": "chr1", "position": 100 + i},
+                    "alleles": ["A", "T"],
+                }
+                for i in range(len(r.haplotype))
+            ],
+            "gnomad_freqs": [[{"AF": af} for af in afs] for afs in r.variant_pop_af],
+            "frequencies_by_pop": [
+                {p: {"AN": an} for p, an in ans.items()} for ans in r.variant_pop_an
+            ],
+        }
+        for r in rows
+    ]
+    return hl.Table.parallelize(table_rows, schema=row_type)
+
+
+def test_compute_metrics_single_population(hail_context: None) -> None:  # noqa: ARG001
+    """One pop, two variants: AF=AC/min_AN, max_pop=0, fraction_phased computed correctly."""
+    ht = _make_metrics_input_ht([
+        MetricsRow(
+            haplotype=[0, 1],
+            per_pop_ac=[3],
+            variant_pop_af=[[0.5], [0.4]],
+            variant_pop_an=[{0: 100}, {0: 200}],
+        )
+    ])
+    rows = _compute_metrics(ht, n_pops=1).collect()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.max_pop == 0
+    # min_AN over variants for pop 0 = min(100, 200) = 100. AF = 3/100 = 0.03.
+    assert row.max_empirical_AF == pytest.approx(0.03)
+    assert row.max_empirical_AC == 3
+    # min_variant_frequency = min(0.5, 0.4) = 0.4
+    assert row.min_variant_frequency == pytest.approx(0.4)
+    assert row.fraction_phased == pytest.approx(0.03 / 0.4)
+    # estimated_gnomad_AF = min(0.5 * fp, 0.4 * fp) = 0.4 * fp
+    assert row.estimated_gnomad_AF == pytest.approx(0.4 * 0.03 / 0.4)
+
+
+def test_compute_metrics_picks_max_population(hail_context: None) -> None:  # noqa: ARG001
+    """max_pop is the population with the highest empirical AF."""
+    ht = _make_metrics_input_ht([
+        MetricsRow(
+            haplotype=[0],
+            # pop 0: AC=2, AN=200 -> AF=0.01.  pop 1: AC=5, AN=100 -> AF=0.05.  pop 2: AC=0.
+            per_pop_ac=[2, 5, 0],
+            variant_pop_af=[[0.3, 0.2, 0.1]],
+            variant_pop_an=[{0: 200, 1: 100, 2: 50}],
+        )
+    ])
+    rows = _compute_metrics(ht, n_pops=3).collect()
+    assert rows[0].max_pop == 1
+    assert rows[0].max_empirical_AC == 5
+    assert rows[0].max_empirical_AF == pytest.approx(0.05)
+    # all_pop_freqs sorted by AF desc: pop 1 (0.05), pop 0 (0.01), pop 2 (0.0)
+    assert [s.pop for s in rows[0].all_pop_freqs] == [1, 0, 2]
+
+
+def test_compute_metrics_zero_an_yields_missing(hail_context: None) -> None:  # noqa: ARG001
+    """Population with AN=0 across all variants gets missing empirical_AF and is not chosen."""
+    ht = _make_metrics_input_ht([
+        MetricsRow(
+            haplotype=[0],
+            # pop 0: AC=1, AN=0 -> AF missing.  pop 1: AC=1, AN=10 -> AF=0.1.
+            per_pop_ac=[1, 1],
+            variant_pop_af=[[0.5, 0.4]],
+            variant_pop_an=[{0: 0, 1: 10}],
+        )
+    ])
+    rows = _compute_metrics(ht, n_pops=2).collect()
+    assert rows[0].max_pop == 1
+    assert rows[0].max_empirical_AF == pytest.approx(0.1)
+    # all_pop_freqs: pop 1 first (defined AF), pop 0 last (missing AF sorts to end)
+    assert rows[0].all_pop_freqs[0].pop == 1
+    assert rows[0].all_pop_freqs[0].empirical_AF == pytest.approx(0.1)
+    assert rows[0].all_pop_freqs[1].pop == 0
+    assert rows[0].all_pop_freqs[1].empirical_AF is None
+
+
+def test_compute_metrics_tie_breaks_to_smallest_index(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """When two pops tie for max AF, argmax returns the smallest index."""
+    ht = _make_metrics_input_ht([
+        MetricsRow(
+            haplotype=[0],
+            per_pop_ac=[1, 1],  # both AC=1 over AN=100 -> AF=0.01 each
+            variant_pop_af=[[0.2, 0.2]],
+            variant_pop_an=[{0: 100, 1: 100}],
+        )
+    ])
+    rows = _compute_metrics(ht, n_pops=2).collect()
+    assert rows[0].max_pop == 0
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001
