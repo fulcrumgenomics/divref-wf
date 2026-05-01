@@ -829,10 +829,10 @@ def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noq
 @pytest.mark.parametrize(
     "variant_freq_threshold,haplotype_freq_threshold,expected_count",
     [
-        (0.0, 0.0, 517),
-        (0.005, 0.0, 295),
-        (0.0, 0.005, 30),
-        (0.005, 0.005, 33),
+        (0.0, 0.0, 457),
+        (0.005, 0.0, 283),
+        (0.0, 0.005, 43),
+        (0.005, 0.005, 35),
     ],
 )
 def test_compute_haplotypes(
