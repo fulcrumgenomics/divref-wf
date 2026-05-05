@@ -59,32 +59,26 @@ def _make_cols_ht(
     row_type = hl.tstruct(
         col_idx=hl.tint32,
         pop_int=hl.tint32,
-        left_carriers=hl.tarray(carrier_type),
-        right_carriers=hl.tarray(carrier_type),
+        carriers=hl.tarray(carrier_type),
+        strand=hl.tint32,
     )
-    rows = [
-        {
-            "col_idx": s.col_index,
-            "pop_int": s.pop_int,
-            "left_carriers": [
-                {
-                    "locus": {"contig": "chr1", "position": c.position},
-                    "row_idx": c.row_index,
-                    "ref_len": c.ref_len,
-                }
-                for c in s.left
-            ],
-            "right_carriers": [
-                {
-                    "locus": {"contig": "chr1", "position": c.position},
-                    "row_idx": c.row_index,
-                    "ref_len": c.ref_len,
-                }
-                for c in s.right
-            ],
+
+    def _carrier_dict(c: CarrierPos) -> dict[str, object]:
+        return {
+            "locus": {"contig": "chr1", "position": c.position},
+            "row_idx": c.row_index,
+            "ref_len": c.ref_len,
         }
-        for s in samples
-    ]
+
+    rows: list[dict[str, object]] = []
+    for s in samples:
+        for strand, group in ((0, s.left), (1, s.right)):
+            rows.append({
+                "col_idx": s.col_index,
+                "pop_int": s.pop_int,
+                "carriers": [_carrier_dict(c) for c in group],
+                "strand": strand,
+            })
     return hl.Table.parallelize(rows, schema=row_type)
 
 

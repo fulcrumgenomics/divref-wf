@@ -13,74 +13,102 @@ from divref import defaults
 logger = logging.getLogger(__name__)
 
 
+def _compute_locus_groups(
+    variants_ht: hl.Table,
+    window_size: int,
+) -> tuple[dict[int, int], int]:
+    """
+    Assign each variant a global `locus_group` id by cutting at gaps ≥ `window_size`.
+
+    Two variants share a `locus_group` iff a chain of variants in `variants_ht` connects them
+    with every consecutive gap (number of intervening reference bases) `< window_size`. Variants
+    on different contigs always get different groups. Because connectivity uses any variant
+    (not just a single sample's carriers), two carriers in different locus groups for any sample
+    are guaranteed to be ≥ `window_size` apart — i.e., partitioning carrier processing by
+    `locus_group` cannot put variants into the same parent block that the per-sample
+    adjacency-cut would have separated.
+
+    Args:
+        variants_ht: variants table with `row_idx` (int64), `locus`, and `ref_len` fields.
+        window_size: adjacency-gap threshold in bp.
+
+    Returns:
+        `(group_of, n_groups)` where `group_of` maps `row_idx → locus_group_id` and
+        `n_groups` is the total number of groups.
+    """
+    rows = variants_ht.key_by().select("row_idx", "locus", "ref_len").collect()
+    rows.sort(key=lambda v: (v.locus.contig, v.locus.position))
+    group_of: dict[int, int] = {}
+    current_group = -1
+    prev_end = -1
+    prev_contig = ""
+    for v in rows:
+        if v.locus.contig != prev_contig or v.locus.position - prev_end >= window_size:
+            current_group += 1
+        group_of[v.row_idx] = current_group
+        prev_end = v.locus.position + v.ref_len
+        prev_contig = v.locus.contig
+    return group_of, current_group + 1
+
+
 def _form_parent_blocks(
-    cols_ht: hl.Table,
+    blocks_ht: hl.Table,
     window_size: int,
 ) -> hl.Table:
     """
     Form per-(sample, strand) parent blocks via adjacency at `window_size`.
 
-    For each sample and each chromosome strand, sorts that strand's alt-carrier variants by
-    genomic position, walks the sorted list, cuts into blocks at any gap whose number of
-    intervening reference bases is ≥ `window_size` (the gap accounts for ref allele length,
-    matching `divref.haplotype.variant_distance`), and discards blocks of length < 2.
+    For each input row (one per `(col_idx, locus_group, strand)`), sorts that row's alt-carrier
+    variants by genomic position, walks the sorted list, cuts into blocks at any gap whose
+    number of intervening reference bases is ≥ `window_size` (the gap accounts for ref allele
+    length, matching `divref.haplotype.variant_distance`), and discards blocks of length < 2.
+    Per-sample cuts can still split a single locus group when intermediate variants in the
+    group are not carried by this sample.
 
     Args:
-        cols_ht: Hail table with one row per sample. Required fields:
+        blocks_ht: Hail table with one row per `(sample, locus_group, strand)`. Required fields:
             - `col_idx` (int): sample identifier.
             - `pop_int` (int): population index.
-            - `left_carriers` (array of struct(locus, row_idx, ref_len)): variants on the left
-              strand where the sample carries the alt allele. Order is not assumed.
-            - `right_carriers` (same shape): variants on the right strand.
+            - `strand` (int): 0 for left, 1 for right.
+            - `carriers` (array of struct(locus, row_idx, ref_len)): variants in this locus
+              group where the sample carries the alt allele on this strand. Order is not
+              assumed.
         window_size: Adjacency-gap threshold in bp. A gap of exactly `window_size` reference
             bases triggers a split.
 
     Returns:
         Hail table with one row per (sample, strand, parent block) and fields:
-            - `col_idx` (int): inherited from input.
-            - `pop_int` (int): inherited from input.
-            - `strand` (int): 0 for left, 1 for right.
+            - `col_idx`, `pop_int`, `strand` inherited from input.
             - `parent_block` (array of struct(locus, row_idx, ref_len)): the block, sorted by
               `locus.position`, length ≥ 2.
         The output is unkeyed.
     """
-    cols_ht = cols_ht.annotate(
-        left_carriers=hl.sorted(cols_ht.left_carriers, key=lambda v: v.locus.position),
-        right_carriers=hl.sorted(cols_ht.right_carriers, key=lambda v: v.locus.position),
+    blocks_ht = blocks_ht.key_by()
+    blocks_ht = blocks_ht.annotate(
+        carriers=hl.sorted(blocks_ht.carriers, key=lambda v: v.locus.position),
+    )
+    carriers = blocks_ht.carriers
+    n = hl.len(carriers)
+    breakpoints = hl.range(1, n).filter(
+        lambda i: carriers[i].locus.position
+        - carriers[i - 1].locus.position
+        - carriers[i - 1].ref_len
+        >= window_size
     )
 
-    def _blocks_for(carriers: hl.Expression) -> hl.Expression:
-        """Build adjacency-cut blocks of length ≥ 2 from a position-sorted carrier array."""
-        n = hl.len(carriers)
-        breakpoints = hl.range(1, n).filter(
-            lambda i: carriers[i].locus.position
-            - carriers[i - 1].locus.position
-            - carriers[i - 1].ref_len
-            >= window_size
-        )
+    def get_range(i: hl.Expression) -> hl.Expression:
+        start = hl.if_else(i == 0, 0, breakpoints[i - 1])
+        end = hl.if_else(i == hl.len(breakpoints), n, breakpoints[i])
+        return hl.range(start, end)
 
-        def get_range(i: hl.Expression) -> hl.Expression:
-            start = hl.if_else(i == 0, 0, breakpoints[i - 1])
-            end = hl.if_else(i == hl.len(breakpoints), n, breakpoints[i])
-            return hl.range(start, end)
-
-        block_ranges = (
-            hl.range(0, hl.len(breakpoints) + 1).map(get_range).filter(lambda r: hl.len(r) >= 2)
-        )
-        return block_ranges.map(lambda r: r.map(lambda i: carriers[i]))
-
-    cols_ht = cols_ht.annotate(
-        left_blocks=_blocks_for(cols_ht.left_carriers),
-        right_blocks=_blocks_for(cols_ht.right_carriers),
-    ).key_by()
-
-    left = cols_ht.select("col_idx", "pop_int", parent_block=cols_ht.left_blocks).annotate(strand=0)
-    right = cols_ht.select("col_idx", "pop_int", parent_block=cols_ht.right_blocks).annotate(
-        strand=1
+    block_ranges = (
+        hl.range(0, hl.len(breakpoints) + 1).map(get_range).filter(lambda r: hl.len(r) >= 2)
     )
-    combined = left.union(right)
-    combined = combined.explode("parent_block")
-    return combined.select("col_idx", "pop_int", "strand", "parent_block")
+    blocks_ht = blocks_ht.annotate(
+        parent_blocks=block_ranges.map(lambda r: r.map(lambda i: blocks_ht.carriers[i]))
+    )
+    blocks_ht = blocks_ht.explode("parent_blocks")
+    return blocks_ht.select("col_idx", "pop_int", "strand", parent_block=blocks_ht.parent_blocks)
 
 
 def _enumerate_subfragments(parents_ht: hl.Table) -> hl.Table:
@@ -446,40 +474,47 @@ def compute_haplotypes(
 
     mt = mt.annotate_rows(
         frequencies_by_pop=hl.agg.group_by(mt.pop_int, hl.agg.call_stats(mt.GT, 2)),
-    )
-    mt = mt.annotate_cols(
-        left_carriers=hl.agg.filter(
-            mt.GT[0] != 0,
-            hl.agg.collect(
-                hl.struct(
-                    locus=mt.locus,
-                    row_idx=mt.row_idx,
-                    ref_len=hl.len(mt.alleles[0]),
-                )
-            ),
-        ),
-        right_carriers=hl.agg.filter(
-            mt.GT[1] != 0,
-            hl.agg.collect(
-                hl.struct(
-                    locus=mt.locus,
-                    row_idx=mt.row_idx,
-                    ref_len=hl.len(mt.alleles[0]),
-                )
-            ),
-        ),
+        ref_len=hl.len(mt.alleles[0]),
     )
 
-    variants_ht = mt.rows().select("freq", "row_idx", "frequencies_by_pop")
+    variants_ht = mt.rows().select("freq", "row_idx", "frequencies_by_pop", "ref_len")
     variants_ht = variants_ht.checkpoint(f"{str(output_base)}.variants.ht", overwrite=True)
 
     if variants_ht.head(1).count() == 0:
         raise ValueError(f"No variants found with minimum population AF {variant_freq_threshold}.")
 
-    cols_ht = mt.cols().select("col_idx", "pop_int", "left_carriers", "right_carriers")
-    cols_ht = cols_ht.checkpoint(f"{str(output_base)}.cols.ht", overwrite=True)
+    group_of, _n_groups = _compute_locus_groups(variants_ht, window_size)
+    group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))
+    mt = mt.annotate_rows(locus_group=group_lit[mt.row_idx])
 
-    parents_ht = _form_parent_blocks(cols_ht, window_size)
+    entries = mt.select_entries(
+        is_left=mt.GT[0] != 0,
+        is_right=mt.GT[1] != 0,
+    ).entries()
+    entries = entries.filter(entries.is_left | entries.is_right)
+    entries = entries.key_by()
+    entries = entries.select(
+        "col_idx",
+        "pop_int",
+        "locus_group",
+        "is_left",
+        "is_right",
+        carrier=hl.struct(locus=entries.locus, row_idx=entries.row_idx, ref_len=entries.ref_len),
+    )
+
+    grouped = entries.group_by("col_idx", "locus_group").aggregate(
+        pop_int=hl.agg.take(entries.pop_int, 1)[0],
+        carriers_left=hl.agg.filter(entries.is_left, hl.agg.collect(entries.carrier)),
+        carriers_right=hl.agg.filter(entries.is_right, hl.agg.collect(entries.carrier)),
+    )
+    grouped = grouped.key_by()
+    left = grouped.select("col_idx", "pop_int", carriers=grouped.carriers_left).annotate(strand=0)
+    right = grouped.select("col_idx", "pop_int", carriers=grouped.carriers_right).annotate(strand=1)
+    blocks_ht = left.union(right)
+    blocks_ht = blocks_ht.filter(hl.len(blocks_ht.carriers) >= 2)
+    blocks_ht = blocks_ht.checkpoint(f"{str(output_base)}.blocks.ht", overwrite=True)
+
+    parents_ht = _form_parent_blocks(blocks_ht, window_size)
     parents_ht = parents_ht.checkpoint(f"{str(output_base)}.parents.ht", overwrite=True)
     subfragments_ht = _enumerate_subfragments(parents_ht)
     hap_table = _aggregate_containment_ac(subfragments_ht, n_pops)
