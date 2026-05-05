@@ -205,24 +205,20 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
             - `frequencies_by_pop` (array<dict<int, struct(AF, AC, AN)>>): the per-variant
               call-stats grouping. Used downstream for per-population min-AN computation.
     """
-    components_dict = hl.literal(
-        dict(
-            zip(
-                variants_ht.row_idx.collect(),
-                variants_ht.aggregate(
-                    hl.agg.collect(
-                        hl.struct(
-                            locus=variants_ht.locus,
-                            alleles=variants_ht.alleles,
-                            freq=variants_ht.freq,
-                            frequencies_by_pop=variants_ht.frequencies_by_pop,
-                        )
-                    )
+    pairs = variants_ht.aggregate(
+        hl.agg.collect(
+            hl.tuple([
+                variants_ht.row_idx,
+                hl.struct(
+                    locus=variants_ht.locus,
+                    alleles=variants_ht.alleles,
+                    freq=variants_ht.freq,
+                    frequencies_by_pop=variants_ht.frequencies_by_pop,
                 ),
-                strict=True,
-            )
+            ])
         )
     )
+    components_dict = hl.literal(dict(pairs))
     hap_table = hap_table.annotate(
         _components=hap_table.haplotype.map(lambda idx: components_dict[hl.int32(idx)])
     )

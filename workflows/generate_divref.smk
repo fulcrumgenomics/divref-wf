@@ -227,7 +227,10 @@ rule compute_haplotypes:
                 --spark-executor-memory-gb {params.spark_executor_memory_gb}
 
             # remove intermediate files
-            rm -r {params.output_base}.variants.ht
+            rm -r {params.output_base}.variants.ht \
+                  {params.output_base}.blocks.ht \
+                  {params.output_base}.parents.ht \
+                  {params.output_base}.hap_ac.ht
         ) &> {log}
         """
 
