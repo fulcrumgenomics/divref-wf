@@ -159,9 +159,6 @@ rule compute_haplotypes:
                 --variant-freq-threshold {params.freq_threshold} \
                 --haplotype-freq-threshold {params.freq_threshold} \
                 --output-base {params.output_base}
-            
-            # remove intermediate files
-            rm -r {params.output_base}.[12].ht
         ) &> {log}
         """
 
@@ -185,8 +182,5 @@ rule create_gnomad_sites_vcf:
                 --sites-table-path {input.variant_ht} \
                 --output-vcf-path {output.vcf} \
                 --min-popmax {params.min_popmax}
-            
-            # unneeded index file
-            rm .chr1_100001_200000.gnomad_sites.vcf.bgz.crc
         ) &> {log}
         """

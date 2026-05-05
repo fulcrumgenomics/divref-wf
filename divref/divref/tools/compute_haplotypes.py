@@ -392,8 +392,6 @@ def compute_haplotypes(
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
     assert_directory_exists(gnomad_sa_file)
-    assert_path_is_writable(output_base.with_suffix(output_base.suffix + ".variants.ht"))
-    assert_path_is_writable(output_base.with_suffix(output_base.suffix + ".ht"))
 
     if spark_driver_memory_gb < 1:
         raise ValueError(
