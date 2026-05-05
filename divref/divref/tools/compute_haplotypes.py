@@ -296,13 +296,22 @@ def _is_contiguous_subarray(short: tuple[int, ...], long_: tuple[int, ...]) -> b
 def _find_subsumed_haplotypes(
     by_ac: dict[tuple[int, ...], list[tuple[int, ...]]],
 ) -> set[tuple[int, ...]]:
-    """Within each AC group, return haplotypes properly contained in a longer group member."""
+    """
+    Within each AC group, return haplotypes properly contained in a longer group member.
+
+    Sorts each group by haplotype length descending and short-circuits the inner scan when
+    the running candidate is no longer strictly longer than the current target — proper
+    containment requires `len(h_long) > len(h_short)`, so once equal-length candidates are
+    reached, no remaining candidate in the sorted list can subsume the target.
+    """
     drop: set[tuple[int, ...]] = set()
     for haps in by_ac.values():
-        # Sort by length descending so each candidate is checked against earlier (longer) ones.
         sorted_haps = sorted(haps, key=len, reverse=True)
         for i, h_short in enumerate(sorted_haps):
+            n_short = len(h_short)
             for h_long in sorted_haps[:i]:
+                if len(h_long) <= n_short:
+                    break
                 if _is_contiguous_subarray(h_short, h_long):
                     drop.add(h_short)
                     break
@@ -320,8 +329,11 @@ def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
     Implementation: collects `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC
     tuple, scans each group for proper sub-array containment, and filters the Hail table by
     the resulting set of stringified haplotype keys. Driver memory is proportional to the
-    number of unique haplotypes; pairwise scan within each AC group is O(G²) padded-string
-    contains, which is bounded because most groups are small.
+    number of unique haplotypes; within each AC group, candidates are sorted by length
+    descending and the inner scan exits as soon as the running candidate is no longer strictly
+    longer than the target (proper containment requires `len(h_long) > len(h_short)`). This
+    keeps the worst case at O(G²) but prunes most pairs in practice when groups span a wide
+    length range.
 
     Args:
         hap_table: Hail table with `haplotype` (array<int64>) and `per_pop_AC` (array<int64>).
