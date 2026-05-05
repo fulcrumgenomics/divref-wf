@@ -183,3 +183,98 @@ We further compared the allele frequencies for the 5 populations recorded in the
 There are 506,983 DivRef 1.1 'gnomAD_variant' variants. When we run the original DivRef script [extract_gnomad_afs.py](https://github.com/e9genomics/human-diversity-reference/blob/main/scripts/extract_gnomad_afs.py) (uses gnomAD 3.1.2 HGDP+1KG sites as input, hard-coded) followed by lines 156-177 of [create_fasta_and_index.py](https://github.com/e9genomics/human-diversity-reference/blob/main/scripts/create_fasta_and_index.py) (lines 156-177) using the parameters specified in the [Makefile](https://github.com/e9genomics/human-diversity-reference/blob/main/Makefile), we also get 506,983 variants. 
 
 We concluded that the DivRef 1.1 documentation was incorrect, and that the actual source of the gnomAD variants in the dataset was the gnomAD 3.1.2 HGDP+1KG subset, the same as for the haplotypes.
+
+### Updated haplotype computation algorithm
+
+#### Old algorithm
+
+**Stage 1: MT prep** (same as new — kept verbatim in the rewrite)
+- Read VCF → MatrixTable, filter to phased biallelic variants, attach `row_idx` / `col_idx`.
+- Filter entries to alt-carriers; annotate `frequencies_by_pop` from gnomAD.
+- Checkpoint to `{output_base}.variants.ht` for downstream row-index → variant lookup.
+
+**Stage 2: two fixed-bin window passes**
+
+The genome is partitioned into non-overlapping bins of `window_size` bp. To avoid systematic edge artefacts (a true haplotype split across a bin boundary would be missed), the tool runs **two passes offset by `window_size / 2`**:
+- Pass 1: bins `[0, W)`, `[W, 2W)`, …
+- Pass 2: bins `[W/2, 3W/2)`, `[3W/2, 5W/2)`, …
+
+Each pass independently:
+1. Assigns every alt-carrier entry to its bin.
+2. Per (sample, strand, bin), `agg.collect`s the carried variants into a haplotype block.
+3. Drops blocks of length < 2.
+4. Writes intermediate `{output_base}.1.ht` / `{output_base}.2.ht`.
+
+**Stage 3: cross-sample collapse** (`collapse_haplos_across_samples`)
+- For each pass, group by the haplotype (row-index tuple) and aggregate `empirical_AC` per population: count of distinct (sample, strand) tuples that emitted exactly this block.
+- This counts only *exact full-block matches across samples* — two samples whose blocks differed by even one variant produced two separate rows.
+
+**Stage 4: union** (`get_haplotype_summary`)
+- `union` the two passes' output tables.
+- If the same haplotype appears in both passes (e.g., a block fully contained in one bin of pass 1 and also one bin of pass 2), it is *kept twice* — one row per pass — unless a later `distinct()` collapses them. This is one source of double-counting.
+
+**Stage 5: per-fragment metrics**
+- Same as new: derive `max_pop`, `max_empirical_AF`, `max_empirical_AC`, `min_variant_frequency`, `fraction_phased`, `estimated_gnomad_AF`.
+
+**Stage 6: filter**
+- `min_variant_frequency > 0` and `estimated_gnomad_AF >= haplotype_freq_threshold`.
+
+**Stage 7 (in `create_duckdb_index`, not in old `compute_haplotypes`): `split_haplotypes` + `distinct()`**
+- Re-split each haplotype at gaps ≥ `window_size`, emitting all sub-blocks of length ≥ 2.
+- `distinct()` on `haplotype` — drops duplicate row-index tuples *but discards their AC counts*, so AC is not summed across the duplicates this step creates. This is the AC-underestimation bug that motivated the rewrite.
+
+
+#### New algorithm
+
+Enumerate every adjacency-contiguous sub-fragment of length ≥ 2 across all observed per-sample parent blocks at a single window W, with each sub-fragment's empirical_AC per population equal to the count of parent blocks containing it as adjacency-contiguous (full or proper sub).
+
+Drop any sub-fragment that is contained in a larger sub-fragment with the same per-population AC vector — the larger fragment carries strictly more information at the same observation count, so the smaller is redundant.
+
+Net: the index contains every distinct full block (always survives, since no larger fragment contains it) plus every sub-fragment whose containment AC genuinely exceeds what its enclosing fragments provide.
+
+Concretely, for parents [V1,V2,V3] (sample A) and [V0,V1,V2] (sample B), the algorithm emits [V1,V2,V3] AC=1, [V0,V1,V2] AC=1, and [V1,V2] AC=2. It does not emit [V2,V3] or [V0,V1] because each is contained in a larger fragment (its parent's full block) with the same AC=1.
+
+#### Limitations of old algorithm
+
+1. **Bin-edge blindness for both passes.** A variant pair with gap < W can still fall on opposite sides of *both* bin grids if the variants happen to straddle position `kW` and `(k+0.5)W` simultaneously. Per-sample adjacency in the new algorithm uses gap-based cuts, so any pair within W bp on the same strand of the same sample is always grouped.
+2. **No cross-context AC summation.** Sample A emits `[V1,V2,V3]` and sample B emits `[V0,V1,V2]`. Both contain `[V1,V2]`, but neither emits `[V1,V2]` as its full block, so the old algorithm never produces `[V1,V2]` at all. The new algorithm enumerates all sub-fragments per parent and aggregates AC across containing parents, yielding `[V1,V2]` AC=2.
+3. **Double-counting from the union of two passes**, partially offset by `distinct()` in `create_duckdb_index` *dropping* AC information — so the bias goes both directions and is hard to reason about.
+
+#### Comparison of old algorithm to new algorithm on test data
+
+[workflows/create_test_data.smk](workflows/create_test_data.smk) was run on [commit bd81b8e](https://github.com/fg-labs/divref-wf/tree/bd81b8ee55de4f52ec6efcb32a5f4b92b647b17d) with the output saved to `data/analysis/compute_haplotypes/test_data_old` and on the current branch with the output saved to `data/analysis/compute_haplotypes/test_data_new`.
+
+The two sets of haplotypes were compared by running `pixi run python scripts/compare_haplotypes.py`.
+
+**Counts**
+
+Old: 21 — New: 35 — Shared: 20 — Old-only: 1 — New-only: 15
+
+**Length distribution**
+
+Old: {2: 16, 3: 5}; New: {2: 28, 3: 7}.
+
+New algorithm finds more haplotypes at both lengths.
+
+**Old-only (1 haplotype)**
+
+Single n=2 haplotype at positions [135087, 135094].
+
+It is a proper sub-fragment of a larger old haplotype (so the old algorithm already had a superset of it).
+It is also a proper sub-fragment of a new haplotype, with variants ⊆ a new haplotype's variants.
+
+Dropped by the new algorithm's containment dedup because the larger fragment with same AC subsumes it. Expected behavior.
+
+**New-only (15 haplotypes)**
+
+Mix of n=2 (13) and n=3 (2).
+Gaps span 12 to 3529 bp — these are real variant pairs the per-sample adjacency captures that the fixed-bin two-window scheme missed (e.g., a variant pair straddling a bin boundary in both offset passes).
+
+**AC comparison for shared (20)**
+
+12 same AC, 8 where new > old, 0 where new < old.
+
+Confirms the AC-summation-across-samples effect: when multiple samples emit the same segment from different parent contexts, the new algorithm sums their counts; the old one didn't.
+
+**Summary**
+New algorithm strictly dominates — every old haplotype is either preserved (20) or correctly subsumed by a larger same-AC fragment (1), and the new one finds 15 additional adjacency-contiguous pairs/triples plus higher AC on 8 shared rows.
