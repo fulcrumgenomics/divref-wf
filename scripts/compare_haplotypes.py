@@ -7,10 +7,10 @@ import hail as hl
 hl.init(quiet=True)
 
 old = hl.read_table(
-    "/Users/ameynert/fulcrum/repos/divref-wf/data/analysis/compute_haplotypes/test_data_old/chr1_100001_200000_haplotypes.ht"
+    "/Users/ameynert/fulcrum/repos/divref-wf/data/work/hgdp_1kg.haplotypes.chr22.ht"
 )
 new = hl.read_table(
-    "/Users/ameynert/fulcrum/repos/divref-wf/data/analysis/compute_haplotypes/test_data_new/chr1_100001_200000_haplotypes.ht"
+    "/Users/ameynert/fulcrum/repos/divref-wf/data/work/haplotypes/hgdp_1kg.haplotypes.chr22.ht"
 )
 
 
