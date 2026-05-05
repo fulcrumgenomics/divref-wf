@@ -240,41 +240,90 @@ Concretely, for parents [V1,V2,V3] (sample A) and [V0,V1,V2] (sample B), the alg
 2. **No cross-context AC summation.** Sample A emits `[V1,V2,V3]` and sample B emits `[V0,V1,V2]`. Both contain `[V1,V2]`, but neither emits `[V1,V2]` as its full block, so the old algorithm never produces `[V1,V2]` at all. The new algorithm enumerates all sub-fragments per parent and aggregates AC across containing parents, yielding `[V1,V2]` AC=2.
 3. **Double-counting from the union of two passes**, partially offset by `distinct()` in `create_duckdb_index` *dropping* AC information — so the bias goes both directions and is hard to reason about.
 
-#### Comparison of old algorithm to new algorithm on test data
+#### Comparison of old algorithm to new algorithm on chr22
 
-[workflows/create_test_data.smk](workflows/create_test_data.smk) was run on [commit bd81b8e](https://github.com/fg-labs/divref-wf/tree/bd81b8ee55de4f52ec6efcb32a5f4b92b647b17d) with the output saved to `data/analysis/compute_haplotypes/test_data_old` and on the current branch with the output saved to `data/analysis/compute_haplotypes/test_data_new`.
+The full pipeline was run on chr22 with both algorithms.
+The old algorithm relied on a two stage process in both `compute_haplotypes.py` and `create_duckdb_index.py`, so we use the DuckDB as the final set of haplotypes.
+The new algorithm is a single stage only in `compute_haplotypes.py`, so we can use the Hail table of haplotypes directly.
 
-The two sets of haplotypes were compared by running `pixi run python scripts/compare_haplotypes.py`.
+Old:
+
+```bash
+git checkout bd81b8ee55de4f52ec6efcb32a5f4b92b647b17d
+pixi run snakemake -j1 -s workflows/generate_divref.smk --config chromosomes=["chr22"]
+mkdir -p data/analysis/compute_haplotypes/test_data_old
+mv data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb data/analysis/compute_haplotypes/test_data_old/
+```
+
+New:
+
+```bash
+git checkout main
+pixi run snakemake -j1 -s workflows/generate_divref.smk --config chromosomes=["chr22"]
+mkdir -p data/analysis/compute_haplotypes/test_data_new
+mv data/work/haplotypes/hgdp_1kg.haplotypes.chr22.ht data/analysis/compute_haplotypes/test_data_new/
+```
+
+Comparison
+
+```bash
+pixi run python scripts/compare_haplotypes.py > data/analysis/compute_haplotypes/chr22_old_duckdb_vs_new_compute_haplotypes.txt
+```
 
 **Counts**
 
-Old: 21 — New: 35 — Shared: 20 — Old-only: 1 — New-only: 15
+- Old: 30,881
+- New: 30,136
+- Shared: 28,265 (≈92% of old, ≈94% of new)
+- Old-only: 2,616
+- New-only: 1,871
 
 **Length distribution**
 
-Old: {2: 16, 3: 5}; New: {2: 28, 3: 7}.
+| Length | Old | New | Shared | Old-only | New-only |
+|---|---|---|---|---|---|
+| 2  | 26,140 | 25,306 | 24,103 | 2,037 | 1,203 |
+| 3  | 3,515  | 3,508  | 3,137  | 378   | 371   |
+| 4  | 781    | 826    | 684    | 97    | 142   |
+| 5  | 253    | 268    | 208    | 45    | 60    |
+| 6  | 96     | 101    | 68     | 28    | 33    |
+| 7  | 48     | 57     | 34     | 14    | 23    |
+| 8  | 23     | 25     | 14     | 9     | 11    |
+| 9  | 12     | 16     | 7      | 5     | 9     |
+| 10 | 7      | 13     | 5      | 2     | 8     |
+| 11 | 5      | 5      | 4      | 1     | 1     |
+| 12 | 0      | 7      | 0      | 0     | 7     |
+| 13 | 1      | 2      | 1      | 0     | 1     |
+| 14 | 0      | 2      | 0      | 0     | 2     |
 
-New algorithm finds more haplotypes at both lengths.
+The new algorithm finds long haplotypes (lengths 12, 13, 14) the old one missed entirely. Old required some single sample's bin haplotype to match a length-k sequence exactly to surface it; new enumerates contiguous sub-fragments across all parent blocks and aggregates their containment AC, surfacing long fragments that no single sample produced as its full bin haplotype.
 
-**Old-only (1 haplotype)**
+**Old-only — mutually exclusive breakdown** (most missing → least missing)
 
-Single n=2 haplotype at positions [135087, 135094].
+| Tier | Count | Meaning |
+|---|---|---|
+| 1. fully variant-disjoint | 930 | No variant in this haplotype appears in any new haplotype. |
+| 2. partially missing variants | 415 | At least one variant absent from every new haplotype; others do appear. |
+| 3. variants split across new haplotypes | 14 | Every variant is in some new haplotype, but no single new haplotype contains all of them. |
+| 4. subset of some new haplotype but not contiguous | 7 | All variants fit inside one new haplotype's variant set, but this old key is not a contiguous sub-array of any new haplotype. |
+| 5. proper contiguous sub-fragment of some new haplotype | 1,250 | Would have been emitted but was dropped by the new algorithm's containment dedup (same per-pop AC as an enclosing fragment). |
 
-It is a proper sub-fragment of a larger old haplotype (so the old algorithm already had a superset of it).
-It is also a proper sub-fragment of a new haplotype, with variants ⊆ a new haplotype's variants.
+Tier 5 is the largest bucket (≈48% of old-only) and is the containment-dedup case the new algorithm explicitly drops. Tiers 1–2 (1,345 combined) are dominated by haplotypes whose `estimated_gnomad_AF` cleared the threshold in old only because two-pass-union double-counting inflated metrics; correctly single-pass-counted in new, they fall below the threshold. Tiers 3–4 (21) are residual ordering / non-contiguous selections that old's bin-emission permitted but new's adjacency-contiguous enumeration cannot.
 
-Dropped by the new algorithm's containment dedup because the larger fragment with same AC subsumes it. Expected behavior.
+**AC comparison for shared haplotypes (28,265)**
 
-**New-only (15 haplotypes)**
+| | Count |
+|---|---|
+| Same AC          | 24,447 |
+| New > old        | 3,773  |
+| Old > new        | 45     |
 
-Mix of n=2 (13) and n=3 (2).
-Gaps span 12 to 3529 bp — these are real variant pairs the per-sample adjacency captures that the fixed-bin two-window scheme missed (e.g., a variant pair straddling a bin boundary in both offset passes).
-
-**AC comparison for shared (20)**
-
-12 same AC, 8 where new > old, 0 where new < old.
-
-Confirms the AC-summation-across-samples effect: when multiple samples emit the same segment from different parent contexts, the new algorithm sums their counts; the old one didn't.
+`new > old` is the AC-undercount fix: old's stage-7 `distinct()` collapsed sub-fragments produced from different bin parents and discarded the AC sum; new sums containment AC across all parent blocks. The 45 `old > new` cases are the residual two-pass-union double-count that survived `distinct()` arbitrarily picking the inflated row.
 
 **Summary**
-New algorithm strictly dominates — every old haplotype is either preserved (20) or correctly subsumed by a larger same-AC fragment (1), and the new one finds 15 additional adjacency-contiguous pairs/triples plus higher AC on 8 shared rows.
+
+The two algorithms agree on 91% of old haplotypes and 94% of new. The disagreement is structurally accounted for by the three rewrite goals:
+
+1. Containment dedup drops redundant sub-fragments (tier 5: 1,250 old-only).
+2. Containment AC summation surfaces sub-fragments old could not emit and corrects under-counted shared rows (1,871 new-only, plus 3,773 shared with new > old).
+3. Single-pass evaluation removes two-pass-union double-counting that was passing some haplotypes through the frequency threshold on inflated AC (tiers 1–2: ≈1,345 old-only, plus the 45 shared old > new).
