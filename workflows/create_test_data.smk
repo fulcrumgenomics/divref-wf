@@ -15,7 +15,7 @@ LOCUS_FILENAME: str = "chr1_100001_200000"
 MIN_POP_AF_EXTRACT_GNOMAD_AFS: float = 0.001
 MIN_POP_AF_COMPUTE_HAPLOTYPES: float = 0.005
 MIN_POPMAX_AF_CREATE_GNOMAD_SITES_VCF: float = 0.01
-WINDOW_SIZE_COMPUTE_HAPLOTYPES: int = 5000
+WINDOW_SIZE_COMPUTE_HAPLOTYPES: int = 25
 
 ####################################################################################################
 # Rules

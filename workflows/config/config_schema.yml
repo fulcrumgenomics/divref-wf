@@ -95,12 +95,6 @@ properties:
       `divref compute-haplotypes`.
     default: 0.005
 
-  hgdp_1kg_haplotype_window_size:
-    type: integer
-    minimum: 1
-    description: Window size in bp for grouping variants into haplotypes.
-    default: 100
-
   gnomad_variant_annotation_source:
     type: string
     enum: ["JOINT_41", "GENOMES_312", "HGDP_1KG_312"]
