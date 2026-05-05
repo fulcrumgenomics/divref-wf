@@ -41,6 +41,7 @@ HGDP_1KG_HAPLOTYPE_WINDOW_SIZE: int = config["hgdp_1kg_haplotype_window_size"]
 
 # gnomAD variants can be from a different source than the haplotypes
 GNOMAD_VARIANT_ANNOTATION_SOURCE: str = config["gnomad_variant_annotation_source"]
+GNOMAD_VARIANT_ANNOTATION_CLOUD: str = config["gnomad_variant_annotation_cloud"]
 GNOMAD_VARIANT_MIN_POP_VARIANT_AF: float = config["gnomad_variant_min_pop_variant_allele_freq"]
 
 SEQUENCE_WINDOW_SIZE: int = config["sequence_window_size"]
@@ -198,6 +199,7 @@ rule extract_gnomad_variant_afs:
         "logs/generate_divref/extract_gnomad_variant_afs.{chrom}.log",
     params:
         gnomad_source=GNOMAD_VARIANT_ANNOTATION_SOURCE,
+        gnomad_cloud=GNOMAD_VARIANT_ANNOTATION_CLOUD,
         freq_threshold=GNOMAD_VARIANT_MIN_POP_VARIANT_AF,
         populations=" ".join(POPS),
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
@@ -207,6 +209,7 @@ rule extract_gnomad_variant_afs:
         (
             divref extract-gnomad-single-afs \
                 --gnomad-version {params.gnomad_source} \
+                --gnomad-cloud {params.gnomad_cloud} \
                 --contig {wildcards.chrom} \
                 --freq-threshold {params.freq_threshold} \
                 --out-sites-hail-table {output.variant_ht} \
@@ -230,8 +233,29 @@ rule download_reference_genome:
     shell:
         """
         (
-            gsutil -m cp {params.fasta_uri} {output.fasta}.gz
-            gunzip {output.fasta}.gz
+            set -euo pipefail
+            uri="{params.fasta_uri}"
+            # Strip a trailing .gz to determine whether the source is gzipped.
+            if [[ "$uri" == *.gz ]]; then
+                dl="{output.fasta}.gz"
+            else
+                dl="{output.fasta}"
+            fi
+            case "$uri" in
+                s3://*|s3a://*)
+                    aws s3 cp "${{uri/s3a:\\/\\//s3:\\/\\/}}" "$dl"
+                    ;;
+                gs://*)
+                    gsutil -m cp "$uri" "$dl"
+                    ;;
+                *)
+                    echo "Unsupported reference_genome_uri scheme: $uri" >&2
+                    exit 1
+                    ;;
+            esac
+            if [[ "$dl" == *.gz ]]; then
+                gunzip "$dl"
+            fi
         ) &> {log}
         """
 

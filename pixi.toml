@@ -16,6 +16,7 @@ divref = { path = "./divref", editable = true }
 snakemake-minimal = ">=8.28.0,<9.0"
 snakefmt = ">=1.0.0,<2"
 bcftools = ">=1.23.1,<2"
+awscli = ">=2,<3"
 
 [feature.analysis.dependencies]
 r-base = "==4.5.3"
@@ -71,5 +72,44 @@ else:
     print('GCS connector JAR is already valid.')
 "
 """
+
+setup-s3 = """
+python -c "
+import os, urllib.request, zipfile, hashlib
+jars_dir = os.path.join(__import__('pyspark').__path__[0], 'jars')
+artifacts = [
+    (
+        'hadoop-aws.jar',
+        'https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar',
+        '53f9ae03c681a30a50aa17524bd9790ab596b28481858e54efd989a826ed3a4a',
+    ),
+    (
+        'aws-java-sdk-bundle.jar',
+        'https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar',
+        '873fe7cf495126619997bec21c44de5d992544aea7e632fdc77adb1a0915bae5',
+    ),
+]
+for name, url, expected_sha256 in artifacts:
+    jar = os.path.join(jars_dir, name)
+    valid = False
+    if os.path.exists(jar):
+        try:
+            zipfile.ZipFile(jar)
+            valid = True
+        except zipfile.BadZipFile:
+            pass
+    if not valid:
+        print(f'Downloading {name} to {jar}...')
+        urllib.request.urlretrieve(url, jar)
+        digest = hashlib.sha256(open(jar, 'rb').read()).hexdigest()
+        if digest != expected_sha256:
+            raise RuntimeError(f'Checksum mismatch for {jar}: {digest}')
+        print('Done.')
+    else:
+        print(f'{name} is already valid.')
+"
+"""
+
+setup-cloud = [{ task = "setup-gcs" }, { task = "setup-s3" }]
 
 lint = "snakefmt --line-length 100 workflows/*.smk"

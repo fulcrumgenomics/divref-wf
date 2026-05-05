@@ -23,17 +23,30 @@ Follow the developer [instructions](https://pixi.sh/latest/installation/) to ins
 
 The environment and dependencies are automatically created and installed by calling `pixi install` or when calling `pixi run` for the first time.
 
-To enable access to Hail tables via the GCS Connector, run 
+By default the workflow reads gnomAD inputs from GCS (`gs://gcp-public-data--gnomad/`).
+To install the GCS connector for Hail/Spark, run
 
 ```bash
 pixi run setup-gcs
 ```
 
-You will need to log in to GCS before running any of the Hail-dependent tools.
+Log in before running any Hail-dependent tools:
 
 ```bash
 gcloud auth application-default login
 ```
+
+To use the AWS Open Data S3 mirror (`s3a://gnomad-public-us-east-1/`) instead — relevant
+when running compute in `us-east-1` — run
+
+```bash
+pixi run setup-s3
+```
+
+…and configure AWS credentials via the standard AWS chain (`aws configure`, environment
+variables, or an IAM role).
+
+To install both connectors at once, run `pixi run setup-cloud`.
 
 ## Resource Description
 

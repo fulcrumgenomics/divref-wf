@@ -1,2 +1,2 @@
-chromosomes: ["chr1", "chr2", "chr20", "chr21", "chr22"]
+chromosomes: ["chr22"]
 version: "0.1-dev"

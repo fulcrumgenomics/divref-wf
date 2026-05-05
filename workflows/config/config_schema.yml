@@ -7,7 +7,10 @@ additionalProperties: false
 properties:
   reference_genome_uri:
     type: string
-    description: GCS URI for the reference genome.
+    description: |
+      URI for the reference genome FASTA. Both `gs://` and `s3://` are supported; the rule
+      detects the scheme. The default is a gzipped FASTA on GCS; the S3 alternative is the
+      uncompressed `s3://broad-references/hg38/v0/Homo_sapiens_assembly38.fasta` on AWS Open Data.
     default: gs://hail-common/references/Homo_sapiens_assembly38.fasta.gz
 
   reference_genome_base_name:
@@ -35,7 +38,10 @@ properties:
 
   hgdp_1kg_phased_bcf_prefix:
     type: string
-    description: Prefix of the GCS URI for the HGDP+1KG phased BCF files.
+    description: |
+      Prefix of the URI for the HGDP+1KG phased BCF files. Both `gs://` and `s3://` are supported;
+      bcftools reads either via the underlying HTSlib plugins. S3 alternative:
+      `s3://gnomad-public-us-east-1/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_`.
     default: "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_"
 
   hgdp_1kg_phased_bcf_suffix:
@@ -45,12 +51,18 @@ properties:
 
   hgdp_1kg_variant_annotation_hail_table:
     type: string
-    description: GCS URI to the HGDP+1KG gnomAD variant annotations Hail table.
+    description: |
+      URI to the HGDP+1KG gnomAD variant annotations Hail table. Both `gs://` and `s3a://` are
+      supported. S3 alternative:
+      `s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht`.
     default: "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
 
   hgdp_1kg_sample_metadata_hail_table:
     type: string
-    description: GCS URI to the HGDP+1KG gnomAD sample metadata Hail table.
+    description: |
+      URI to the HGDP+1KG gnomAD sample metadata Hail table. Both `gs://` and `s3a://` are
+      supported. S3 alternative:
+      `s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.ht`.
     default: "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.ht"
 
   hgdp_1kg_min_pop_variant_allele_freq:
@@ -83,12 +95,25 @@ properties:
     description: |
       Source of the gnomAD variant annotations Hail table. Supported options:
       JOINT_41 = v4.1 joint exomes (730K) + genomes (76K)
+        s3a://gnomad-public-us-east-1/release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht
         gs://gcp-public-data--gnomad/release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht
       GENOMES_312 = v3.1.2 genomes (76K)
+        s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.sites.ht
         gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.sites.ht
       HGDP_1KG_312 = v3.1.2 HGDP+1KG subset genomes (4K, uses frequencies from genomes 76K)
+        s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht
         gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht
+      The cloud provider is selected via `gnomad_variant_annotation_cloud`.
     default: "JOINT_41"
+
+  gnomad_variant_annotation_cloud:
+    type: string
+    enum: ["GCS", "S3"]
+    description: |
+      Cloud provider hosting the gnomAD variant annotations Hail table selected by
+      `gnomad_variant_annotation_source`. GCS reads from `gs://gcp-public-data--gnomad/`;
+      S3 reads from the AWS Open Data mirror at `s3a://gnomad-public-us-east-1/`.
+    default: "GCS"
 
   gnomad_variant_min_pop_variant_allele_freq:
     type: number

@@ -16,13 +16,43 @@ from divref.haplotype import to_hashable_items
 
 @unique
 class GnomadVersion(StrEnum):
-    """Mapping of gnomAD versions to GCS sites tables."""
+    """gnomAD release labels for the supported sites tables."""
 
-    JOINT_41 = "gs://gcp-public-data--gnomad/release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht"
-    GENOMES_312 = (
+    JOINT_41 = "JOINT_41"
+    GENOMES_312 = "GENOMES_312"
+    HGDP_1KG_312 = "HGDP_1KG_312"
+
+
+@unique
+class GnomadCloud(StrEnum):
+    """Cloud provider hosting the gnomAD sites table."""
+
+    S3 = "S3"
+    GCS = "GCS"
+
+
+_GNOMAD_TABLE_URI: dict[tuple[GnomadVersion, GnomadCloud], str] = {
+    (GnomadVersion.JOINT_41, GnomadCloud.S3): (
+        "s3a://gnomad-public-us-east-1/release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht"
+    ),
+    (GnomadVersion.JOINT_41, GnomadCloud.GCS): (
+        "gs://gcp-public-data--gnomad/release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht"
+    ),
+    (GnomadVersion.GENOMES_312, GnomadCloud.S3): (
+        "s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.sites.ht"
+    ),
+    (GnomadVersion.GENOMES_312, GnomadCloud.GCS): (
         "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.sites.ht"
-    )
-    HGDP_1KG_312 = "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
+    ),
+    (GnomadVersion.HGDP_1KG_312, GnomadCloud.S3): (
+        "s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/"
+        "gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
+    ),
+    (GnomadVersion.HGDP_1KG_312, GnomadCloud.GCS): (
+        "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/"
+        "gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -102,6 +132,7 @@ def extract_gnomad_single_afs(
     reference_genome: str = defaults.REFERENCE_GENOME,
     out_sites_hail_table: Path | None = None,
     out_sites_tsv: Path | None = None,
+    gnomad_cloud: GnomadCloud = GnomadCloud.GCS,
     gcs_credentials_path: Path = Path("~/.config/gcloud/application_default_credentials.json"),
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
@@ -126,6 +157,9 @@ def extract_gnomad_single_afs(
         reference_genome: Reference genome to use. Defaults to "GRCh38".
         out_sites_hail_table: Output path for the Hail table. Optional.
         out_sites_tsv: Output path for the TSV file. Optional.
+        gnomad_cloud: Cloud provider hosting the gnomAD sites table. Defaults to GCS
+            (`gs://gcp-public-data--gnomad`); set to S3 for the
+            `s3a://gnomad-public-us-east-1` mirror.
         gcs_credentials_path: Path to GCS default credentials JSON file.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
@@ -144,8 +178,9 @@ def extract_gnomad_single_afs(
     )
 
     schema = _GNOMAD_SCHEMA[gnomad_version]
+    table_uri = _GNOMAD_TABLE_URI[(gnomad_version, gnomad_cloud)]
 
-    va_all = hl.read_table(gnomad_version.value)
+    va_all = hl.read_table(table_uri)
     interval = hl.parse_locus_interval(contig, reference_genome=reference_genome)
     va = hl.filter_intervals(va_all, [interval])
 
