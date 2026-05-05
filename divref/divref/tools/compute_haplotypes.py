@@ -7,7 +7,6 @@ from pathlib import Path
 import hail as hl
 from fgpyo.io import assert_directory_exists
 from fgpyo.io import assert_path_is_readable
-from fgpyo.io import assert_path_is_writable
 
 from divref import defaults
 
