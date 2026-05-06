@@ -113,6 +113,11 @@ properties:
       Cloud provider hosting the gnomAD variant annotations Hail table selected by
       `gnomad_variant_annotation_source`. GCS reads from `gs://gcp-public-data--gnomad/`;
       S3 reads from the AWS Open Data mirror at `s3a://gnomad-public-us-east-1/`.
+      This setting only affects `gnomad_variant_annotation_source`; switching the
+      HGDP+1KG tables (`hgdp_1kg_variant_annotation_hail_table` and
+      `hgdp_1kg_sample_metadata_hail_table`) between GCS and S3 is done by editing
+      their full URIs (which correspond to the constants in `divref/divref/defaults.py`)
+      rather than via `gnomad_variant_annotation_cloud`.
     default: "GCS"
 
   gnomad_variant_min_pop_variant_allele_freq:

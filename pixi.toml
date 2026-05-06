@@ -56,8 +56,8 @@ expected_sha256 = 'd53cd19ec2fadc3f81319a1dcf3f70940915a674781c29a7067ea6021ae8d
 valid = False
 if os.path.exists(jar):
     try:
-        zipfile.ZipFile(jar)
-        valid = True
+        with zipfile.ZipFile(jar):
+            valid = True
     except zipfile.BadZipFile:
         pass
 if not valid:
@@ -94,8 +94,8 @@ for name, url, expected_sha256 in artifacts:
     valid = False
     if os.path.exists(jar):
         try:
-            zipfile.ZipFile(jar)
-            valid = True
+            with zipfile.ZipFile(jar):
+                valid = True
         except zipfile.BadZipFile:
             pass
     if not valid:

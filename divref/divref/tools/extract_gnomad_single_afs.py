@@ -175,6 +175,7 @@ def extract_gnomad_single_afs(
         gcs_credentials_path.expanduser(),
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
+        use_s3=(gnomad_cloud is GnomadCloud.S3),
     )
 
     schema = _GNOMAD_SCHEMA[gnomad_version]

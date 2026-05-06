@@ -235,15 +235,15 @@ rule download_reference_genome:
         (
             set -euo pipefail
             uri="{params.fasta_uri}"
-            # Strip a trailing .gz to determine whether the source is gzipped.
-            if [[ "$uri" == *.gz ]]; then
-                dl="{output.fasta}.gz"
-            else
-                dl="{output.fasta}"
-            fi
+            # Download to a generic path; gzip is detected via magic bytes after fetch.
+            dl="{output.fasta}.download"
             case "$uri" in
                 s3://*|s3a://*)
-                    aws s3 cp "${{uri/s3a:\\/\\//s3:\\/\\/}}" "$dl"
+                    s3_uri="${{uri/s3a:\\/\\//s3:\\/\\/}}"
+                    # Try authenticated first; fall back to --no-sign-request for public
+                    # Open Data buckets when no AWS credentials are configured.
+                    aws s3 cp "$s3_uri" "$dl" \
+                        || aws s3 cp --no-sign-request "$s3_uri" "$dl"
                     ;;
                 gs://*)
                     gsutil -m cp "$uri" "$dl"
@@ -253,8 +253,14 @@ rule download_reference_genome:
                     exit 1
                     ;;
             esac
-            if [[ "$dl" == *.gz ]]; then
-                gunzip "$dl"
+            # Detect gzip from the file's magic bytes (\\x1f\\x8b) rather than the URI suffix,
+            # so misnamed objects are handled correctly.
+            magic=$(head -c 2 "$dl" | od -An -tx1 | tr -d ' \\n')
+            if [[ "$magic" == "1f8b" ]]; then
+                mv "$dl" "{output.fasta}.gz"
+                gunzip "{output.fasta}.gz"
+            else
+                mv "$dl" "{output.fasta}"
             fi
         ) &> {log}
         """

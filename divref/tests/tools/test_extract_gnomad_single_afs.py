@@ -68,8 +68,8 @@ def test_gnomad_table_uri_table_path_matches_across_clouds() -> None:
     for version in GnomadVersion:
         s3_uri = _GNOMAD_TABLE_URI[(version, GnomadCloud.S3)]
         gcs_uri = _GNOMAD_TABLE_URI[(version, GnomadCloud.GCS)]
-        s3_tail = s3_uri.split("s3a://gnomad-public-us-east-1/", 1)[1]
-        gcs_tail = gcs_uri.split("gs://gcp-public-data--gnomad/", 1)[1]
+        s3_tail = s3_uri.removeprefix("s3a://gnomad-public-us-east-1/")
+        gcs_tail = gcs_uri.removeprefix("gs://gcp-public-data--gnomad/")
         assert s3_tail == gcs_tail
 
 
