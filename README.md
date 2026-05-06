@@ -48,6 +48,36 @@ variables, or an IAM role).
 
 To install both connectors at once, run `pixi run setup-cloud`.
 
+### Running the workflow
+
+The workflow does not bundle a default `configfile:` — pass one explicitly with
+`--configfile`. Two ready-made configs are provided under `workflows/config/`:
+
+- `config_gcs.yml` — reads all cloud inputs from GCS (`gs://gcp-public-data--gnomad/`,
+  `gs://hail-common/`).
+- `config_aws.yml` — reads all cloud inputs from the AWS Open Data S3 mirror
+  (`s3://gnomad-public-us-east-1/`, `s3://broad-references/`).
+
+Run on GCS (after `pixi run setup-gcs` and `gcloud auth application-default login`):
+
+```bash
+pixi run snakemake -j1 -s workflows/generate_divref.smk \
+    --configfile workflows/config/config_gcs.yml
+```
+
+Run on AWS (after `pixi run setup-s3` and configuring AWS credentials):
+
+```bash
+pixi run snakemake -j1 -s workflows/generate_divref.smk \
+    --configfile workflows/config/config_aws.yml
+```
+
+To run multi-threaded, set `-j` to be greater than `1`.
+
+To override individual settings (e.g. `chromosomes`, `version`, output paths) without
+editing the shipped configs, append `--config key=value …` after the `--configfile`
+argument.
+
 ## Resource Description
 
 The below statements are from using the [default parameters](workflows/config/config_schema.yml).

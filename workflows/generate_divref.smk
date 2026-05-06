@@ -11,9 +11,10 @@ from snakemake.utils import validate
 ####################################################################################################
 # Inputs
 ####################################################################################################
-
-
-configfile: os.path.join(workflow.basedir, "config", "config.yml")
+#
+# No default `configfile:` is provided; pass one explicitly with
+# `--configfile workflows/config/config_gcs.yml` (GCS sources) or
+# `--configfile workflows/config/config_aws.yml` (S3 / AWS Open Data sources).
 
 
 validate(config, os.path.join(workflow.basedir, "config", "config_schema.yml"))
