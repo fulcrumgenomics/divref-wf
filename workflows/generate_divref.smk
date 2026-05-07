@@ -19,6 +19,33 @@ from snakemake.utils import validate
 
 validate(config, os.path.join(workflow.basedir, "config", "config_schema.yml"))
 
+CLOUD: str = config["cloud"]
+_CLOUD_SCHEMES: dict[str, tuple[str, ...]] = {
+    "GCS": ("gs://",),
+    "AWS": ("s3://", "s3a://"),
+}
+# `cloud` uses GCS/AWS; the gnomAD single-AFs tool's `gnomad_cloud` enum uses GCS/S3.
+_GNOMAD_CLOUD_FOR: dict[str, str] = {"GCS": "GCS", "AWS": "S3"}
+
+
+def _validate_cloud_uri(field: str, uri: str) -> None:
+    expected = _CLOUD_SCHEMES[CLOUD]
+    if not any(uri.startswith(scheme) for scheme in expected):
+        raise ValueError(
+            f"Config field '{field}' has URI {uri!r} which does not match cloud "
+            f"{CLOUD!r} (expected scheme one of {expected})."
+        )
+
+
+for _field in (
+    "reference_genome_uri",
+    "hgdp_1kg_phased_bcf_prefix",
+    "hgdp_1kg_variant_annotation_hail_table",
+    "hgdp_1kg_sample_metadata_hail_table",
+):
+    _validate_cloud_uri(_field, config[_field])
+
+
 VERSION: str = config["version"]
 
 WORK_DIR: Path = Path(config["work_dir"])
@@ -40,9 +67,10 @@ HGDP_1KG_MIN_POP_VARIANT_AF: float = config["hgdp_1kg_min_pop_variant_allele_fre
 HGDP_1KG_MIN_POP_HAPLOTYPE_AF: float = config["hgdp_1kg_min_estimated_gnomad_haplotype_allele_freq"]
 HGDP_1KG_HAPLOTYPE_WINDOW_SIZE: int = config["hgdp_1kg_haplotype_window_size"]
 
-# gnomAD variants can be from a different source than the haplotypes
+# gnomAD variants can be from a different source than the haplotypes; the cloud is
+# derived from the workflow-level `cloud` so all inputs come from the same provider.
 GNOMAD_VARIANT_ANNOTATION_SOURCE: str = config["gnomad_variant_annotation_source"]
-GNOMAD_VARIANT_ANNOTATION_CLOUD: str = config["gnomad_variant_annotation_cloud"]
+GNOMAD_VARIANT_ANNOTATION_CLOUD: str = _GNOMAD_CLOUD_FOR[CLOUD]
 GNOMAD_VARIANT_MIN_POP_VARIANT_AF: float = config["gnomad_variant_min_pop_variant_allele_freq"]
 
 SEQUENCE_WINDOW_SIZE: int = config["sequence_window_size"]
@@ -50,6 +78,12 @@ POLARS_CHUNK_SIZE: int = config["polars_chunk_size"]
 
 SPARK_DRIVER_MEMORY_GB: int = config["spark_driver_memory_gb"]
 SPARK_EXECUTOR_MEMORY_GB: int = config["spark_executor_memory_gb"]
+
+# Built once so each Hail rule can append it to its CLI invocation. Empty when on AWS,
+# since the GCS connector is not loaded and the credentials path is ignored.
+GCS_CREDENTIALS_FLAG: str = (
+    f"--gcs-credentials-path {config['gcs_credentials_path']}" if CLOUD == "GCS" else ""
+)
 
 VCF_EXTS: list[str] = [".vcf.gz", ".vcf.gz.tbi"]
 
@@ -110,6 +144,8 @@ rule extract_gnomad_afs:
         populations=" ".join(POPS),
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
+        use_s3_flag="--use-s3" if CLOUD == "AWS" else "--no-use-s3",
+        gcs_credentials_flag=GCS_CREDENTIALS_FLAG,
     shell:
         """
         (
@@ -120,7 +156,8 @@ rule extract_gnomad_afs:
                 --freq-threshold {params.freq_threshold} \
                 --populations {params.populations} \
                 --spark-driver-memory-gb {params.spark_driver_memory_gb} \
-                --spark-executor-memory-gb {params.spark_executor_memory_gb}
+                --spark-executor-memory-gb {params.spark_executor_memory_gb} \
+                {params.use_s3_flag} {params.gcs_credentials_flag}
         ) &> {log}
         """
 
@@ -137,6 +174,8 @@ rule extract_sample_metadata:
         sample_ht=HGDP_1KG_SAMPLE_METADATA_HAIL_TABLE,
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
+        use_s3_flag="--use-s3" if CLOUD == "AWS" else "--no-use-s3",
+        gcs_credentials_flag=GCS_CREDENTIALS_FLAG,
     shell:
         """
         (
@@ -144,7 +183,8 @@ rule extract_sample_metadata:
                 --in-gnomad-hgdp-sample-data {params.sample_ht} \
                 --out-sample-metadata {output.sample_ht} \
                 --spark-driver-memory-gb {params.spark_driver_memory_gb} \
-                --spark-executor-memory-gb {params.spark_executor_memory_gb}
+                --spark-executor-memory-gb {params.spark_executor_memory_gb} \
+                {params.use_s3_flag} {params.gcs_credentials_flag}
         ) &> {log}
         """
 
@@ -205,6 +245,7 @@ rule extract_gnomad_variant_afs:
         populations=" ".join(POPS),
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
+        gcs_credentials_flag=GCS_CREDENTIALS_FLAG,
     shell:
         """
         (
@@ -216,7 +257,8 @@ rule extract_gnomad_variant_afs:
                 --out-sites-hail-table {output.variant_ht} \
                 --populations {params.populations} \
                 --spark-driver-memory-gb {params.spark_driver_memory_gb} \
-                --spark-executor-memory-gb {params.spark_executor_memory_gb}
+                --spark-executor-memory-gb {params.spark_executor_memory_gb} \
+                {params.gcs_credentials_flag}
         ) &> {log}
         """
 

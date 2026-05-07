@@ -6,37 +6,40 @@ import pyspark
 
 
 def hail_init(
-    gcs_credentials_path: Path,
+    gcs_credentials_path: Path | None = None,
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
     use_s3: bool = False,
 ) -> None:
     """
-    Initialize Hail with the GCS connector (and optionally the S3A connector).
+    Initialize Hail with either the GCS connector or the S3A connector.
 
-    Sets ``GOOGLE_APPLICATION_CREDENTIALS`` so the JVM subprocess inherits it, then
-    starts Hail with the GCS connector JAR on the Spark classpath. When ``use_s3``
-    is ``True``, the S3A connector JARs (``hadoop-aws`` and ``aws-java-sdk-bundle``)
-    are also added and the corresponding S3A Spark configs are set; AWS credentials
-    are resolved via the standard ``DefaultAWSCredentialsProviderChain`` (env vars,
-    ``~/.aws/credentials``, or IAM role).
+    When `use_s3` is `False` (the default), sets `GOOGLE_APPLICATION_CREDENTIALS`
+    so the JVM subprocess inherits it, then starts Hail with the GCS connector JAR on
+    the Spark classpath. When `use_s3` is `True`, the S3A connector JARs
+    (`hadoop-aws` and `aws-java-sdk-bundle`) are loaded and the S3A Spark configs
+    are set instead — the GCS connector is not required. AWS credentials are resolved
+    via the standard `DefaultAWSCredentialsProviderChain` (env vars,
+    `~/.aws/credentials`, or IAM role).
 
     Args:
         gcs_credentials_path: Absolute path to a GCP Application Default Credentials
-            JSON file. If the file exists and ``GOOGLE_APPLICATION_CREDENTIALS`` is not
-            already set, it is exported to the environment before Hail starts. Required
-            only if ``gs://`` paths are read; ignored otherwise.
+            JSON file. Required when `use_s3` is `False`; ignored otherwise. If the
+            file exists and `GOOGLE_APPLICATION_CREDENTIALS` is not already set, it
+            is exported to the environment before Hail starts.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
-        use_s3: If ``True``, validate and load the S3A connector JARs and configure
-            S3A Spark properties. Leave ``False`` for GCS-only workloads to avoid
-            requiring the S3 JARs.
+        use_s3: If `True`, validate and load the S3A connector JARs and configure
+            S3A Spark properties (the GCS connector is skipped). Leave `False` for
+            GCS workloads.
 
     Raises:
-        ValueError: If ``spark_driver_memory_gb`` or ``spark_executor_memory_gb``
-            is less than 1.
-        FileNotFoundError: If the GCS connector JAR is missing, or if ``use_s3``
-            is ``True`` and either S3A connector JAR is missing.
+        ValueError: If `spark_driver_memory_gb` or `spark_executor_memory_gb`
+            is less than 1, or if `use_s3` is `False` and `gcs_credentials_path`
+            is `None`.
+        FileNotFoundError: If `use_s3` is `False` and the GCS connector JAR is
+            missing, or if `use_s3` is `True` and either S3A connector JAR is
+            missing.
     """
     if spark_driver_memory_gb < 1:
         raise ValueError(
@@ -53,22 +56,15 @@ def hail_init(
         "pyspark-shell"
     )
 
-    if gcs_credentials_path.exists() and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcs_credentials_path)
+    if not use_s3:
+        if gcs_credentials_path is None:
+            raise ValueError("gcs_credentials_path is required when use_s3 is False.")
+        if gcs_credentials_path.exists() and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcs_credentials_path)
 
     jars_dir = os.path.join(pyspark.__path__[0], "jars")
-    gcs_jar = os.path.join(jars_dir, "gcs-connector.jar")
-
-    if not os.path.exists(gcs_jar):
-        raise FileNotFoundError(
-            f"GCS connector JAR not found at {gcs_jar}. Run 'pixi run setup-gcs' to download it."
-        )
-
-    cloud_jars = [gcs_jar]
-    spark_conf: dict[str, str] = {
-        "spark.hadoop.fs.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
-        "spark.hadoop.fs.AbstractFileSystem.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",  # noqa: E501
-    }
+    cloud_jars: list[str] = []
+    spark_conf: dict[str, str] = {}
 
     if use_s3:
         hadoop_aws_jar = os.path.join(jars_dir, "hadoop-aws.jar")
@@ -90,6 +86,18 @@ def hail_init(
             # Defaults (15 / 10) bottleneck partition-parallel reads.
             "spark.hadoop.fs.s3a.connection.maximum": "200",
             "spark.hadoop.fs.s3a.threads.max": "64",
+        })
+    else:
+        gcs_jar = os.path.join(jars_dir, "gcs-connector.jar")
+        if not os.path.exists(gcs_jar):
+            raise FileNotFoundError(
+                f"GCS connector JAR not found at {gcs_jar}. "
+                "Run 'pixi run setup-gcs' to download it."
+            )
+        cloud_jars.append(gcs_jar)
+        spark_conf.update({
+            "spark.hadoop.fs.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
+            "spark.hadoop.fs.AbstractFileSystem.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",  # noqa: E501
         })
 
     cloud_jars_str = ",".join(cloud_jars)

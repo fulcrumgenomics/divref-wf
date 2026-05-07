@@ -5,6 +5,16 @@ type: object
 additionalProperties: false
 
 properties:
+  cloud:
+    type: string
+    enum: ["GCS", "AWS"]
+    description: |
+      Cloud provider hosting all input URIs. The workflow validates that every cloud URI
+      (`reference_genome_uri`, `hgdp_1kg_phased_bcf_prefix`,
+      `hgdp_1kg_variant_annotation_hail_table`, `hgdp_1kg_sample_metadata_hail_table`)
+      uses a scheme matching this value (`gs://` for `GCS`; `s3://` or `s3a://` for `AWS`).
+      Also drives the cloud selected for `gnomad_variant_annotation_source`.
+
   reference_genome_uri:
     type: string
     description: |
@@ -103,22 +113,8 @@ properties:
       HGDP_1KG_312 = v3.1.2 HGDP+1KG subset genomes (4K, uses frequencies from genomes 76K)
         s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht
         gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht
-      The cloud provider is selected via `gnomad_variant_annotation_cloud`.
+      The cloud provider is selected via the workflow-level `cloud` field.
     default: "JOINT_41"
-
-  gnomad_variant_annotation_cloud:
-    type: string
-    enum: ["GCS", "S3"]
-    description: |
-      Cloud provider hosting the gnomAD variant annotations Hail table selected by
-      `gnomad_variant_annotation_source`. GCS reads from `gs://gcp-public-data--gnomad/`;
-      S3 reads from the AWS Open Data mirror at `s3a://gnomad-public-us-east-1/`.
-      This setting only affects `gnomad_variant_annotation_source`; switching the
-      HGDP+1KG tables (`hgdp_1kg_variant_annotation_hail_table` and
-      `hgdp_1kg_sample_metadata_hail_table`) between GCS and S3 is done by editing
-      their full URIs (which correspond to the constants in `divref/divref/defaults.py`)
-      rather than via `gnomad_variant_annotation_cloud`.
-    default: "GCS"
 
   gnomad_variant_min_pop_variant_allele_freq:
     type: number
@@ -160,6 +156,13 @@ properties:
     description: Path to the temporary files directory.
     default: /tmp
 
+  gcs_credentials_path:
+    type: string
+    description: |
+      Absolute path to a GCP Application Default Credentials JSON file. Used by the Hail-based
+      tools when `cloud` is `GCS`; ignored when `cloud` is `AWS`.
+    default: "~/.config/gcloud/application_default_credentials.json"
+
   spark_driver_memory_gb:
     type: integer
     minimum: 1
@@ -177,4 +180,5 @@ properties:
     default: 16
 
 required:
+  - cloud
   - version

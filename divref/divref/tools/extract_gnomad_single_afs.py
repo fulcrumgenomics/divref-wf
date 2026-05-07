@@ -133,7 +133,7 @@ def extract_gnomad_single_afs(
     out_sites_hail_table: Path | None = None,
     out_sites_tsv: Path | None = None,
     gnomad_cloud: GnomadCloud = GnomadCloud.GCS,
-    gcs_credentials_path: Path = Path("~/.config/gcloud/application_default_credentials.json"),
+    gcs_credentials_path: Path | None = None,
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
 ) -> None:
@@ -160,7 +160,8 @@ def extract_gnomad_single_afs(
         gnomad_cloud: Cloud provider hosting the gnomAD sites table. Defaults to GCS
             (`gs://gcp-public-data--gnomad`); set to S3 for the
             `s3a://gnomad-public-us-east-1` mirror.
-        gcs_credentials_path: Path to GCS default credentials JSON file.
+        gcs_credentials_path: Path to GCS default credentials JSON file. Required
+            when `gnomad_cloud` is `GCS`; ignored otherwise.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
     """
@@ -172,7 +173,7 @@ def extract_gnomad_single_afs(
         assert_path_is_writable(out_sites_tsv)
 
     hail_init(
-        gcs_credentials_path.expanduser(),
+        gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None,
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
         use_s3=(gnomad_cloud is GnomadCloud.S3),
