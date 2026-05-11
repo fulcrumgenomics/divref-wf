@@ -46,7 +46,7 @@ def _compute_locus_groups(
         if v.locus.contig != prev_contig or v.locus.position - prev_end >= window_size:
             current_group += 1
         group_of[v.row_idx] = current_group
-        prev_end = v.locus.position + v.ref_len
+        prev_end = max(prev_end, v.locus.position + v.ref_len)
         prev_contig = v.locus.contig
     return group_of, current_group + 1
 
