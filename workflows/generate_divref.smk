@@ -82,7 +82,7 @@ SPARK_EXECUTOR_MEMORY_GB: int = config["spark_executor_memory_gb"]
 # Built once so each Hail rule can append it to its CLI invocation. Empty when on AWS,
 # since the GCS connector is not loaded and the credentials path is ignored.
 GCS_CREDENTIALS_FLAG: str = (
-    f"--gcs-credentials-path {config['gcs_credentials_path']}" if CLOUD == "GCS" else ""
+    f"--gcs-credentials-path '{config['gcs_credentials_path']}'" if CLOUD == "GCS" else ""
 )
 
 VCF_EXTS: list[str] = [".vcf.gz", ".vcf.gz.tbi"]
