@@ -23,17 +23,60 @@ Follow the developer [instructions](https://pixi.sh/latest/installation/) to ins
 
 The environment and dependencies are automatically created and installed by calling `pixi install` or when calling `pixi run` for the first time.
 
-To enable access to Hail tables via the GCS Connector, run 
+By default the workflow reads gnomAD inputs from GCS (`gs://gcp-public-data--gnomad/`).
+To install the GCS connector for Hail/Spark, run
 
 ```bash
 pixi run setup-gcs
 ```
 
-You will need to log in to GCS before running any of the Hail-dependent tools.
+Log in before running any Hail-dependent tools:
 
 ```bash
 gcloud auth application-default login
 ```
+
+To use the AWS Open Data S3 mirror (`s3a://gnomad-public-us-east-1/`) instead — relevant
+when running compute in `us-east-1` — run
+
+```bash
+pixi run setup-s3
+```
+
+…and configure AWS credentials via the standard AWS chain (`aws configure`, environment
+variables, or an IAM role).
+
+To install both connectors at once, run `pixi run setup-cloud`.
+
+### Running the workflow
+
+The workflow does not bundle a default `configfile:` — pass one explicitly with
+`--configfile`. Two ready-made configs are provided under `workflows/config/`:
+
+- `config_gcs.yml` — reads all cloud inputs from GCS (`gs://gcp-public-data--gnomad/`,
+  `gs://hail-common/`).
+- `config_aws.yml` — reads all cloud inputs from the AWS Open Data S3 mirror
+  (`s3://gnomad-public-us-east-1/`, `s3://broad-references/`).
+
+Run on GCS (after `pixi run setup-gcs` and `gcloud auth application-default login`):
+
+```bash
+pixi run snakemake -j1 -s workflows/generate_divref.smk \
+    --configfile workflows/config/config_gcs.yml
+```
+
+Run on AWS (after `pixi run setup-s3` and configuring AWS credentials):
+
+```bash
+pixi run snakemake -j1 -s workflows/generate_divref.smk \
+    --configfile workflows/config/config_aws.yml
+```
+
+To run multi-threaded, set `-j` to be greater than `1`.
+
+To override individual settings (e.g. `chromosomes`, `version`, output paths) without
+editing the shipped configs, append `--config key=value …` after the `--configfile`
+argument.
 
 ## Resource Description
 

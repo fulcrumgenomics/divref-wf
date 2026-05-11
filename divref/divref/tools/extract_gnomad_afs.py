@@ -19,9 +19,10 @@ def extract_gnomad_afs(
     freq_threshold: float = 0.001,
     populations: list[str] = defaults.POPULATIONS,
     reference_genome: str = defaults.REFERENCE_GENOME,
-    gcs_credentials_path: Path = Path("~/.config/gcloud/application_default_credentials.json"),
+    gcs_credentials_path: Path | None = None,
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
+    use_s3: bool = False,
 ) -> None:
     """
     Extract gnomAD variant and sample frequency data for downstream pipeline tools.
@@ -37,16 +38,20 @@ def extract_gnomad_afs(
         freq_threshold: Minimum allele frequency in any population to retain a variant.
         populations: List of population codes to extract frequencies for.
         reference_genome: Reference genome to use. Defaults to "GRCh38".
-        gcs_credentials_path: Path to GCS default credentials JSON file.
+        gcs_credentials_path: Path to GCS default credentials JSON file. Required
+            when `use_s3` is `False`; ignored otherwise.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
+        use_s3: If `True`, initialize Hail with the S3A connector instead of the GCS
+            connector. Set this when `in_gnomad_sites_table` is an `s3a://` URI.
     """
     assert_path_is_writable(out_variant_annotation_table)
 
     hail_init(
-        gcs_credentials_path.expanduser(),
+        gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None,
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
+        use_s3=use_s3,
     )
 
     va_all = hl.read_table(in_gnomad_sites_table)

@@ -1,0 +1,8 @@
+version: "0.1-dev"
+cloud: "GCS"
+
+# Explicit GCS sources for all cloud inputs.
+reference_genome_uri: "gs://hail-common/references/Homo_sapiens_assembly38.fasta.gz"
+hgdp_1kg_phased_bcf_prefix: "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_"
+hgdp_1kg_variant_annotation_hail_table: "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
+hgdp_1kg_sample_metadata_hail_table: "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.ht"
