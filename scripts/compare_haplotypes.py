@@ -17,7 +17,10 @@ OLD_DUCKDB = (
 NEW_HT = (
     "data/analysis/compute_haplotypes/test_data_new/hgdp_1kg.haplotypes.chr22.ht"
 )
+SITES_HT = "data/work/inputs/hgdp_1kg.sites.chr22.ht"
 CONTIG = "chr22"
+HAPLOTYPE_FREQ_THRESHOLD = 0.005
+ADJACENCY_WINDOW = 25
 
 
 def parse_variants_string(s: str) -> tuple:
@@ -38,21 +41,24 @@ def variant_tuple_from_ht_row(row: hl.Struct) -> tuple:
 # Load old (DuckDB) ----
 con = duckdb.connect(str(Path(OLD_DUCKDB).resolve()), read_only=True)
 old_query = con.execute(
-    "SELECT variants, popmax_empirical_AC FROM sequences "
-    "WHERE source = 'HGDP_haplotype' AND contig = ?",
+    "SELECT variants, popmax_empirical_AC, estimated_gnomad_AF "
+    "FROM sequences WHERE source = 'HGDP_haplotype' AND contig = ?",
     [CONTIG],
 ).fetchall()
 con.close()
 
 old_map: dict[tuple, int] = {}
-for variants_str, ac in old_query:
+old_est_af: dict[tuple, float] = {}
+for variants_str, ac, est_af in old_query:
     key = parse_variants_string(variants_str)
     # If the same haplotype appears more than once (shouldn't, but defensively
     # handle the old two-pass union), keep the max AC.
     if key in old_map:
         old_map[key] = max(old_map[key], ac)
+        old_est_af[key] = max(old_est_af[key], est_af)
     else:
         old_map[key] = ac
+        old_est_af[key] = est_af
 
 # Load new (Hail table) ----
 hl.init(quiet=True)
@@ -236,6 +242,167 @@ for k in list(new_only)[:5]:
     positions = [v[1] for v in k]
     gaps = [positions[i] - positions[i - 1] for i in range(1, len(positions))]
     print(f"  n={len(k)}, positions={positions}, gaps={gaps}")
+
+# Investigate tiers 1 & 2 (variants absent from any new haplotype): is exclusion
+# from new driven by (a) the new algorithm's tighter 25 bp adjacency rule cutting
+# pairs that old's 100 bp bins kept (structural), or (b) old's two-pass-union AC
+# inflation pushing `estimated_gnomad_AF` over the 0.005 threshold for haplotypes
+# that, correctly counted, would fail it (filter)?
+#
+# Discriminator: the ref-aware gap used by new's adjacency rule
+#   gap_i = pos[i+1] - pos[i] - len(ref[i])
+# For a length-2 haplotype with gap < window, new MUST consider it (parent block
+# of length 2 forms in any sample carrying both alts). Its absence from new
+# haplotypes can only be explained by the threshold/AN filter — i.e., a count
+# difference. For gap >= window, new's adjacency rule cuts the pair, so the
+# absence is structural — bin-vs-adjacency, not AC.
+#
+# We then look up component variants in the upstream sites Hail table to fold in
+# the smallest gnomAD per-pop AF, and report what fraction of "filter-rejected"
+# tier-1+2 haplotypes have an old `estimated_gnomad_AF` that would fall below
+# threshold if AC were halved (a proxy for two-pass-union double counting being
+# halved away in the new single-pass count).
+
+
+def max_ref_aware_gap(k: tuple) -> int:
+    if len(k) < 2:
+        return 0
+    gaps: list[int] = []
+    for i in range(1, len(k)):
+        prev = k[i - 1]
+        curr = k[i]
+        ref_prev_len = len(prev[2][0])
+        gaps.append(curr[1] - prev[1] - ref_prev_len)
+    return max(gaps)
+
+
+tier12_keys = [
+    k
+    for k in old_only
+    if categorize_old_only(k)
+    in {"1_fully_variant_disjoint", "2_partially_missing_variants"}
+]
+tier12_structural = [k for k in tier12_keys if max_ref_aware_gap(k) >= ADJACENCY_WINDOW]
+tier12_filterable = [k for k in tier12_keys if max_ref_aware_gap(k) < ADJACENCY_WINDOW]
+
+print()
+print("=== Tier 1+2 root-cause split ===")
+print(f"Total tier 1+2: {len(tier12_keys)}")
+print(
+    f"  structural (max ref-aware gap >= {ADJACENCY_WINDOW} bp; new's adjacency cuts): "
+    f"{len(tier12_structural)}"
+)
+print(
+    f"  filter-only (max ref-aware gap < {ADJACENCY_WINDOW} bp; new sees them, must have"
+    f" failed threshold): {len(tier12_filterable)}"
+)
+
+
+def quantiles(values: list[float]) -> str:
+    if not values:
+        return "n=0"
+    s = sorted(values)
+    n = len(s)
+    return (
+        f"n={n} min={s[0]:.4g} p10={s[n // 10]:.4g} p50={s[n // 2]:.4g} "
+        f"p90={s[min(n - 1, n * 9 // 10)]:.4g} max={s[-1]:.4g}"
+    )
+
+
+print()
+print(
+    f"=== Tier 1+2 filter-only subgroup: would AC halving drop them below "
+    f"{HAPLOTYPE_FREQ_THRESHOLD}? ==="
+)
+filterable_afs = [
+    old_est_af[k] for k in tier12_filterable if k in old_est_af and old_est_af[k] is not None
+]
+print(f"old estimated_gnomad_AF distribution: {quantiles(filterable_afs)}")
+halved = sum(1 for af in filterable_afs if af / 2 < HAPLOTYPE_FREQ_THRESHOLD)
+quartered = sum(1 for af in filterable_afs if af / 4 < HAPLOTYPE_FREQ_THRESHOLD)
+already_below = sum(1 for af in filterable_afs if af < HAPLOTYPE_FREQ_THRESHOLD)
+print(
+    f"  already < {HAPLOTYPE_FREQ_THRESHOLD} (shouldn't be — sanity check): {already_below}"
+)
+print(
+    f"  AC/2 would drop est_af below {HAPLOTYPE_FREQ_THRESHOLD}: "
+    f"{halved} / {len(filterable_afs)}"
+)
+print(
+    f"  AC/4 would drop est_af below {HAPLOTYPE_FREQ_THRESHOLD}: "
+    f"{quartered} / {len(filterable_afs)}"
+)
+
+# For comparison: same distribution for shared haplotypes that ARE in new
+shared_afs = [old_est_af[k] for k in shared if k in old_est_af and old_est_af[k] is not None]
+print(f"\nshared (passed both): {quantiles(shared_afs)}")
+
+# Look up component variants in the upstream sites Hail table to compute, per
+# tier-1+2 filter-only haplotype, the smallest gnomAD AF across its components in
+# any single population — a lower bound on what new's `estimated_gnomad_AF` could
+# have been before applying fraction_phased. If even this lower bound is well
+# below threshold, the haplotype was already on a knife-edge.
+print()
+print("=== Looking up component variant pop_freqs from sites HT ===")
+sites = hl.read_table(SITES_HT)
+pops_legend: list[str] = sites.globals.pops.collect()[0]
+n_pops = len(pops_legend)
+
+# Build a driver-side dict: (pos, ref, alt) -> per-pop AFs
+sites_collected = sites.aggregate(
+    hl.agg.collect(
+        hl.struct(
+            pos=sites.locus.position,
+            ref=sites.alleles[0],
+            alt=sites.alleles[1],
+            af=sites.pop_freqs.map(lambda x: x.AF),
+        )
+    )
+)
+sites_map: dict[tuple, list[float]] = {(s.pos, s.ref, s.alt): list(s.af) for s in sites_collected}
+
+# For each filter-only tier-1+2 haplotype, find the per-population min component AF and
+# track the largest such min (analogous to choosing max_pop). If this max-of-pop-mins
+# is also small, then old's estimated_gnomad_AF = fraction_phased * (max-of-pop-mins),
+# so a high old `estimated_gnomad_AF` implies a high `fraction_phased` — the
+# AC-driven multiplier — and halving fraction_phased halves estimated_gnomad_AF.
+not_in_sites = 0
+component_min_pop_afs: list[float] = []
+implied_fraction_phased: list[float] = []
+for k in tier12_filterable:
+    component_afs: list[list[float]] = []
+    missing = False
+    for v in k:
+        key = (v[1], v[2][0], v[2][1])
+        if key not in sites_map:
+            missing = True
+            break
+        component_afs.append(sites_map[key])
+    if missing:
+        not_in_sites += 1
+        continue
+    # min across components per pop, then max across pops
+    per_pop_mins = [min(afs[p] for afs in component_afs) for p in range(n_pops)]
+    max_pop_min = max(per_pop_mins)
+    component_min_pop_afs.append(max_pop_min)
+    if max_pop_min > 0 and k in old_est_af:
+        implied_fraction_phased.append(old_est_af[k] / max_pop_min)
+
+print(f"filter-only haplotypes with all components in sites HT: "
+      f"{len(tier12_filterable) - not_in_sites} / {len(tier12_filterable)}")
+print(
+    f"max-of-pop-mins of component gnomAD AF: {quantiles(component_min_pop_afs)}"
+)
+print(
+    f"implied fraction_phased = old_est_af / (max-of-pop-mins): "
+    f"{quantiles(implied_fraction_phased)}"
+)
+print(
+    f"  if fraction_phased halved, est_af / 2 < {HAPLOTYPE_FREQ_THRESHOLD}: "
+    f"{sum(1 for fp, af in zip(implied_fraction_phased, component_min_pop_afs, strict=False) if (fp / 2) * af < HAPLOTYPE_FREQ_THRESHOLD)}"
+    f" / {len(implied_fraction_phased)}"
+)
+
 
 # Are the AC values different for shared haplotypes?
 # Old: popmax_empirical_AC from the DuckDB sequences table.
