@@ -51,25 +51,41 @@ Rscript -e "install.packages(c('duckdb', 'duckplyr', 'eulerr'), repos = 'https:/
 setup-gcs = """
 python -c "
 import os, urllib.request, zipfile, hashlib
-jar = os.path.join(__import__('pyspark').__path__[0], 'jars', 'gcs-connector.jar')
-expected_sha256 = 'd53cd19ec2fadc3f81319a1dcf3f70940915a674781c29a7067ea6021ae8dfe2'
-valid = False
-if os.path.exists(jar):
-    try:
-        with zipfile.ZipFile(jar):
-            valid = True
-    except zipfile.BadZipFile:
-        pass
-if not valid:
-    url = 'https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/hadoop3-2.2.22/gcs-connector-hadoop3-2.2.22-shaded.jar'
-    print(f'Downloading GCS connector JAR to {jar}...')
-    urllib.request.urlretrieve(url, jar)
-    digest = hashlib.sha256(open(jar, 'rb').read()).hexdigest()
-    if digest != expected_sha256:
-        raise RuntimeError(f'Checksum mismatch for {jar}: {digest}')
-    print('Done.')
-else:
-    print('GCS connector JAR is already valid.')
+jars_dir = os.path.join(__import__('pyspark').__path__[0], 'jars')
+artifacts = [
+    (
+        'gcs-connector.jar',
+        'https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/hadoop3-2.2.22/gcs-connector-hadoop3-2.2.22-shaded.jar',
+        'd53cd19ec2fadc3f81319a1dcf3f70940915a674781c29a7067ea6021ae8dfe2',
+    ),
+]
+for name, url, expected_sha256 in artifacts:
+    jar = os.path.join(jars_dir, name)
+    valid = False
+    if os.path.exists(jar):
+        try:
+            with zipfile.ZipFile(jar):
+                pass
+            with open(jar, 'rb') as handle:
+                valid = hashlib.sha256(handle.read()).hexdigest() == expected_sha256
+        except zipfile.BadZipFile:
+            pass
+    if not valid:
+        tmp = jar + '.tmp'
+        print(f'Downloading {name} to {jar}...')
+        urllib.request.urlretrieve(url, tmp)
+        try:
+            digest = hashlib.sha256(open(tmp, 'rb').read()).hexdigest()
+            if digest != expected_sha256:
+                raise RuntimeError(f'Checksum mismatch for {jar}: {digest}')
+            os.replace(tmp, jar)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+        print('Done.')
+    else:
+        print(f'{name} is already valid.')
 "
 """
 
@@ -95,15 +111,24 @@ for name, url, expected_sha256 in artifacts:
     if os.path.exists(jar):
         try:
             with zipfile.ZipFile(jar):
-                valid = True
+                pass
+            with open(jar, 'rb') as handle:
+                valid = hashlib.sha256(handle.read()).hexdigest() == expected_sha256
         except zipfile.BadZipFile:
             pass
     if not valid:
+        tmp = jar + '.tmp'
         print(f'Downloading {name} to {jar}...')
-        urllib.request.urlretrieve(url, jar)
-        digest = hashlib.sha256(open(jar, 'rb').read()).hexdigest()
-        if digest != expected_sha256:
-            raise RuntimeError(f'Checksum mismatch for {jar}: {digest}')
+        urllib.request.urlretrieve(url, tmp)
+        try:
+            digest = hashlib.sha256(open(tmp, 'rb').read()).hexdigest()
+            if digest != expected_sha256:
+                raise RuntimeError(f'Checksum mismatch for {jar}: {digest}')
+            os.replace(tmp, jar)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
         print('Done.')
     else:
         print(f'{name} is already valid.')
