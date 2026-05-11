@@ -56,7 +56,7 @@ properties:
 
   hgdp_1kg_phased_bcf_suffix:
     type: string
-    description: Suffix of the GCS URI for the HGDP+1KG phased BCF files.
+    description: Suffix of the URI for the HGDP+1KG phased BCF files (used for both `gs://` and `s3://`).
     default: ".filtered.SNV_INDEL.phased.shapeit5.bcf"
 
   hgdp_1kg_variant_annotation_hail_table:
