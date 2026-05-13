@@ -37,13 +37,13 @@ properties:
     description: List of chromosomes to generate the resource for.
     default: ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr20", "chr21", "chr22", "chrX", "chrY"]
 
-  populations:
+  hgdp_1kg_populations:
     type: array
     items:
       type: string
     minItems: 1
     uniqueItems: true
-    description: List of populations to use.
+    description: List of populations to use when generating haplotypes from HGDP+1KG data.
     default: ["afr", "amr", "eas", "sas", "nfe"]
 
   hgdp_1kg_phased_bcf_prefix:
@@ -124,6 +124,15 @@ properties:
       Minimum variant allele frequency for at least one selected population when running
       `divref extract-gnomad-single-afs`.
     default: 0.005
+
+  gnomad_variant_populations:
+    type: array
+    items:
+      type: string
+    minItems: 1
+    uniqueItems: true
+    description: List of populations to use when selecting single variants from gnomAD data.
+    default: ["afr", "amr", "eas", "sas", "nfe"]
 
   sequence_window_size:
     type: integer

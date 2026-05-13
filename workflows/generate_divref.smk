@@ -52,7 +52,6 @@ WORK_DIR: Path = Path(config["work_dir"])
 TMP_DIR: Path = Path(config["tmp_dir"])
 
 CHROMS: list[str] = config["chromosomes"]
-POPS: list[str] = config["populations"]
 
 REFERENCE_GENOME: str = config["reference_genome_base_name"]
 REFERENCE_GENOME_URI: str = config["reference_genome_uri"]
@@ -63,6 +62,7 @@ HGDP_1KG_PHASED_BCF_PREFIX: str = config["hgdp_1kg_phased_bcf_prefix"]
 HGDP_1KG_PHASED_BCF_SUFFIX: str = config["hgdp_1kg_phased_bcf_suffix"]
 HGDP_1KG_VARIANT_ANNOTATION_HAIL_TABLE: str = config["hgdp_1kg_variant_annotation_hail_table"]
 HGDP_1KG_SAMPLE_METADATA_HAIL_TABLE: str = config["hgdp_1kg_sample_metadata_hail_table"]
+HGDP_1KG_POPS: list[str] = config["hgdp_1kg_populations"]
 HGDP_1KG_MIN_POP_VARIANT_AF: float = config["hgdp_1kg_min_pop_variant_allele_freq"]
 HGDP_1KG_MIN_POP_HAPLOTYPE_AF: float = config["hgdp_1kg_min_estimated_gnomad_haplotype_allele_freq"]
 HGDP_1KG_HAPLOTYPE_WINDOW_SIZE: int = config["hgdp_1kg_haplotype_window_size"]
@@ -71,6 +71,7 @@ HGDP_1KG_HAPLOTYPE_WINDOW_SIZE: int = config["hgdp_1kg_haplotype_window_size"]
 # derived from the workflow-level `cloud` so all inputs come from the same provider.
 GNOMAD_VARIANT_ANNOTATION_SOURCE: str = config["gnomad_variant_annotation_source"]
 GNOMAD_VARIANT_ANNOTATION_CLOUD: str = _GNOMAD_CLOUD_FOR[CLOUD]
+GNOMAD_VARIANT_POPS: list[str] = config["gnomad_variant_populations"]
 GNOMAD_VARIANT_MIN_POP_VARIANT_AF: float = config["gnomad_variant_min_pop_variant_allele_freq"]
 
 SEQUENCE_WINDOW_SIZE: int = config["sequence_window_size"]
@@ -141,7 +142,7 @@ rule extract_gnomad_afs:
     params:
         variant_ht=HGDP_1KG_VARIANT_ANNOTATION_HAIL_TABLE,
         freq_threshold=HGDP_1KG_MIN_POP_VARIANT_AF,
-        populations=" ".join(POPS),
+        populations=" ".join(HGDP_1KG_POPS),
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
         use_s3_flag="--use-s3" if CLOUD == "AWS" else "--no-use-s3",
@@ -242,7 +243,7 @@ rule extract_gnomad_variant_afs:
         gnomad_source=GNOMAD_VARIANT_ANNOTATION_SOURCE,
         gnomad_cloud=GNOMAD_VARIANT_ANNOTATION_CLOUD,
         freq_threshold=GNOMAD_VARIANT_MIN_POP_VARIANT_AF,
-        populations=" ".join(POPS),
+        populations=" ".join(GNOMAD_VARIANT_POPS),
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
         gcs_credentials_flag=GCS_CREDENTIALS_FLAG,
