@@ -85,14 +85,19 @@ def _form_parent_blocks(
     """
     blocks_ht = blocks_ht.key_by()
     blocks_ht = blocks_ht.annotate(
-        carriers=hl.sorted(blocks_ht.carriers, key=lambda v: v.locus.position),
+        carriers=hl.sorted(
+            blocks_ht.carriers,
+            key=lambda v: (v.locus.position, v.ref_len, v.row_idx),
+        ),
     )
     carriers = blocks_ht.carriers
     n = hl.len(carriers)
+    # Cut at index i when carriers[i] starts ≥ window_size beyond the max end of the active
+    # block (carriers[0..i-1]), not just the immediately preceding variant. A shorter
+    # overlapping carrier can otherwise pull the boundary back and force a false split.
     breakpoints = hl.range(1, n).filter(
         lambda i: carriers[i].locus.position
-        - carriers[i - 1].locus.position
-        - carriers[i - 1].ref_len
+        - hl.max(hl.range(0, i).map(lambda k: carriers[k].locus.position + carriers[k].ref_len))
         >= window_size
     )
 
@@ -190,6 +195,8 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
     broadcasts it as a Hail literal, and indexes per-haplotype. Driver memory is proportional
     to the number of variants in `variants_ht` (i.e., variants that pass `variant_freq_threshold`
     upstream); for typical chr1 inputs this is in the hundreds of thousands of small structs.
+    Hail-side alternatives (explode+group_by, per-element table indexing inside `.map()`) were
+    attempted but trigger Hail IR compiler bugs in 0.2.137 — revisit when upgrading.
 
     Args:
         hap_table: Hail table with at least these fields:
