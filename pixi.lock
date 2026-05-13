@@ -277,6 +277,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ruamel.yaml-0.19.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ruamel.yaml.clib-0.2.15-py312h5253ce2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/s2n-1.7.0-ha63dd3a_1.conda
+      - conda: https://conda.anaconda.org/bioconda/linux-64/samtools-1.23.1-ha83d96e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/sed-4.10-h19d0853_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smart_open-7.6.0-pyhcf101f3_0.conda
@@ -678,6 +679,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/rpds-py-0.30.0-py312h8a6388b_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ruamel.yaml-0.19.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/ruamel.yaml.clib-0.2.15-py312hf7082af_1.conda
+      - conda: https://conda.anaconda.org/bioconda/osx-64/samtools-1.23.1-head6495_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/sdkroot_env_osx-64-26.0-h62b880e_7.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/sigtool-codesign-0.1.3-hc0f2934_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
@@ -1069,6 +1071,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/rpds-py-0.30.0-py312h6ef9ec0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ruamel.yaml-0.19.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ruamel.yaml.clib-0.2.15-py312hb3ab3e3_1.conda
+      - conda: https://conda.anaconda.org/bioconda/osx-arm64/samtools-1.23.1-hc612e98_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/sdkroot_env_osx-arm64-26.0-ha3f98da_7.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/sigtool-codesign-0.1.3-h98dc951_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
@@ -1332,6 +1335,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ruamel.yaml-0.19.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ruamel.yaml.clib-0.2.15-py312h5253ce2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/s2n-1.7.0-ha63dd3a_1.conda
+      - conda: https://conda.anaconda.org/bioconda/linux-64/samtools-1.23.1-ha83d96e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smart_open-7.6.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smmap-5.0.3-pyhd8ed1ab_0.conda
@@ -1559,6 +1563,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/rpds-py-0.30.0-py312h8a6388b_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ruamel.yaml-0.19.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/ruamel.yaml.clib-0.2.15-py312hf7082af_1.conda
+      - conda: https://conda.anaconda.org/bioconda/osx-64/samtools-1.23.1-head6495_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smart_open-7.6.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smmap-5.0.3-pyhd8ed1ab_0.conda
@@ -1773,6 +1778,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/rpds-py-0.30.0-py312h6ef9ec0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ruamel.yaml-0.19.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ruamel.yaml.clib-0.2.15-py312hb3ab3e3_1.conda
+      - conda: https://conda.anaconda.org/bioconda/osx-arm64/samtools-1.23.1-hc612e98_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smart_open-7.6.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/smmap-5.0.3-pyhd8ed1ab_0.conda
@@ -11767,6 +11773,37 @@ packages:
   - botocore>=1.37.4,<2.0a0
   - botocore[crt]>=1.37.4,<2.0a0 ; extra == 'crt'
   requires_python: '>=3.9'
+- conda: https://conda.anaconda.org/bioconda/linux-64/samtools-1.23.1-ha83d96e_0.conda
+  sha256: 2cb721907a2df7c54580298d655ae7587dbed593bd5536fa8ef4a22c9ae2a496
+  md5: 89624fbd17c069abcbc8b19b96d497a0
+  depends:
+  - htslib >=1.23.1,<1.24.0a0
+  - libgcc >=14
+  - libzlib >=1.3.1,<2.0a0
+  - ncurses >=6.5,<7.0a0
+  license: MIT
+  size: 489995
+  timestamp: 1773861794171
+- conda: https://conda.anaconda.org/bioconda/osx-64/samtools-1.23.1-head6495_0.conda
+  sha256: 8c3ff4c331f82049446521fd9f00d8a6010ba65f69c38250860ac320d4fdbe55
+  md5: b4af8fd57180f7d7c20048f0c3359736
+  depends:
+  - htslib >=1.23.1,<1.24.0a0
+  - libzlib >=1.3.1,<2.0a0
+  - ncurses >=6.5,<7.0a0
+  license: MIT
+  size: 477620
+  timestamp: 1773863301094
+- conda: https://conda.anaconda.org/bioconda/osx-arm64/samtools-1.23.1-hc612e98_0.conda
+  sha256: f5658dba11d98101f8c3e52de87fce4c28da12aeaf80e3c7d9f5727bef29ab4d
+  md5: 91112ce67a49fe4a636be59656dbc9ec
+  depends:
+  - htslib >=1.23.1,<1.24.0a0
+  - libzlib >=1.3.1,<2.0a0
+  - ncurses >=6.5,<7.0a0
+  license: MIT
+  size: 447384
+  timestamp: 1773861469209
 - pypi: https://files.pythonhosted.org/packages/01/8e/1e35281b8ab6d5d72ebe9911edcdffa3f36b04ed9d51dec6dd140396e220/scipy-1.17.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: scipy
   version: 1.17.1
