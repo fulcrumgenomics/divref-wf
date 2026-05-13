@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 from typing import Optional
 
 import duckdb
@@ -15,6 +16,8 @@ from pydantic import Field
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+_GNOMAD_AF_COLUMN_PREFIX = "gnomAD_AF_"
 
 
 class Variant(BaseModel):
@@ -73,13 +76,32 @@ class Haplotype(BaseModel):
     max_pop: str
     variants: str
     source: str
-    gnomad_af_afr: str = Field(alias="gnomAD_AF_afr")
-    gnomad_af_amr: str = Field(alias="gnomAD_AF_amr")
-    gnomad_af_eas: str = Field(alias="gnomAD_AF_eas")
-    gnomad_af_nfe: str = Field(alias="gnomAD_AF_nfe")
-    gnomad_af_sas: str = Field(alias="gnomAD_AF_sas")
+    # Per-pop comma-delimited gnomAD AF strings, keyed by pop label. The dict's iteration order
+    # is the order of `joint_pops_legend` used when constructing the index.
+    gnomad_afs: dict[str, str]
 
     _variants: Optional[list[Variant]] = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any], pops_legend: list[str]) -> "Haplotype":
+        """
+        Build a Haplotype from a DuckDB `sequences` row, separating per-pop AF columns.
+
+        Args:
+            row: Mapping from DuckDB column name to value for one `sequences` row.
+            pops_legend: Ordered list of population labels expected as `gnomAD_AF_{pop}` columns.
+                The resulting `gnomad_afs` dict preserves this ordering.
+
+        Returns:
+            Haplotype instance with `gnomad_afs` populated from the per-pop columns.
+        """
+        gnomad_afs: dict[str, str] = {
+            pop: row[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] for pop in pops_legend
+        }
+        base: dict[str, Any] = {
+            k: v for k, v in row.items() if not k.startswith(_GNOMAD_AF_COLUMN_PREFIX)
+        }
+        return cls(**base, gnomad_afs=gnomad_afs)
 
     def parsed_variants(self) -> list[Variant]:
         """
@@ -146,13 +168,7 @@ class Haplotype(BaseModel):
         reference_coord_start = _translate_coordinate_to_ref(start, -1, vs, variant_intervals)
         reference_coord_end = _translate_coordinate_to_ref(end, 1, vs, variant_intervals)
 
-        all_pop_freqs = {
-            "afr": _parse_pop_freqs(self.gnomad_af_afr),
-            "amr": _parse_pop_freqs(self.gnomad_af_amr),
-            "eas": _parse_pop_freqs(self.gnomad_af_eas),
-            "nfe": _parse_pop_freqs(self.gnomad_af_nfe),
-            "sas": _parse_pop_freqs(self.gnomad_af_sas),
-        }
+        all_pop_freqs = {pop: _parse_pop_freqs(encoded) for pop, encoded in self.gnomad_afs.items()}
 
         if first_variant_index is not None and last_variant_index is not None:
             variants_involved = vs[first_variant_index : last_variant_index + 1]
@@ -174,8 +190,11 @@ def _intervals_overlap(start1: int, end1: int, start2: int, end2: int) -> bool:
     return start1 < end2 and start2 < end1
 
 
+_MISSING_AF_TOKENS = frozenset({"null", "NA", ""})
+
+
 def _parse_pop_freqs(encoded: str) -> list[float]:
-    return [0.0 if v == "null" else float(v) for v in encoded.split(",")]
+    return [0.0 if v in _MISSING_AF_TOKENS else float(v) for v in encoded.split(",")]
 
 
 def _translate_coordinate_to_ref(
@@ -238,7 +257,7 @@ def _get_index_connection(index_path: Optional[Path]) -> duckdb.DuckDBPyConnecti
     return duckdb.connect(str(index_path))
 
 
-def remap_divref(
+def remap_divref(  # noqa: C901
     *,
     input_path: Path,
     output_path: Path,
@@ -297,6 +316,13 @@ def remap_divref(
         )
     window_size: int = window_size_row[0]
 
+    joint_pops_legend_row = conn.execute("SELECT * FROM joint_pops_legend").fetchone()
+    if joint_pops_legend_row is None:
+        raise RuntimeError(
+            "Index is missing joint_pops_legend table — ensure this is a valid DivRef index."
+        )
+    joint_pops_legend: list[str] = json.loads(joint_pops_legend_row[0])
+
     contigs: list[str] = []
     starts: list[int] = []
     ends: list[int] = []
@@ -325,7 +351,7 @@ def remap_divref(
         columns = [desc[0] for desc in conn.description]
         id_to_hap: dict[str, Haplotype] = {}
         for row in results:
-            hap = Haplotype(**dict(zip(columns, row, strict=True)))
+            hap = Haplotype.from_row(dict(zip(columns, row, strict=True)), joint_pops_legend)
             id_to_hap[hap.sequence_id] = hap
 
         for _, df_row in batch_df.iterrows():
