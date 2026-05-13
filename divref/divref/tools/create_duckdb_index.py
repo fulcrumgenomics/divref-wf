@@ -114,6 +114,8 @@ def create_duckdb_index(  # noqa: C901
     assert_path_is_writable(out_duckdb_file)
 
     table_pairs: list[TablePair] = list(TablePair.read(in_table_pairs_tsv))
+    if not table_pairs:
+        raise ValueError(f"No table pairs found in {in_table_pairs_tsv}.")
 
     # fail fast on input Hail tables
     for table_pair in table_pairs:
@@ -144,6 +146,17 @@ def create_duckdb_index(  # noqa: C901
     gnomad_pops_legend: list[str] = hl.read_table(
         str(table_pairs[0].sites_table_path)
     ).pops.collect()[0]
+    # All pairs must share the same pops legends so a single remap into the joint legend is valid
+    # for every contig; otherwise the exported gnomAD_AF_* columns would be misaligned.
+    for tp in table_pairs[1:]:
+        tp_hgdp_pops: list[str] = hl.read_table(str(tp.haplotype_table_path)).pops.collect()[0]
+        tp_gnomad_pops: list[str] = hl.read_table(str(tp.sites_table_path)).pops.collect()[0]
+        if tp_hgdp_pops != hgdp_pops_legend or tp_gnomad_pops != gnomad_pops_legend:
+            raise ValueError(
+                f"Pops legend mismatch for contig {tp.contig}: "
+                f"haplotype pops {tp_hgdp_pops} vs {hgdp_pops_legend}, "
+                f"sites pops {tp_gnomad_pops} vs {gnomad_pops_legend}."
+            )
     # Joint legend: gnomAD pops in their original order, then any HGDP-only pops appended.
     joint_pops_legend: list[str] = list(gnomad_pops_legend) + [
         p for p in hgdp_pops_legend if p not in gnomad_pops_legend
