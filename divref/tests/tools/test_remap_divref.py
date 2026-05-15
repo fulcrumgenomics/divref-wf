@@ -9,6 +9,14 @@ from divref.tools.remap_divref import ReferenceMapping
 from divref.tools.remap_divref import Variant
 from divref.tools.remap_divref import _parse_pop_freqs
 
+_DEFAULT_GNOMAD_AFS: dict[str, str] = {
+    "afr": "0.1,0.2,0.3",
+    "amr": "0.15,0.25,0.35",
+    "eas": "0.12,0.22,0.32",
+    "nfe": "0.11,0.21,0.31",
+    "sas": "0.13,0.23,0.33",
+}
+
 
 def create_haplotype(
     sequence_id: str = "test_hap",
@@ -16,11 +24,7 @@ def create_haplotype(
     sequence_length: int = 4,
     n_variants: int = 3,
     variants: str = "1:500:A:T,1:505:C:G,1:510:T:A",
-    gnomAD_AF_afr: str = "0.1,0.2,0.3",  # noqa: N803
-    gnomAD_AF_amr: str = "0.15,0.25,0.35",  # noqa: N803
-    gnomAD_AF_eas: str = "0.12,0.22,0.32",  # noqa: N803
-    gnomAD_AF_nfe: str = "0.11,0.21,0.31",  # noqa: N803
-    gnomAD_AF_sas: str = "0.13,0.23,0.33",  # noqa: N803
+    gnomad_afs: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> Haplotype:
     """
@@ -32,11 +36,8 @@ def create_haplotype(
         sequence_length: Length of the sequence.
         n_variants: Number of variants in the haplotype.
         variants: Comma-separated variant strings (chrom:pos:ref:alt).
-        gnomAD_AF_afr: Comma-separated AFR allele frequencies per variant.
-        gnomAD_AF_amr: Comma-separated AMR allele frequencies per variant.
-        gnomAD_AF_eas: Comma-separated EAS allele frequencies per variant.
-        gnomAD_AF_nfe: Comma-separated NFE allele frequencies per variant.
-        gnomAD_AF_sas: Comma-separated SAS allele frequencies per variant.
+        gnomad_afs: Mapping from pop label to comma-delimited per-variant AF string. Defaults to
+            a five-population (afr/amr/eas/nfe/sas) dict if not provided.
         **kwargs: Additional fields passed to Haplotype.
 
     Returns:
@@ -57,11 +58,7 @@ def create_haplotype(
         sequence_length=sequence_length,
         n_variants=n_variants,
         variants=variants,
-        gnomAD_AF_afr=gnomAD_AF_afr,
-        gnomAD_AF_amr=gnomAD_AF_amr,
-        gnomAD_AF_eas=gnomAD_AF_eas,
-        gnomAD_AF_nfe=gnomAD_AF_nfe,
-        gnomAD_AF_sas=gnomAD_AF_sas,
+        gnomad_afs=dict(_DEFAULT_GNOMAD_AFS) if gnomad_afs is None else gnomad_afs,
         **defaults,
     )
 
@@ -127,11 +124,13 @@ def test_complex_multi_indel_mapping() -> None:
     haplotype = create_haplotype(
         sequence_id="hap5",
         variants="1:500:AT:A,1:505:C:CTT,1:510:GGG:T",
-        gnomAD_AF_afr="0.05,0.15,0.25",
-        gnomAD_AF_amr="0.06,0.16,0.26",
-        gnomAD_AF_eas="0.07,0.17,0.27",
-        gnomAD_AF_nfe="0.04,0.14,0.24",
-        gnomAD_AF_sas="0.03,0.13,0.23",
+        gnomad_afs={
+            "afr": "0.05,0.15,0.25",
+            "amr": "0.06,0.16,0.26",
+            "eas": "0.07,0.17,0.27",
+            "nfe": "0.04,0.14,0.24",
+            "sas": "0.03,0.13,0.23",
+        },
     )
     rm = haplotype.reference_mapping(9, 22, 10)
 
@@ -153,11 +152,13 @@ def test_large_insertion_with_null_frequencies() -> None:
         sequence_length=42,
         n_variants=1,
         variants=f"chr12:90349349:T:{alt}",
-        gnomAD_AF_afr="null",
-        gnomAD_AF_amr="null",
-        gnomAD_AF_eas="null",
-        gnomAD_AF_nfe="null",
-        gnomAD_AF_sas="null",
+        gnomad_afs={
+            "afr": "null",
+            "amr": "null",
+            "eas": "null",
+            "nfe": "null",
+            "sas": "null",
+        },
     )
     rm = haplotype.reference_mapping(22, 42, 25)
 
@@ -305,6 +306,35 @@ def test_parse_pop_freqs_nulls_become_zero() -> None:
 def test_parse_pop_freqs_single_null() -> None:
     """_parse_pop_freqs should return [0.0] for a single 'null' entry."""
     assert _parse_pop_freqs("null") == [0.0]
+
+
+def test_parse_pop_freqs_na_treated_as_missing() -> None:
+    """'NA' (Hail's default TSV missing token) should parse to 0.0 alongside 'null'."""
+    assert _parse_pop_freqs("0.1,NA,null,0.4") == [0.1, 0.0, 0.0, 0.4]
+
+
+def test_from_row_splits_per_pop_columns() -> None:
+    """Haplotype.from_row should pull gnomAD_AF_* columns into gnomad_afs by pop label."""
+    pops_legend = ["afr", "amr", "eas"]
+    row: dict[str, Any] = {
+        "sequence_id": "row_hap",
+        "sequence": "ACGT",
+        "sequence_length": 4,
+        "n_variants": 1,
+        "fraction_phased": 1.0,
+        "popmax_empirical_AF": 0.5,
+        "popmax_empirical_AC": 10,
+        "estimated_gnomad_AF": 0.5,
+        "max_pop": "afr",
+        "variants": "chr1:100:A:T",
+        "source": "test",
+        "gnomAD_AF_afr": "0.5",
+        "gnomAD_AF_amr": "0.3",
+        "gnomAD_AF_eas": "NA",
+    }
+    hap = Haplotype.from_row(row, pops_legend)
+    assert hap.gnomad_afs == {"afr": "0.5", "amr": "0.3", "eas": "NA"}
+    assert list(hap.gnomad_afs.keys()) == pops_legend
 
 
 # ---------------------------------------------------------------------------

@@ -364,5 +364,6 @@ def compute_haplotypes(
     )
 
     htu = window1.union(window2)
+    htu = htu.annotate_globals(pops=hl.literal(pop_legend))
     logger.info("Writing final %s.ht ...", output_base)
     htu.key_by("haplotype").naive_coalesce(64).write(f"{str(output_base)}.ht", overwrite=True)
