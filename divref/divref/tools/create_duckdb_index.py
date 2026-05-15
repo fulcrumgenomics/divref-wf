@@ -26,14 +26,18 @@ class TablePair(Metric):
     """
     Helper class to link a pair of tables for the same contig.
 
+    `haplotype_table_path` may be `None` (empty TSV cell) for contigs that contribute only gnomAD
+    single variants (e.g. chrX/chrY in the divref workflow). `sites_table_path` is always required.
+
     Attributes:
         contig: Contig name.
-        haplotype_table: HGDP haplotypes Hail table.
-        sites_table: gnomAD variant Hail table.
+        haplotype_table_path: HGDP haplotypes Hail table, or `None` if this contig has no haplotype
+            track.
+        sites_table_path: gnomAD variant Hail table.
     """
 
     contig: str
-    haplotype_table_path: Path
+    haplotype_table_path: Path | None
     sites_table_path: Path
 
 
@@ -70,7 +74,10 @@ def create_duckdb_index(  # noqa: C901
 
     Args:
         in_table_pairs_tsv: Path to a TSV file with fields 'contig', 'haplotype_table_path', and
-            'sites_table_path'.
+            'sites_table_path'. The 'haplotype_table_path' cell may be empty for contigs that
+            contribute only gnomAD single variants; 'sites_table_path' must be populated on every
+            row. A run with zero haplotype rows is supported (the joint pop legend then collapses
+            to the gnomAD legend, and the written `hgdp_haplotype_pops_legend` table is `[]`).
         reference_fasta: Path to the indexed reference FASTA for sequence extraction.
         window_size: Window size used when generating haplotypes; used as the context size when
             constructing sequence strings and stored in the index.
@@ -117,9 +124,10 @@ def create_duckdb_index(  # noqa: C901
     if not table_pairs:
         raise ValueError(f"No table pairs found in {in_table_pairs_tsv}.")
 
-    # fail fast on input Hail tables
+    # fail fast on input Hail tables; haplotype_table_path is optional per row
     for table_pair in table_pairs:
-        assert_directory_exists(table_pair.haplotype_table_path)
+        if table_pair.haplotype_table_path is not None:
+            assert_directory_exists(table_pair.haplotype_table_path)
         assert_directory_exists(table_pair.sites_table_path)
 
     # determine per-contig TSV paths and fail fast on writability when retained
@@ -140,22 +148,37 @@ def create_duckdb_index(  # noqa: C901
     )
     hl.init(tmp_dir=str(tmp_dir))
 
-    hgdp_pops_legend: list[str] = hl.read_table(
-        str(table_pairs[0].haplotype_table_path)
-    ).pops.collect()[0]
+    # Bootstrap pop legends from the first available source on each side. The haplotype side may
+    # be absent on some rows (or on every row, e.g. a sites-only run).
+    first_with_hap: TablePair | None = next(
+        (tp for tp in table_pairs if tp.haplotype_table_path is not None), None
+    )
+    hgdp_pops_legend: list[str] = (
+        hl.read_table(str(first_with_hap.haplotype_table_path)).pops.collect()[0]
+        if first_with_hap is not None
+        else []
+    )
     gnomad_pops_legend: list[str] = hl.read_table(
         str(table_pairs[0].sites_table_path)
     ).pops.collect()[0]
     # All pairs must share the same pops legends so a single remap into the joint legend is valid
-    # for every contig; otherwise the exported gnomAD_AF_* columns would be misaligned.
+    # for every contig; otherwise the exported gnomAD_AF_* columns would be misaligned. Rows
+    # without a haplotype table are skipped on the haplotype-side check.
     for tp in table_pairs[1:]:
-        tp_hgdp_pops: list[str] = hl.read_table(str(tp.haplotype_table_path)).pops.collect()[0]
         tp_gnomad_pops: list[str] = hl.read_table(str(tp.sites_table_path)).pops.collect()[0]
-        if tp_hgdp_pops != hgdp_pops_legend or tp_gnomad_pops != gnomad_pops_legend:
+        if tp_gnomad_pops != gnomad_pops_legend:
             raise ValueError(
-                f"Pops legend mismatch for contig {tp.contig}: "
-                f"haplotype pops {tp_hgdp_pops} vs {hgdp_pops_legend}, "
-                f"sites pops {tp_gnomad_pops} vs {gnomad_pops_legend}."
+                f"gnomAD pops legend mismatch for contig {tp.contig}: "
+                f"{tp_gnomad_pops} vs {gnomad_pops_legend}."
+            )
+    for tp in table_pairs:
+        if tp is first_with_hap or tp.haplotype_table_path is None:
+            continue
+        tp_hgdp_pops: list[str] = hl.read_table(str(tp.haplotype_table_path)).pops.collect()[0]
+        if tp_hgdp_pops != hgdp_pops_legend:
+            raise ValueError(
+                f"HGDP haplotype pops legend mismatch for contig {tp.contig}: "
+                f"{tp_hgdp_pops} vs {hgdp_pops_legend}."
             )
     # Joint legend: gnomAD pops in their original order, then any HGDP-only pops appended.
     joint_pops_legend: list[str] = list(gnomad_pops_legend) + [
@@ -388,10 +411,13 @@ def build_contig_sequences_table(
 
     Reads the HGDP haplotype + gnomAD sites tables for one contig, unions them, sorts by genomic
     position, and applies the same per-row annotations as the cross-contig table. Sequence IDs are
-    offset by `sequence_id_offset` so they remain unique across contigs.
+    offset by `sequence_id_offset` so they remain unique across contigs. When
+    `table_pair.haplotype_table_path` is `None`, the haplotype side is skipped and only the gnomAD
+    sites table contributes rows for this contig.
 
     Args:
-        table_pair: Per-contig pair of haplotype + gnomAD sites table paths.
+        table_pair: Per-contig pair of haplotype + gnomAD sites table paths. The haplotype side
+            may be `None`.
         window_size: Context size for sequence construction and haplotype splitting.
         version: Version identifier for sequence IDs.
         sequence_id_offset: Number of rows already written for prior contigs; added to this
@@ -404,18 +430,22 @@ def build_contig_sequences_table(
     Returns:
         Hail table with sequences, coordinates, and variant strings annotated.
     """
-    hgdp_haplotypes_ht: hl.Table = build_hgdp_haplotype_table_entries(
-        haplotypes_table_path=table_pair.haplotype_table_path,
-        window_size=window_size,
-        hgdp_to_joint=hgdp_to_joint,
-        hgdp_at_joint=hgdp_at_joint,
-    )
     gnomad_variants_ht: hl.Table = build_gnomad_variant_table_entries(
         sites_table_path=table_pair.sites_table_path,
         gnomad_to_joint=gnomad_to_joint,
         gnomad_at_joint=gnomad_at_joint,
     )
-    seq_ht: hl.Table = hgdp_haplotypes_ht.union(gnomad_variants_ht, unify=True)
+    seq_ht: hl.Table
+    if table_pair.haplotype_table_path is None:
+        seq_ht = gnomad_variants_ht
+    else:
+        hgdp_haplotypes_ht: hl.Table = build_hgdp_haplotype_table_entries(
+            haplotypes_table_path=table_pair.haplotype_table_path,
+            window_size=window_size,
+            hgdp_to_joint=hgdp_to_joint,
+            hgdp_at_joint=hgdp_at_joint,
+        )
+        seq_ht = hgdp_haplotypes_ht.union(gnomad_variants_ht, unify=True)
 
     seq_ht = seq_ht.rename({
         "max_empirical_AF": "popmax_empirical_AF",
