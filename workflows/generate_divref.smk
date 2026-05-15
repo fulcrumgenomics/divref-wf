@@ -52,6 +52,8 @@ WORK_DIR: Path = Path(config["work_dir"])
 TMP_DIR: Path = Path(config["tmp_dir"])
 
 CHROMS: list[str] = config["chromosomes"]
+# Haplotypes are computed for autosomes only; chrX/chrY contribute single gnomAD variants only.
+HAPLOTYPE_CHROMS: list[str] = [c for c in CHROMS if c not in ("chrX", "chrY")]
 
 REFERENCE_GENOME: str = config["reference_genome_base_name"]
 REFERENCE_GENOME_URI: str = config["reference_genome_uri"]
@@ -337,7 +339,7 @@ rule create_table_pairs_tsv:
     input:
         haplotypes_hts=expand(
             f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{{chrom}}.ht",
-            chrom=CHROMS,
+            chrom=HAPLOTYPE_CHROMS,
         ),
         sites_hts=expand(
             f"{WORK_DIR}/inputs/gnomad.sites.{{chrom}}.ht",
@@ -349,8 +351,11 @@ rule create_table_pairs_tsv:
         with open(output.tsv, "w") as f:
             f.write("contig\thaplotype_table_path\tsites_table_path\n")
             for chrom in CHROMS:
-                haplotype_ht = f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{chrom}.ht"
                 sites_ht = f"{WORK_DIR}/inputs/gnomad.sites.{chrom}.ht"
+                if chrom in HAPLOTYPE_CHROMS:
+                    haplotype_ht = f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{chrom}.ht"
+                else:
+                    haplotype_ht = ""
                 f.write(f"{chrom}\t{haplotype_ht}\t{sites_ht}\n")
 
 

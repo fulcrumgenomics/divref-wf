@@ -34,7 +34,9 @@ properties:
       type: string
     minItems: 1
     uniqueItems: true
-    description: List of chromosomes to generate the resource for.
+    description: |
+      List of chromosomes to generate the resource for. Haplotypes are only computed for autosomes
+      (chr1-chr22); chrX and chrY, if listed, contribute gnomAD single variants only.
     default: ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr20", "chr21", "chr22", "chrX", "chrY"]
 
   hgdp_1kg_populations:
