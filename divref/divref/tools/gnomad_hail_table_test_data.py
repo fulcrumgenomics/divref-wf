@@ -32,8 +32,8 @@ def gnomad_hail_table_test_data(
             Hail table.
         in_gnomad_hgdp_sample_metadata: Path to the gnomAD HGDP/1KG sample metadata Hail table.
         out_variant_annotation_table: Output path for the subset variant annotation Hail table.
-        out_sample_metadata: Output path for the sample metadata Hail table, stripped to key and
-            gnomad_population_inference only.
+        out_sample_metadata: Output path for the sample metadata Hail table, stripped to key,
+            `gnomad_population_inference`, and `gnomad_sex_imputation`.
         locus: Locus interval for variant filtering.
         gcs_credentials_path: Path to GCS default credentials JSON file.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
@@ -58,7 +58,7 @@ def gnomad_hail_table_test_data(
     va_subset.write(str(out_variant_annotation_table), overwrite=True)
 
     sa = hl.read_table(in_gnomad_hgdp_sample_metadata)
-    sa = sa.select("gnomad_population_inference").select_globals()
+    sa = sa.select("gnomad_population_inference", "gnomad_sex_imputation").select_globals()
 
     logger.info(f"Writing {sa.count()} samples to {out_sample_metadata}.")
     sa.naive_coalesce(1).write(str(out_sample_metadata), overwrite=True)
