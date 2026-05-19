@@ -53,7 +53,8 @@ TMP_DIR: Path = Path(config["tmp_dir"])
 
 CHROMS: list[str] = config["chromosomes"]
 # Haplotypes are computed for autosomes only; chrX/chrY contribute single gnomAD variants only.
-HAPLOTYPE_CHROMS: list[str] = [c for c in CHROMS if c not in ("chrX", "chrY")]
+_AUTOSOMES: frozenset[str] = frozenset(f"chr{n}" for n in range(1, 23))
+HAPLOTYPE_CHROMS: list[str] = [c for c in CHROMS if c in _AUTOSOMES]
 
 REFERENCE_GENOME: str = config["reference_genome_base_name"]
 REFERENCE_GENOME_URI: str = config["reference_genome_uri"]
