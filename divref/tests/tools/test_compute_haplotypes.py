@@ -902,3 +902,92 @@ def test_compute_haplotypes_no_variants(
             output_base=output_base,
             temp_dir=tmp_path / "hail_tmp",
         )
+
+
+@pytest.mark.parametrize(
+    "variant_freq_threshold,haplotype_freq_threshold,expected_count",
+    [
+        (0.0, 0.0, 1195),
+        (0.005, 0.0, 884),
+        (0.0, 0.005, 796),
+        (0.005, 0.005, 670),
+    ],
+)
+def test_compute_haplotypes_chrx_nonpar(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    variant_freq_threshold: float,
+    haplotype_freq_threshold: float,
+    expected_count: int,
+) -> None:
+    """Compute haplotypes on a chrX non-PAR window with sex-aware ploidy correction."""
+    in_sites = datadir / "chrX_50000000_50100000.gnomad_afs.ht"
+    in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
+    vcf_path = datadir / "chrX_50000000_50100000.vcf.gz"
+    output_base = tmp_path / "haplos"
+
+    with patch("divref.tools.compute_haplotypes.hl.init"):
+        compute_haplotypes(
+            vcfs_path=vcf_path,
+            gnomad_va_file=in_sites,
+            gnomad_sa_file=in_samples,
+            window_size=5000,
+            variant_freq_threshold=variant_freq_threshold,
+            haplotype_freq_threshold=haplotype_freq_threshold,
+            output_base=output_base,
+            temp_dir=tmp_path / "hail_tmp",
+        )
+
+    result = hl.read_table(f"{output_base}.ht")
+    assert result.count() == expected_count
+
+    results: list[hl.Struct] = result.collect()
+    assert all(len(r.haplotype) >= 2 for r in results)
+    assert all(len(r.variants) == len(r.haplotype) for r in results)
+    # All variants are on chrX non-PAR — the locus mask is True throughout.
+    assert all(v.locus.contig == "chrX" for r in results for v in r.variants)
+
+
+def test_compute_haplotypes_chrx_aneuploid_filter_and_haploid_male_an(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """
+    Aneuploidy/ambiguous samples are excluded; chrX non-PAR males contribute haploid AN.
+
+    With the regenerated metadata fixture (1905 XX + 2216 XY + 30 aneuploid/ambiguous), the
+    pop-restricted, sex-filtered sample set is at most `2 * n_XX + 1 * n_XY = 6026` alleles
+    when split fully across populations. Aggregated across populations, summing AN per
+    variant in `frequencies_by_pop` should therefore be bounded above by ~6026, well below
+    the diploid-everywhere bound of `2 * 4151 = 8302`. A summed-AN observation > 6100 would
+    indicate either the aneuploidy filter or the male haploid correction has regressed.
+    """
+    in_sites = datadir / "chrX_50000000_50100000.gnomad_afs.ht"
+    in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
+    vcf_path = datadir / "chrX_50000000_50100000.vcf.gz"
+    output_base = tmp_path / "haplos"
+
+    with patch("divref.tools.compute_haplotypes.hl.init"):
+        compute_haplotypes(
+            vcfs_path=vcf_path,
+            gnomad_va_file=in_sites,
+            gnomad_sa_file=in_samples,
+            window_size=5000,
+            variant_freq_threshold=0.0,
+            haplotype_freq_threshold=0.0,
+            output_base=output_base,
+            temp_dir=tmp_path / "hail_tmp",
+        )
+
+    variants = hl.read_table(f"{output_base}.variants.ht")
+    # max-over-variants of (sum-over-pops of AN). Pseudo-diploid encoding without sex
+    # correction would give ~2 * 4121 = 8242 for a fully-genotyped variant; with the
+    # haploid-male correction in non-PAR it should be ~6026.
+    summed_an_max: int = variants.aggregate(
+        hl.agg.max(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN)))
+    )
+    assert summed_an_max <= 6100, (
+        f"sum(AN) per variant exceeded the haploid-male non-PAR bound: {summed_an_max}"
+    )
