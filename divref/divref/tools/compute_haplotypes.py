@@ -470,13 +470,26 @@ def compute_haplotypes(
     pop_legend: list[str] = gnomad_va.globals.pops.collect()[0]
     n_pops: int = len(pop_legend)
     pop_ints = {pop: i for i, pop in enumerate(pop_legend)}
-    mt = mt.annotate_cols(pop_int=hl.literal(pop_ints).get(gnomad_sa[mt.col_key].pop))
+    sa_row = gnomad_sa[mt.col_key]
+    mt = mt.annotate_cols(
+        pop_int=hl.literal(pop_ints).get(sa_row.pop),
+        sex_karyotype=sa_row.sex_karyotype,
+    )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
+    # Drop sex aneuploidies and ambiguous calls from all chromosomes so that the chrX non-PAR
+    # ploidy correction is well-defined and the autosome sample set stays consistent.
+    mt = mt.filter_cols(hl.literal({"XX", "XY"}).contains(mt.sex_karyotype))
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
 
+    # Males in chrX non-PAR are encoded as pseudo-homozygous diploid (0|0 or 1|1) in the
+    # SHAPEIT5 BCFs, but gnomAD reports chrX non-PAR allele numbers with males counted as
+    # haploid. Treat males as haploid here so that empirical AC/AN match the gnomAD HT
+    # convention; everywhere else (autosomes, PAR, chrY) keep the original diploid call.
+    is_male_nonpar = mt.locus.in_x_nonpar() & (mt.sex_karyotype == "XY")
+    adjusted_gt = hl.if_else(is_male_nonpar, hl.call(mt.GT[0]), mt.GT)
     mt = mt.annotate_rows(
-        frequencies_by_pop=hl.agg.group_by(mt.pop_int, hl.agg.call_stats(mt.GT, 2)),
+        frequencies_by_pop=hl.agg.group_by(mt.pop_int, hl.agg.call_stats(adjusted_gt, 2)),
         ref_len=hl.len(mt.alleles[0]),
     )
 
@@ -490,9 +503,13 @@ def compute_haplotypes(
     group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))
     mt = mt.annotate_rows(locus_group=group_lit[mt.row_idx])
 
+    # Skip the right strand for non-PAR males so each male carrier is counted once (via the
+    # left strand). Without this, the pseudo-`1|1` encoding would double-count male
+    # haplotypes in chrX non-PAR.
+    is_male_nonpar_row = mt.locus.in_x_nonpar() & (mt.sex_karyotype == "XY")
     entries = mt.select_entries(
         is_left=mt.GT[0] != 0,
-        is_right=mt.GT[1] != 0,
+        is_right=(mt.GT[1] != 0) & ~is_male_nonpar_row,
     ).entries()
     entries = entries.filter(entries.is_left | entries.is_right)
     entries = entries.key_by()
