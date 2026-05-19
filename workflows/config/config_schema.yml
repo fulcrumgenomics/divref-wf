@@ -61,6 +61,29 @@ properties:
     description: Suffix of the URI for the HGDP+1KG phased BCF files (used for both `gs://` and `s3://`).
     default: ".filtered.SNV_INDEL.phased.shapeit5.bcf"
 
+  hgdp_1kg_phased_bcf_chrX:
+    type: object
+    additionalProperties: false
+    description: |
+      URIs for the three HGDP+1KG phased chrX BCFs (PAR1, non-PAR, PAR2). chrX does not
+      follow the autosome `{prefix}{chrom}{suffix}` pattern because non-PAR uses the
+      shapeit5 rare-variant track while PAR1 and PAR2 use the common-variant track. Both
+      `gs://` and `s3://` are supported; the scheme must match the workflow-level `cloud`.
+    properties:
+      par1:
+        type: string
+        description: URI of the chrX PAR1 phased BCF.
+      non_par:
+        type: string
+        description: URI of the chrX non-PAR phased BCF.
+      par2:
+        type: string
+        description: URI of the chrX PAR2 phased BCF.
+    required:
+      - par1
+      - non_par
+      - par2
+
   hgdp_1kg_variant_annotation_hail_table:
     type: string
     description: |
@@ -187,3 +210,4 @@ properties:
 required:
   - cloud
   - version
+  - hgdp_1kg_phased_bcf_chrX

@@ -45,6 +45,12 @@ for _field in (
 ):
     _validate_cloud_uri(_field, config[_field])
 
+for _chrX_part in ("par1", "non_par", "par2"):
+    _validate_cloud_uri(
+        f"hgdp_1kg_phased_bcf_chrX.{_chrX_part}",
+        config["hgdp_1kg_phased_bcf_chrX"][_chrX_part],
+    )
+
 
 VERSION: str = config["version"]
 
@@ -63,6 +69,9 @@ REFERENCE_GENOME_URI: str = config["reference_genome_uri"]
 # "{HGDP_1KG_PHASED_BCF_PREFIX}.{chrom}.{HGDP_1KG_PHASED_BCF_SUFFIX}"
 HGDP_1KG_PHASED_BCF_PREFIX: str = config["hgdp_1kg_phased_bcf_prefix"]
 HGDP_1KG_PHASED_BCF_SUFFIX: str = config["hgdp_1kg_phased_bcf_suffix"]
+# chrX uses three BCFs with non-uniform naming (PAR1, non-PAR, PAR2); see
+# `subset_phased_genotypes_chrX` below.
+HGDP_1KG_PHASED_BCF_CHRX: dict[str, str] = config["hgdp_1kg_phased_bcf_chrX"]
 HGDP_1KG_VARIANT_ANNOTATION_HAIL_TABLE: str = config["hgdp_1kg_variant_annotation_hail_table"]
 HGDP_1KG_SAMPLE_METADATA_HAIL_TABLE: str = config["hgdp_1kg_sample_metadata_hail_table"]
 HGDP_1KG_POPS: list[str] = config["hgdp_1kg_populations"]
@@ -110,6 +119,8 @@ rule all:
 # Removes the INFO field, since this is not required for haplotype computation (allele frequencies
 # are re-annotated from the sites table), and it inflates the size on disk and subsequently the time
 # for Hail to load and parse the VCF with the `divref compute-haplotypes` tool.
+#
+# chrX uses three separate phased BCFs (PAR1, non-PAR, PAR2) — see `subset_phased_genotypes_chrX`.
 ####################################################################################################
 rule subset_phased_genotypes:
     output:
@@ -117,6 +128,8 @@ rule subset_phased_genotypes:
         tbi=f"{WORK_DIR}/inputs/hgdp_1kg.phased_genotypes.{{chrom}}.vcf.gz.tbi",
     log:
         "logs/generate_divref/subset_phased_genotypes.{chrom}.log",
+    wildcard_constraints:
+        chrom=r"(?!chrX$).+",
     params:
         bcf=f"{HGDP_1KG_PHASED_BCF_PREFIX}{{chrom}}{HGDP_1KG_PHASED_BCF_SUFFIX}",
     shell:
@@ -128,6 +141,38 @@ rule subset_phased_genotypes:
                 --output {output.vcf} \
                 --write-index=tbi \
                 {params.bcf}
+        ) &> {log}
+        """
+
+
+####################################################################################################
+# Extracts and concatenates the chrX phased genotypes from the three HGDP+1KG BCFs (PAR1, non-PAR,
+# PAR2). bcftools concat -a -Ou stitches the regions in genomic order on a single contig, and the
+# INFO field is dropped on output, matching the autosome subset rule.
+####################################################################################################
+rule subset_phased_genotypes_chrX:
+    output:
+        vcf=f"{WORK_DIR}/inputs/hgdp_1kg.phased_genotypes.chrX.vcf.gz",
+        tbi=f"{WORK_DIR}/inputs/hgdp_1kg.phased_genotypes.chrX.vcf.gz.tbi",
+    log:
+        "logs/generate_divref/subset_phased_genotypes.chrX.log",
+    params:
+        par1=HGDP_1KG_PHASED_BCF_CHRX["par1"],
+        non_par=HGDP_1KG_PHASED_BCF_CHRX["non_par"],
+        par2=HGDP_1KG_PHASED_BCF_CHRX["par2"],
+    shell:
+        """
+        (
+            bcftools concat \
+                --allow-overlaps \
+                --output-type u \
+                {params.par1} {params.non_par} {params.par2} \
+            | bcftools annotate \
+                --remove INFO \
+                --output-type z \
+                --output {output.vcf} \
+                --write-index=tbi \
+                -
         ) &> {log}
         """
 
