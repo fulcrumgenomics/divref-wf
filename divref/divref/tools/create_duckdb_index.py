@@ -418,7 +418,6 @@ def build_contig_sequences_table(
     else:
         hgdp_haplotypes_ht: hl.Table = build_hgdp_haplotype_table_entries(
             haplotypes_table_path=table_pair.haplotype_table_path,
-            window_size=window_size,
             hgdp_to_joint=hgdp_to_joint,
             hgdp_at_joint=hgdp_at_joint,
         )
