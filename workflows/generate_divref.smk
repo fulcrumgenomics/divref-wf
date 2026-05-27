@@ -68,7 +68,6 @@ HGDP_1KG_SAMPLE_METADATA_HAIL_TABLE: str = config["hgdp_1kg_sample_metadata_hail
 HGDP_1KG_POPS: list[str] = config["hgdp_1kg_populations"]
 HGDP_1KG_MIN_POP_VARIANT_AF: float = config["hgdp_1kg_min_pop_variant_allele_freq"]
 HGDP_1KG_MIN_POP_HAPLOTYPE_AF: float = config["hgdp_1kg_min_estimated_gnomad_haplotype_allele_freq"]
-HGDP_1KG_HAPLOTYPE_WINDOW_SIZE: int = config["hgdp_1kg_haplotype_window_size"]
 
 # gnomAD variants can be from a different source than the haplotypes; the cloud is
 # derived from the workflow-level `cloud` so all inputs come from the same provider.
@@ -207,7 +206,7 @@ rule compute_haplotypes:
     log:
         "logs/generate_divref/compute_haplotypes.{chrom}.log",
     params:
-        window_size=HGDP_1KG_HAPLOTYPE_WINDOW_SIZE,
+        window_size=SEQUENCE_WINDOW_SIZE,
         variant_freq_threshold=HGDP_1KG_MIN_POP_VARIANT_AF,
         haplotype_freq_threshold=HGDP_1KG_MIN_POP_HAPLOTYPE_AF,
         output_base=f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{{chrom}}",
@@ -228,7 +227,10 @@ rule compute_haplotypes:
                 --spark-executor-memory-gb {params.spark_executor_memory_gb}
 
             # remove intermediate files
-            rm -r {params.output_base}.[12].ht {params.output_base}.variants.ht
+            rm -r {params.output_base}.variants.ht \
+                  {params.output_base}.blocks.ht \
+                  {params.output_base}.parents.ht \
+                  {params.output_base}.hap_ac.ht
         ) &> {log}
         """
 

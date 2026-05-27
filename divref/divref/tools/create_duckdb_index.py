@@ -17,7 +17,6 @@ from fgpyo.io import assert_path_is_writable
 from divref import defaults
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
-from divref.haplotype import split_haplotypes
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ def create_duckdb_index(  # noqa: C901
             row. A run with zero haplotype rows is supported (the joint pop legend then collapses
             to the gnomAD legend, and the written `hgdp_haplotype_pops_legend` table is `[]`).
         reference_fasta: Path to the indexed reference FASTA for sequence extraction.
-        window_size: Window size used when generating haplotypes; used as the context size when
+        window_size: Flanking reference context size around each haplotype/variant; used when
             constructing sequence strings and stored in the index.
         output_base: Base path for output. Writes
             `{output_base}.haplotypes_gnomad_merge.index.duckdb` and, when
@@ -261,51 +260,30 @@ def create_duckdb_index(  # noqa: C901
 
 def build_hgdp_haplotype_table_entries(
     haplotypes_table_path: Path,
-    window_size: int,
     hgdp_to_joint: list[int],
     hgdp_at_joint: list[int],
 ) -> hl.Table:
     """
     Build HGDP_haplotype entries for the "sequences" table.
 
-    Reads the haplotype table, splits the haplotypes by window size, and annotates with source and
-    population frequencies. `max_pop` and `all_pop_freqs[*].pop` integer indices are remapped from
-    the haplotype table's native pop ordering into the joint pop legend, and each row's
+    Reads the haplotype table and annotates with source and population frequencies. The haplotypes
+    are already at the desired granularity from `compute_haplotypes`; this function performs no
+    algorithmic transformation. `max_pop` and `all_pop_freqs[*].pop` integer indices are remapped
+    from the haplotype table's native pop ordering into the joint pop legend, and each row's
     `gnomad_freqs` inner array is reshuffled and padded to the joint legend's length so it indexes
     positionally by the joint legend (missing pops become a missing struct).
 
     Args:
         haplotypes_table_path: Path to the computed haplotypes Hail table.
-        window_size: Context size for sequence construction and haplotype splitting.
         hgdp_to_joint: For each index `i` in the haplotype table's pop legend, the corresponding
             index in the joint pop legend.
         hgdp_at_joint: For each index `j` in the joint pop legend, the corresponding index in the
             haplotype table's pop legend, or `-1` if that pop is not present on the haplotype side.
 
     Returns:
-        Hail table with added sequences and variant strings.
+        Hail table with source and per-pop frequency annotations.
     """
-    # Read the table and remove keys
-    ht = hl.read_table(str(haplotypes_table_path)).distinct().key_by()
-    count_orig: int = ht.count()
-    logger.info(f"Haplotype table {haplotypes_table_path} contains {count_orig} unique haplotypes.")
-
-    # Split haplotypes by window size
-    ht = split_haplotypes(ht, window_size)
-    count_after_splitting: int = ht.count()
-    logger.info(
-        f"{count_after_splitting} haplotypes remaining after splitting at window size {window_size}"
-    )
-
-    ht = ht.key_by("haplotype").distinct().key_by().drop("haplotype")
-    count_unique_after_splitting: int = ht.count()
-    logger.info(
-        f"{count_unique_after_splitting} unique haplotypes remaining after splitting at "
-        f"window size {window_size}"
-    )
-
-    # Annotate; remap pop integers from the haplotype-source legend into the joint legend, and
-    # reshuffle each row's gnomad_freqs inner array into joint legend order with missing-padding.
+    ht = hl.read_table(str(haplotypes_table_path)).key_by().drop("haplotype")
     hgdp_remap = hl.literal(hgdp_to_joint)
     hgdp_at_joint_lit = hl.literal(hgdp_at_joint)
     inner_struct_type = ht.gnomad_freqs.dtype.element_type.element_type
@@ -329,7 +307,6 @@ def build_hgdp_haplotype_table_entries(
             )
         ),
     )
-
     return ht
 
 
@@ -418,7 +395,7 @@ def build_contig_sequences_table(
     Args:
         table_pair: Per-contig pair of haplotype + gnomAD sites table paths. The haplotype side
             may be `None`.
-        window_size: Context size for sequence construction and haplotype splitting.
+        window_size: Flanking reference context size for sequence construction.
         version: Version identifier for sequence IDs.
         sequence_id_offset: Number of rows already written for prior contigs; added to this
             contig's local index to produce a globally unique sequence ID.
@@ -441,7 +418,6 @@ def build_contig_sequences_table(
     else:
         hgdp_haplotypes_ht: hl.Table = build_hgdp_haplotype_table_entries(
             haplotypes_table_path=table_pair.haplotype_table_path,
-            window_size=window_size,
             hgdp_to_joint=hgdp_to_joint,
             hgdp_at_joint=hgdp_at_joint,
         )

@@ -3,243 +3,391 @@
 import logging
 import os
 from pathlib import Path
-from typing import Callable
 
 import hail as hl
 from fgpyo.io import assert_directory_exists
 from fgpyo.io import assert_path_is_readable
-from fgpyo.io import assert_path_is_writable
 
 from divref import defaults
 
 logger = logging.getLogger(__name__)
 
 
-def _get_haplotypes(
-    ht: hl.Table,
-    windower_f: Callable[[hl.Expression], hl.Expression],
-    idx: int,
-    output_base: Path,
-    pop_ints: dict[str, int],
-    haplotype_freq_threshold: float,
-) -> hl.Table:
+def _compute_locus_groups(
+    variants_ht: hl.Table,
+    window_size: int,
+) -> tuple[dict[int, int], int]:
     """
-    Group variants into haplotypes within genomic windows and compute empirical frequencies.
+    Assign each variant a global `locus_group` id by cutting at gaps ≥ `window_size`.
 
-    Applies the windowing function to assign variants to windows, aggregates haplotypes per
-    population and sample, filters to multi-variant haplotypes, and collapses across samples
-    to compute empirical allele counts and frequencies. Writes intermediate results to a
-    checkpoint table.
+    Two variants share a `locus_group` iff a chain of variants in `variants_ht` connects them
+    with every consecutive gap (number of intervening reference bases) `< window_size`. Variants
+    on different contigs always get different groups. Because connectivity uses any variant
+    (not just a single sample's carriers), two carriers in different locus groups for any sample
+    are guaranteed to be ≥ `window_size` apart — i.e., partitioning carrier processing by
+    `locus_group` cannot put variants into the same parent block that the per-sample
+    adjacency-cut would have separated.
 
     Args:
-        ht: Hail table with per-variant population membership and frequency data.
-        windower_f: Function mapping a Hail locus to the window locus key.
-        idx: Index of this windowing pass (1 or 2), used in the checkpoint filename.
-        output_base: Base path for output; checkpoint written to {output_base}.{idx}.ht.
-        pop_ints: Mapping from population code to integer index.
-        haplotype_freq_threshold: Minimum estimated gnomAD allele frequency for a haplotype to be
-            retained.
+        variants_ht: variants table with `row_idx` (int64), `locus`, and `ref_len` fields.
+        window_size: adjacency-gap threshold in bp.
 
     Returns:
-        Hail table of haplotypes with empirical frequency summaries.
+        `(group_of, n_groups)` where `group_of` maps `row_idx → locus_group_id` and
+        `n_groups` is the total number of groups.
     """
+    rows = variants_ht.key_by().select("row_idx", "locus", "ref_len").collect()
+    rows.sort(key=lambda v: (v.locus.contig, v.locus.position))
+    group_of: dict[int, int] = {}
+    current_group = -1
+    prev_end = -1
+    prev_contig = ""
+    for v in rows:
+        if v.locus.contig != prev_contig or v.locus.position - prev_end >= window_size:
+            current_group += 1
+        group_of[v.row_idx] = current_group
+        prev_end = max(prev_end, v.locus.position + v.ref_len)
+        prev_contig = v.locus.contig
+    return group_of, current_group + 1
 
-    def agg_haplos(arr: hl.Expression) -> hl.Expression:
-        """
-        Aggregate haplotypes from an array of population/sample/index structs.
 
-        Groups alleles carried by the same sample within a window, collects haplotypes
-        that have more than one observed variant, and counts occurrences per unique
-        variant-index sequence (the "haplotype").
+def _form_parent_blocks(
+    blocks_ht: hl.Table,
+    window_size: int,
+) -> hl.Table:
+    """
+    Form per-(sample, strand) parent blocks via adjacency at `window_size`.
 
-        Args:
-            arr: Hail array expression of structs with pop, sample, and row_idx fields,
-                representing alleles carried by samples on one haploid chromosome.
+    For each input row (one per `(col_idx, locus_group, strand)`), sorts that row's alt-carrier
+    variants by genomic position, walks the sorted list, cuts into blocks at any gap whose
+    number of intervening reference bases is ≥ `window_size` (the gap accounts for ref allele
+    length, matching `divref.haplotype.variant_distance`), and discards blocks of length < 2.
+    Per-sample cuts can still split a single locus group when intermediate variants in the
+    group are not carried by this sample.
 
-        Returns:
-            Hail dict expression mapping population integer to an array of
-            (haplotype, count) pairs, where haplotype is an array of row indices.
-        """
-        flat = hl.agg.explode(lambda elt: hl.agg.collect(elt.annotate(row_idx=ht.row_idx)), arr)
-        pop_grouped = hl.group_by(lambda x: x.pop, flat)
-        return pop_grouped.map_values(
-            lambda arr_per_pop: hl.array(
-                hl.array(hl.group_by(lambda inner_elt: inner_elt.sample, arr_per_pop))
-                .filter(lambda sample_and_records: hl.len(sample_and_records[1]) > 1)
-                .map(
-                    lambda sample_and_records: hl.sorted(
-                        sample_and_records[1].map(lambda e: e.row_idx)
+    Args:
+        blocks_ht: Hail table with one row per `(sample, locus_group, strand)`. Required fields:
+            - `col_idx` (int): sample identifier.
+            - `pop_int` (int): population index.
+            - `strand` (int): 0 for left, 1 for right.
+            - `carriers` (array of struct(locus, row_idx, ref_len)): variants in this locus
+              group where the sample carries the alt allele on this strand. Order is not
+              assumed.
+        window_size: Adjacency-gap threshold in bp. A gap of exactly `window_size` reference
+            bases triggers a split.
+
+    Returns:
+        Hail table with one row per (sample, strand, parent block) and fields:
+            - `col_idx`, `pop_int`, `strand` inherited from input.
+            - `parent_block` (array of struct(locus, row_idx, ref_len)): the block, sorted by
+              `locus.position`, length ≥ 2.
+        The output is unkeyed.
+    """
+    blocks_ht = blocks_ht.key_by()
+    blocks_ht = blocks_ht.annotate(
+        carriers=hl.sorted(
+            blocks_ht.carriers,
+            key=lambda v: (v.locus.position, v.ref_len, v.row_idx),
+        ),
+    )
+    carriers = blocks_ht.carriers
+    n = hl.len(carriers)
+    # Cut at index i when carriers[i] starts ≥ window_size beyond the max end of the active
+    # block (carriers[0..i-1]), not just the immediately preceding variant. A shorter
+    # overlapping carrier can otherwise pull the boundary back and force a false split.
+    breakpoints = hl.range(1, n).filter(
+        lambda i: carriers[i].locus.position
+        - hl.max(hl.range(0, i).map(lambda k: carriers[k].locus.position + carriers[k].ref_len))
+        >= window_size
+    )
+
+    def get_range(i: hl.Expression) -> hl.Expression:
+        start = hl.if_else(i == 0, 0, breakpoints[i - 1])
+        end = hl.if_else(i == hl.len(breakpoints), n, breakpoints[i])
+        return hl.range(start, end)
+
+    block_ranges = (
+        hl.range(0, hl.len(breakpoints) + 1).map(get_range).filter(lambda r: hl.len(r) >= 2)
+    )
+    blocks_ht = blocks_ht.annotate(
+        parent_blocks=block_ranges.map(lambda r: r.map(lambda i: blocks_ht.carriers[i]))
+    )
+    blocks_ht = blocks_ht.explode("parent_blocks")
+    return blocks_ht.select("col_idx", "pop_int", "strand", parent_block=blocks_ht.parent_blocks)
+
+
+def _enumerate_subfragments(parents_ht: hl.Table) -> hl.Table:
+    """
+    Enumerate every adjacency-contiguous sub-fragment of length ≥ 2 from each parent block.
+
+    For a parent block of length N, emits N(N-1)/2 sub-fragments — one per `(i, j)` index
+    pair with `0 ≤ i < j < N`, namely `parent_block[i : j + 1]`. The full parent block is
+    included as the case `i = 0, j = N - 1`.
+
+    Args:
+        parents_ht: Hail table with one row per (sample, strand, parent block) — the output
+            of `_form_parent_blocks`. Required fields:
+            - `col_idx` (int)
+            - `pop_int` (int)
+            - `strand` (int)
+            - `parent_block` (array of struct(locus, row_idx, ref_len)), length ≥ 2.
+
+    Returns:
+        Hail table with one row per (sample, strand, parent block, sub-fragment) and fields:
+            - `col_idx`, `pop_int`, `strand` inherited from input.
+            - `sub_fragment` (array of struct(locus, row_idx, ref_len)): the sub-fragment,
+              length ≥ 2, preserving the parent's variant order.
+        Output is unkeyed.
+    """
+    parents_ht = parents_ht.key_by()
+    n = hl.len(parents_ht.parent_block)
+    sub_fragments = hl.range(0, n).flatmap(
+        lambda i: hl.range(i + 1, n).map(lambda j: parents_ht.parent_block[i : j + 1])
+    )
+    parents_ht = parents_ht.annotate(sub_fragments=sub_fragments)
+    parents_ht = parents_ht.explode("sub_fragments")
+    return parents_ht.select("col_idx", "pop_int", "strand", sub_fragment=parents_ht.sub_fragments)
+
+
+def _aggregate_containment_ac(subfragments_ht: hl.Table, n_pops: int) -> hl.Table:
+    """
+    Group sub-fragment rows by haplotype and produce a per-population containment AC vector.
+
+    Each (sample, strand, parent block) contributes at most one row per unique sub-fragment
+    haplotype string (sub-fragment positions within a parent are distinct), so the row count
+    per (haplotype, `pop_int`) equals the number of parent blocks in that population
+    containing the sub-fragment as adjacency-contiguous.
+
+    Args:
+        subfragments_ht: Hail table with one row per (sample, strand, parent block,
+            sub-fragment). Required fields:
+            - `pop_int` (int)
+            - `sub_fragment` (array of struct(..., row_idx, ...)): the sub-fragment carriers.
+        n_pops: Number of populations. The output `per_pop_AC` array has this length, indexed
+            by `pop_int`.
+
+    Returns:
+        Hail table keyed by `haplotype` with one row per unique sub-fragment haplotype:
+            - `haplotype` (array<int64>): row indices of the sub-fragment carriers.
+            - `per_pop_AC` (array<int64>): length `n_pops`, AC at index `p` is the count of
+              distinct parent blocks in pop `p` whose sub-fragment yielded this haplotype.
+    """
+    sf = subfragments_ht.key_by()
+    sf = sf.select(
+        haplotype=sf.sub_fragment.map(lambda v: v.row_idx),
+        pop_int=sf.pop_int,
+    )
+    counts = sf.group_by("haplotype").aggregate(per_pop_counts=hl.agg.counter(sf.pop_int))
+    counts = counts.annotate(
+        per_pop_AC=hl.range(0, n_pops).map(lambda p: counts.per_pop_counts.get(p, hl.int64(0)))
+    )
+    return counts.select("per_pop_AC")
+
+
+def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Table:
+    """
+    Attach per-variant component information to each haplotype row.
+
+    Looks up `(locus, alleles, freq, frequencies_by_pop)` for every `row_idx` in each row's
+    `haplotype` array and produces three parallel-length arrays.
+
+    Implementation: collects the variants table into a driver-side dict keyed by `row_idx`,
+    broadcasts it as a Hail literal, and indexes per-haplotype. Driver memory is proportional
+    to the number of variants in `variants_ht` (i.e., variants that pass `variant_freq_threshold`
+    upstream); for typical chr1 inputs this is in the hundreds of thousands of small structs.
+    Hail-side alternatives (explode+group_by, per-element table indexing inside `.map()`) were
+    attempted but trigger Hail IR compiler bugs in 0.2.137 — revisit when upgrading.
+
+    Args:
+        hap_table: Hail table with at least these fields:
+            - `haplotype` (array<int64>): row indices into `variants_ht.row_idx`.
+        variants_ht: Hail table with one row per variant. Must contain fields `row_idx`,
+            `locus`, `alleles`, `freq`, and `frequencies_by_pop`.
+
+    Returns:
+        `hap_table` annotated with three new arrays parallel-length to `haplotype`:
+            - `variants` (array<struct(locus, alleles)>).
+            - `gnomad_freqs` (array<freq array>): the per-variant gnomAD frequency array
+              (one inner array element per population).
+            - `frequencies_by_pop` (array<dict<int, struct(AF, AC, AN)>>): the per-variant
+              call-stats grouping. Used downstream for per-population min-AN computation.
+    """
+    pairs = variants_ht.aggregate(
+        hl.agg.collect(
+            hl.tuple([
+                variants_ht.row_idx,
+                hl.struct(
+                    locus=variants_ht.locus,
+                    alleles=variants_ht.alleles,
+                    freq=variants_ht.freq,
+                    frequencies_by_pop=variants_ht.frequencies_by_pop,
+                ),
+            ])
+        )
+    )
+    components_dict = hl.literal(dict(pairs))
+    hap_table = hap_table.annotate(
+        _components=hap_table.haplotype.map(lambda idx: components_dict[hl.int32(idx)])
+    )
+    hap_table = hap_table.annotate(
+        variants=hap_table._components.map(lambda c: hl.struct(locus=c.locus, alleles=c.alleles)),
+        gnomad_freqs=hap_table._components.map(lambda c: c.freq),
+        frequencies_by_pop=hap_table._components.map(lambda c: c.frequencies_by_pop),
+    )
+    return hap_table.drop("_components")
+
+
+def _compute_metrics(hap_table: hl.Table, n_pops: int) -> hl.Table:
+    """
+    Annotate per-haplotype frequency / phasing summary fields.
+
+    For each population `p`:
+      - `min_AN_p = min over segment variants of frequencies_by_pop[p].AN`
+      - `empirical_AF_p = per_pop_AC[p] / min_AN_p` (or missing when `min_AN_p == 0`)
+
+    Then `max_pop = argmax(empirical_AF)`, and the remaining summary fields are derived from
+    that population's component data. Sorted `all_pop_freqs` puts the largest AF first;
+    populations with missing AF sort to the end.
+
+    Args:
+        hap_table: Hail table with `haplotype`, `per_pop_AC`, `variants`, `gnomad_freqs`, and
+            `frequencies_by_pop` already attached (see `_attach_component_info`).
+        n_pops: Number of populations. Drives the per-pop iteration and the length of the
+            `all_pop_freqs` array.
+
+    Returns:
+        `hap_table` with these added fields:
+            - `max_pop` (int)
+            - `max_empirical_AF` (float64)
+            - `max_empirical_AC` (int)
+            - `min_variant_frequency` (float64): min gnomAD AF over segment variants for `max_pop`.
+            - `all_pop_freqs` (array<struct(pop, empirical_AC, empirical_AF)>): sorted by AF desc.
+            - `fraction_phased` (float64): `max_empirical_AF / min_variant_frequency`.
+            - `estimated_gnomad_AF` (float64): min over segment variants of
+              `gnomad_freqs[i][max_pop].AF * fraction_phased`.
+    """
+    pops_range = hl.range(0, n_pops)
+    hap_table = hap_table.annotate(
+        _per_pop_AF=pops_range.map(
+            lambda p: hl.bind(
+                lambda min_an: hl.if_else(
+                    hl.is_defined(min_an) & (min_an > 0),
+                    hl.float64(hap_table.per_pop_AC[p]) / hl.float64(min_an),
+                    hl.missing(hl.tfloat64),
+                ),
+                hl.min(
+                    hap_table.frequencies_by_pop.map(
+                        lambda fbp: fbp.get(p, hl.missing(fbp.dtype.value_type)).AN
                     )
+                ),
+            )
+        )
+    )
+    hap_table = hap_table.annotate(max_pop=hl.argmax(hap_table._per_pop_AF))
+    hap_table = hap_table.annotate(
+        max_empirical_AF=hap_table._per_pop_AF[hap_table.max_pop],
+        max_empirical_AC=hap_table.per_pop_AC[hap_table.max_pop],
+        min_variant_frequency=hl.min(hap_table.gnomad_freqs.map(lambda x: x[hap_table.max_pop].AF)),
+        all_pop_freqs=hl.sorted(
+            pops_range.map(
+                lambda p: hl.struct(
+                    pop=p,
+                    empirical_AC=hap_table.per_pop_AC[p],
+                    empirical_AF=hap_table._per_pop_AF[p],
                 )
-                .group_by(lambda x: x)
-                .map_values(lambda arr: hl.len(arr))
-            )
-        )
-
-    def collapse_haplos_across_samples(
-        pop: hl.Expression, arr1: hl.Expression, arr2: hl.Expression
-    ) -> hl.Expression:
-        """
-        Combine haplotypes from the left and right chromosome strands for one population.
-
-        Merges the two strand dictionaries for the given population, groups identical
-        haplotypes (sequences of row indices), and computes empirical allele counts and
-        frequencies using the minimum allele number across component variants.
-
-        Args:
-            pop: Hail integer expression identifying the population.
-            arr1: Left-strand haplotype dict from agg_haplos.
-            arr2: Right-strand haplotype dict from agg_haplos.
-
-        Returns:
-            Hail array expression of structs with haplotype, pop, empirical_AC,
-            min_variant_frequency, and empirical_AF fields.
-        """
-        # Assumes all AN == 2 * N_samples.
-        flat = hl.array([arr1, arr2]).flatmap(lambda x: x.get(pop))
-
-        def map_haplo_group(t: hl.Expression) -> hl.Expression:
-            """
-            Summarize one haplotype group into a frequency struct.
-
-            Args:
-                t: Tuple of (haplotype_row_indices, list_of_count_pairs).
-
-            Returns:
-                Hail struct with haplotype, pop, empirical_AC, min_variant_frequency,
-                and empirical_AF.
-            """
-            haplotype = t[0]
-            n_observed = hl.sum(t[1].map(lambda x: x[1]))
-            component_variant_frequencies = haplotype.map(
-                lambda x: ht_grouped.row_map[x].frequencies_by_pop[pop]
-            )
-            min_an = hl.min(component_variant_frequencies.map(lambda x: x.AN))
-            return hl.struct(
-                haplotype=haplotype,
-                pop=pop,
-                empirical_AC=n_observed,
-                min_variant_frequency=hl.min(component_variant_frequencies.map(lambda x: x.AF[1])),
-                empirical_AF=hl.if_else(min_an > 0, n_observed / min_an, hl.missing(hl.tfloat64)),
-            )
-
-        return hl.array(hl.group_by(lambda x: x[0], flat)).map(map_haplo_group)
-
-    def get_haplotype_summary(a: hl.Expression) -> dict[str, hl.Expression]:
-        """
-        Extract the top-population frequency fields from a collapsed haplotype array.
-
-        Sorts the array of per-population frequency structs by empirical AF descending
-        and returns the fields of the maximum-frequency entry along with the full
-        population frequency array.
-
-        Args:
-            a: Hail array expression of per-population frequency structs (from
-                collapse_haplos_across_samples), one entry per population.
-
-        Returns:
-            Dict mapping field names to Hail expressions for max_pop, max_empirical_AF,
-            max_empirical_AC, min_variant_frequency, and all_pop_freqs.
-        """
-        a_sorted = hl.sorted(a, key=lambda x: x.empirical_AF, reverse=True)
-        return dict(
-            max_pop=a_sorted[0].pop,
-            max_empirical_AF=a_sorted[0].empirical_AF,
-            max_empirical_AC=a_sorted[0].empirical_AC,
-            min_variant_frequency=a_sorted[0].min_variant_frequency,
-            all_pop_freqs=a_sorted.map(lambda x: x.drop("haplotype")),
-        )
-
-    new_locus = windower_f(ht.locus)
-    ht = ht.annotate(new_locus=new_locus)
-
-    ht_grouped = ht.group_by("new_locus").aggregate(
-        row_map=hl.dict(
-            hl.agg.collect((
-                ht.row_idx,
-                ht.row.select("locus", "alleles", "freq", "frequencies_by_pop"),
-            ))
+            ),
+            key=lambda s: s.empirical_AF,
+            reverse=True,
         ),
-        left_haplos=agg_haplos(ht.pops_and_ids_left),
-        right_haplos=agg_haplos(ht.pops_and_ids_right),
     )
-
-    ht_grouped = ht_grouped.annotate(
-        all_haplos=hl.literal(list(pop_ints.values())).flatmap(
-            lambda pop: collapse_haplos_across_samples(
-                pop, ht_grouped.left_haplos, ht_grouped.right_haplos
-            )
-        )
+    hap_table = hap_table.annotate(
+        fraction_phased=hap_table.max_empirical_AF / hap_table.min_variant_frequency,
     )
-
-    ht_grouped = ht_grouped.transmute(
-        all_haplos=hl.array(hl.group_by(lambda x: x.haplotype, ht_grouped.all_haplos)).map(
-            lambda t: hl.struct(haplotype=t[0], **get_haplotype_summary(t[1]))
-        )
-    )
-
-    hte = ht_grouped.explode("all_haplos")
-    hte = hte.key_by().drop("new_locus")
-
-    def get_variant(row_idx: hl.Expression) -> hl.Expression:
-        """
-        Look up the locus and alleles for a variant by its row index.
-
-        Args:
-            row_idx: Hail integer expression for the variant's row index in the
-                checkpoint table.
-
-        Returns:
-            Hail struct expression with locus and alleles fields.
-        """
-        return hte.row_map[row_idx].select("locus", "alleles")
-
-    def get_gnomad_freq(row_idx: hl.Expression) -> hl.Expression:
-        """
-        Look up the gnomAD frequency array for a variant by its row index.
-
-        Args:
-            row_idx: Hail integer expression for the variant's row index in the
-                checkpoint table.
-
-        Returns:
-            Hail array expression of per-population gnomAD frequency structs.
-        """
-        return hte.row_map[row_idx].freq
-
-    hte = hte.select(
-        **hte.all_haplos,
-        variants=hte.all_haplos.haplotype.map(get_variant),
-        gnomad_freqs=hte.all_haplos.haplotype.map(get_gnomad_freq),
-    )
-
-    hte = hte.group_by("haplotype").aggregate(
-        **hl.sorted(
-            hl.agg.collect(hte.row.drop("haplotype")),
-            key=lambda row: -row.max_empirical_AF,
-        )[0]
-    )
-
-    # Filter out any haplotypes with minimum variant frequency <= 0
-    hte = hte.filter(hte.min_variant_frequency > 0)
-
-    # Estimate the fraction of phased
-    fraction_phased = hte.max_empirical_AF / hte.min_variant_frequency
-    hte = hte.annotate(
-        fraction_phased=fraction_phased,
+    hap_table = hap_table.annotate(
         estimated_gnomad_AF=hl.min(
-            hte.gnomad_freqs.map(lambda x: x[hte.max_pop].AF * fraction_phased)
+            hap_table.gnomad_freqs.map(
+                lambda x: x[hap_table.max_pop].AF * hap_table.fraction_phased
+            )
         ),
     )
-    hte = hte.filter(hte.estimated_gnomad_AF >= haplotype_freq_threshold)
-    count_after_freq_filter: int = hte.count()
-    logger.info(
-        f"{count_after_freq_filter} haplotypes remaining with "
-        f"estimated_gnomad_AF >= {haplotype_freq_threshold}"
-    )
+    return hap_table.drop("_per_pop_AF")
 
-    logger.info("Writing %s.%s.ht ...", output_base, idx)
-    return hte.checkpoint(f"{str(output_base)}.{idx}.ht", overwrite=True)
+
+def _is_contiguous_subarray(short: tuple[int, ...], long_: tuple[int, ...]) -> bool:
+    """Return True if `short` appears as a strictly shorter contiguous slice of `long_`."""
+    n, m = len(short), len(long_)
+    if n >= m:
+        return False
+    for i in range(m - n + 1):
+        if long_[i : i + n] == short:
+            return True
+    return False
+
+
+def _find_subsumed_haplotypes(
+    by_ac: dict[tuple[int, ...], list[tuple[int, ...]]],
+) -> set[tuple[int, ...]]:
+    """
+    Within each AC group, return haplotypes properly contained in a longer group member.
+
+    Sorts each group by haplotype length descending and short-circuits the inner scan when
+    the running candidate is no longer strictly longer than the current target — proper
+    containment requires `len(h_long) > len(h_short)`, so once equal-length candidates are
+    reached, no remaining candidate in the sorted list can subsume the target.
+    """
+    drop: set[tuple[int, ...]] = set()
+    for haps in by_ac.values():
+        sorted_haps = sorted(haps, key=len, reverse=True)
+        for i, h_short in enumerate(sorted_haps):
+            n_short = len(h_short)
+            for h_long in sorted_haps[:i]:
+                if len(h_long) <= n_short:
+                    break
+                if _is_contiguous_subarray(h_short, h_long):
+                    drop.add(h_short)
+                    break
+    return drop
+
+
+def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
+    """
+    Drop sub-fragment rows subsumed by a larger fragment with identical per-pop AC.
+
+    For each pair of rows `X`, `Y`, drops `X` if:
+      - `X.haplotype` is a strictly shorter adjacency-contiguous sub-array of `Y.haplotype`, AND
+      - `X.per_pop_AC == Y.per_pop_AC` (element-wise across all populations).
+
+    Implementation: collects `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC
+    tuple, scans each group for proper sub-array containment, and filters the Hail table by
+    the resulting set of stringified haplotype keys. Driver memory is proportional to the
+    number of unique haplotypes; within each AC group, candidates are sorted by length
+    descending and the inner scan exits as soon as the running candidate is no longer strictly
+    longer than the target (proper containment requires `len(h_long) > len(h_short)`). This
+    keeps the worst case at O(G²) but prunes most pairs in practice when groups span a wide
+    length range.
+
+    Args:
+        hap_table: Hail table with `haplotype` (array<int64>) and `per_pop_AC` (array<int64>).
+
+    Returns:
+        `hap_table` with subsumed rows removed.
+    """
+    rows = hap_table.aggregate(
+        hl.agg.collect(hl.struct(haplotype=hap_table.haplotype, per_pop_AC=hap_table.per_pop_AC))
+    )
+    by_ac: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
+    for r in rows:
+        by_ac.setdefault(tuple(r.per_pop_AC), []).append(tuple(r.haplotype))
+
+    drop = _find_subsumed_haplotypes(by_ac)
+    if not drop:
+        return hap_table
+
+    drop_strs = {",".join(str(x) for x in h) for h in drop}
+    drop_lit = hl.literal(drop_strs, dtype=hl.tset(hl.tstr))
+    hap_table = hap_table.annotate(_hap_str=hl.delimit(hap_table.haplotype.map(hl.str), ","))
+    hap_table = hap_table.filter(~drop_lit.contains(hap_table._hap_str))
+    return hap_table.drop("_hap_str")
 
 
 def compute_haplotypes(
@@ -258,9 +406,13 @@ def compute_haplotypes(
     """
     Compute population haplotypes from VCF files with gnomAD frequency annotations.
 
-    Reads VCF files, annotates variants with gnomAD population allele frequencies,
-    extracts phased haplotypes per population using two overlapping window strategies,
-    and writes the union of both windowed results as a keyed Hail table.
+    Reads VCF files, annotates variants with gnomAD population allele frequencies, and
+    extracts phased haplotypes via per-sample adjacency block formation: for each
+    (sample, strand) pair, alt-carrier variants are walked in genomic order and grouped into
+    parent blocks at gaps ≥ `window_size`. Every adjacency-contiguous sub-fragment of length
+    ≥ 2 is enumerated from each parent, with `empirical_AC` counted as the number of parent
+    blocks containing it. Sub-fragments are dropped when subsumed by a longer surviving
+    fragment with identical per-population AC.
 
     Args:
         vcfs_path: Path or glob pattern to input VCF files.
@@ -268,12 +420,13 @@ def compute_haplotypes(
             (from extract_gnomad_afs).
         gnomad_sa_file: Path to the gnomAD sample metadata Hail table
             (from extract_sample_metadata).
-        window_size: Base window size in bp for grouping variants into haplotypes.
+        window_size: Adjacency-gap threshold in bp for both per-sample parent block formation
+            and per-parent sub-fragment emission.
         variant_freq_threshold: Minimum gnomAD population allele frequency to retain a variant.
         haplotype_freq_threshold: Minimum estimated gnomAD allele frequency for the haplotype to
             be retained.
-        output_base: Base output path; writes {output_base}.variants.ht, {output_base}.1.ht,
-            {output_base}.2.ht, and the final {output_base}.ht.
+        output_base: Base output path; writes `{output_base}.variants.ht` (per-variant
+            checkpoint) and the final `{output_base}.ht`.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
@@ -281,10 +434,6 @@ def compute_haplotypes(
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
     assert_directory_exists(gnomad_sa_file)
-    assert_path_is_writable(output_base.with_suffix(output_base.suffix + ".variants.ht"))
-    assert_path_is_writable(output_base.with_suffix(output_base.suffix + ".1.ht"))
-    assert_path_is_writable(output_base.with_suffix(output_base.suffix + ".2.ht"))
-    assert_path_is_writable(output_base.with_suffix(output_base.suffix + ".ht"))
 
     if spark_driver_memory_gb < 1:
         raise ValueError(
@@ -319,6 +468,7 @@ def compute_haplotypes(
     mt = mt.filter_rows(hl.is_defined(mt.freq))
 
     pop_legend: list[str] = gnomad_va.globals.pops.collect()[0]
+    n_pops: int = len(pop_legend)
     pop_ints = {pop: i for i, pop in enumerate(pop_legend)}
     mt = mt.annotate_cols(pop_int=hl.literal(pop_ints).get(gnomad_sa[mt.col_key].pop))
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
@@ -326,44 +476,68 @@ def compute_haplotypes(
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
 
     mt = mt.annotate_rows(
-        pops_and_ids_left=hl.agg.filter(
-            mt.GT[0] != 0, hl.agg.collect(hl.struct(pop=mt.pop_int, sample=mt.col_idx))
-        ),
-        pops_and_ids_right=hl.agg.filter(
-            mt.GT[1] != 0, hl.agg.collect(hl.struct(pop=mt.pop_int, sample=mt.col_idx))
-        ),
         frequencies_by_pop=hl.agg.group_by(mt.pop_int, hl.agg.call_stats(mt.GT, 2)),
+        ref_len=hl.len(mt.alleles[0]),
     )
-    ht = mt.rows().select(
-        "freq",
-        "pops_and_ids_left",
-        "pops_and_ids_right",
-        "row_idx",
-        "frequencies_by_pop",
-    )
-    ht = ht.checkpoint(f"{str(output_base)}.variants.ht", overwrite=True)
 
-    if ht.head(1).count() == 0:
+    variants_ht = mt.rows().select("freq", "row_idx", "frequencies_by_pop", "ref_len")
+    variants_ht = variants_ht.checkpoint(f"{str(output_base)}.variants.ht", overwrite=True)
+
+    if variants_ht.head(1).count() == 0:
         raise ValueError(f"No variants found with minimum population AF {variant_freq_threshold}.")
 
-    window1 = _get_haplotypes(
-        ht=ht,
-        windower_f=lambda locus: locus - (locus.position % window_size),
-        idx=1,
-        output_base=output_base,
-        pop_ints=pop_ints,
-        haplotype_freq_threshold=haplotype_freq_threshold,
-    )
-    window2 = _get_haplotypes(
-        ht=ht,
-        windower_f=lambda locus: locus - ((locus.position + window_size // 2) % window_size),
-        idx=2,
-        output_base=output_base,
-        pop_ints=pop_ints,
-        haplotype_freq_threshold=haplotype_freq_threshold,
+    group_of, _n_groups = _compute_locus_groups(variants_ht, window_size)
+    group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))
+    mt = mt.annotate_rows(locus_group=group_lit[mt.row_idx])
+
+    entries = mt.select_entries(
+        is_left=mt.GT[0] != 0,
+        is_right=mt.GT[1] != 0,
+    ).entries()
+    entries = entries.filter(entries.is_left | entries.is_right)
+    entries = entries.key_by()
+    entries = entries.select(
+        "col_idx",
+        "pop_int",
+        "locus_group",
+        "is_left",
+        "is_right",
+        carrier=hl.struct(locus=entries.locus, row_idx=entries.row_idx, ref_len=entries.ref_len),
     )
 
-    htu = window1.union(window2)
-    htu = htu.annotate_globals(pops=hl.literal(pop_legend))
+    grouped = entries.group_by("col_idx", "locus_group").aggregate(
+        pop_int=hl.agg.take(entries.pop_int, 1)[0],
+        carriers_left=hl.agg.filter(entries.is_left, hl.agg.collect(entries.carrier)),
+        carriers_right=hl.agg.filter(entries.is_right, hl.agg.collect(entries.carrier)),
+    )
+    grouped = grouped.key_by()
+    left = grouped.select("col_idx", "pop_int", carriers=grouped.carriers_left).annotate(strand=0)
+    right = grouped.select("col_idx", "pop_int", carriers=grouped.carriers_right).annotate(strand=1)
+    blocks_ht = left.union(right)
+    blocks_ht = blocks_ht.filter(hl.len(blocks_ht.carriers) >= 2)
+    blocks_ht = blocks_ht.checkpoint(f"{str(output_base)}.blocks.ht", overwrite=True)
+
+    parents_ht = _form_parent_blocks(blocks_ht, window_size)
+    parents_ht = parents_ht.checkpoint(f"{str(output_base)}.parents.ht", overwrite=True)
+    subfragments_ht = _enumerate_subfragments(parents_ht)
+    hap_table = _aggregate_containment_ac(subfragments_ht, n_pops)
+    hap_table = hap_table.checkpoint(f"{str(output_base)}.hap_ac.ht", overwrite=True)
+    hap_table = _attach_component_info(hap_table, variants_ht.key_by())
+    hap_table = _compute_metrics(hap_table, n_pops)
+
+    hap_table = hap_table.filter(
+        (hap_table.min_variant_frequency > 0)
+        & (hap_table.estimated_gnomad_AF >= haplotype_freq_threshold)
+    )
+    hap_table = _apply_containment_dedup(hap_table)
+    hap_table = hap_table.drop("frequencies_by_pop")
+
+    count_after_filter: int = hap_table.count()
+    logger.info(
+        f"{count_after_filter} haplotypes remaining after filtering and "
+        f"containment dedup at window size {window_size}"
+    )
+
     logger.info("Writing final %s.ht ...", output_base)
-    htu.key_by("haplotype").naive_coalesce(64).write(f"{str(output_base)}.ht", overwrite=True)
+    hap_table = hap_table.annotate_globals(pops=hl.literal(pop_legend))
+    hap_table.key_by("haplotype").naive_coalesce(64).write(f"{str(output_base)}.ht", overwrite=True)
