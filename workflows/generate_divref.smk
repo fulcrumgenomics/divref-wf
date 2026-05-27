@@ -58,9 +58,10 @@ WORK_DIR: Path = Path(config["work_dir"])
 TMP_DIR: Path = Path(config["tmp_dir"])
 
 CHROMS: list[str] = config["chromosomes"]
-# Haplotypes are computed for autosomes only; chrX/chrY contribute single gnomAD variants only.
-_AUTOSOMES: frozenset[str] = frozenset(f"chr{n}" for n in range(1, 23))
-HAPLOTYPE_CHROMS: list[str] = [c for c in CHROMS if c in _AUTOSOMES]
+# Haplotypes are computed for autosomes + chrX (chrX non-PAR uses the haploid-male ploidy
+# correction in `divref compute-haplotypes`); chrY contributes single gnomAD variants only.
+_HAPLOTYPE_CONTIGS: frozenset[str] = frozenset(f"chr{n}" for n in range(1, 23)) | {"chrX"}
+HAPLOTYPE_CHROMS: list[str] = [c for c in CHROMS if c in _HAPLOTYPE_CONTIGS]
 
 REFERENCE_GENOME: str = config["reference_genome_base_name"]
 REFERENCE_GENOME_URI: str = config["reference_genome_uri"]
