@@ -45,10 +45,10 @@ for _field in (
 ):
     _validate_cloud_uri(_field, config[_field])
 
-for _chrX_part in ("par1", "non_par", "par2"):
+for _chrx_part in ("par1", "non_par", "par2"):
     _validate_cloud_uri(
-        f"hgdp_1kg_phased_bcf_chrX.{_chrX_part}",
-        config["hgdp_1kg_phased_bcf_chrX"][_chrX_part],
+        f"hgdp_1kg_phased_bcf_chrX.{_chrx_part}",
+        config["hgdp_1kg_phased_bcf_chrX"][_chrx_part],
     )
 
 
@@ -129,7 +129,8 @@ rule subset_phased_genotypes:
     log:
         "logs/generate_divref/subset_phased_genotypes.{chrom}.log",
     wildcard_constraints:
-        chrom=r"(?!chrX$).+",
+        # Autosomes + chrY only — chrX has its own subset rule below.
+        chrom=r"chr(\d+|Y)",
     params:
         bcf=f"{HGDP_1KG_PHASED_BCF_PREFIX}{{chrom}}{HGDP_1KG_PHASED_BCF_SUFFIX}",
     shell:

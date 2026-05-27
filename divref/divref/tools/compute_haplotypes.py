@@ -501,6 +501,11 @@ def compute_haplotypes(
     # SHAPEIT5 BCFs, but gnomAD reports chrX non-PAR allele numbers with males counted as
     # haploid. Treat males as haploid here so that empirical AC/AN match the gnomAD HT
     # convention; everywhere else (autosomes, PAR, chrY) keep the original diploid call.
+    #
+    # `hl.call(mt.GT[0])` discards the second allele. This is lossless given the verified
+    # SHAPEIT5 encoding (males are pseudo-homozygous in non-PAR, so GT[0] == GT[1]) but
+    # would silently undercount carriers if upstream ever emitted heterozygous male calls
+    # in non-PAR.
     is_male_nonpar = mt.locus.in_x_nonpar() & (mt.sex_karyotype == "XY")
     adjusted_gt = hl.if_else(is_male_nonpar, hl.call(mt.GT[0]), mt.GT)
     mt = mt.annotate_rows(
@@ -520,7 +525,9 @@ def compute_haplotypes(
 
     # Skip the right strand for non-PAR males so each male carrier is counted once (via the
     # left strand). Without this, the pseudo-`1|1` encoding would double-count male
-    # haplotypes in chrX non-PAR.
+    # haplotypes in chrX non-PAR. Re-derived here rather than reused from the earlier
+    # `is_male_nonpar` expression because `mt` was reassigned by `annotate_rows`/
+    # `add_col_index` above, so the older expression refers to a stale matrix-table snapshot.
     is_male_nonpar_row = mt.locus.in_x_nonpar() & (mt.sex_karyotype == "XY")
     entries = mt.select_entries(
         is_left=mt.GT[0] != 0,
