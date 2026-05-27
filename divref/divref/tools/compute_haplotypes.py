@@ -414,6 +414,20 @@ def compute_haplotypes(
     blocks containing it. Sub-fragments are dropped when subsumed by a longer surviving
     fragment with identical per-population AC.
 
+    Samples without an inferred population assignment and samples whose imputed karyotype
+    is not "XX" or "XY" (e.g. "X", "XXY", "XYY", "ambiguous") are excluded from the
+    haplotype computation on every chromosome, not only chrX. This keeps the sample set
+    uniform across contigs so that the chrX non-PAR ploidy correction is well-defined.
+    In gnomAD HGDP+1KG v3.1.2 this drops ~30 of 4151 samples.
+
+    On chrX non-PAR loci, males (sex_karyotype == "XY") are treated as haploid. The
+    SHAPEIT5 phased BCFs encode all chrX non-PAR genotypes as diploid pseudo (males
+    appear as 0|0 / 1|1), but gnomAD reports chrX non-PAR allele numbers with males
+    counted as haploid; without the correction, empirical AC/AN would not match the
+    gnomAD HT track. Concretely, frequencies_by_pop uses hl.call(GT[0]) for these
+    samples, and only the left strand is collected when building haplotype carrier sets.
+    Autosomes, PAR1, PAR2, and chrY are unaffected.
+
     Args:
         vcfs_path: Path or glob pattern to input VCF files.
         gnomad_va_file: Path to the gnomAD variant annotations Hail table
@@ -477,7 +491,8 @@ def compute_haplotypes(
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
     # Drop sex aneuploidies and ambiguous calls from all chromosomes so that the chrX non-PAR
-    # ploidy correction is well-defined and the autosome sample set stays consistent.
+    # ploidy correction is well-defined and the autosome sample set stays consistent. This
+    # affects autosomes too — see the function docstring for the trade-off.
     mt = mt.filter_cols(hl.literal({"XX", "XY"}).contains(mt.sex_karyotype))
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
