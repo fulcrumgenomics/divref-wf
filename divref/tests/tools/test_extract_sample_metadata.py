@@ -38,3 +38,11 @@ def test_extract_sample_metadata(
     sex_counts = dict(sa.aggregate(hl.agg.counter(sa.sex_karyotype)))
     assert sex_counts["XX"] > 0
     assert sex_counts["XY"] > 0
+    # The downstream aneuploidy filter in `compute_haplotypes` only has meaningful regression
+    # coverage if the fixture exposes at least one non-XX/XY sample. Guard the fixture itself
+    # so a future regeneration that silently drops aneuploidies doesn't quietly weaken tests.
+    non_canonical_karyotypes = set(sex_counts) - {"XX", "XY"}
+    assert non_canonical_karyotypes, (
+        "fixture has no aneuploid/ambiguous samples — the compute_haplotypes "
+        "aneuploidy filter test loses meaning"
+    )

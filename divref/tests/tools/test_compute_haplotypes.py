@@ -981,12 +981,22 @@ def test_compute_haplotypes_chrx_aneuploid_filter_and_haploid_male_an(
         )
 
     variants = hl.read_table(f"{output_base}.variants.ht")
-    # max-over-variants of (sum-over-pops of AN). With the aneuploidy filter + haploid-male
-    # correction, every fully-genotyped variant has exactly this value.
-    summed_an_max: int = variants.aggregate(
-        hl.agg.max(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN)))
+    # sum-over-pops of AN per variant. With the aneuploidy filter + haploid-male correction,
+    # every fully-genotyped variant has exactly this value, so min and max coincide. Pinning
+    # both catches regressions that *reduce* AN (e.g., further sample drops) just as readily
+    # as ones that increase it (e.g., disabling either correction).
+    summed_an_extremes = variants.aggregate(
+        hl.struct(
+            min=hl.agg.min(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN))),
+            max=hl.agg.max(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN))),
+        )
     )
-    assert summed_an_max == 5532, (
-        f"sum(AN) per variant did not match the expected haploid-male non-PAR total: "
-        f"{summed_an_max}"
+    expected_an = 5532
+    assert summed_an_extremes.min == expected_an, (
+        f"sum(AN) per variant fell below the expected haploid-male non-PAR total: "
+        f"min={summed_an_extremes.min}, expected={expected_an}"
+    )
+    assert summed_an_extremes.max == expected_an, (
+        f"sum(AN) per variant exceeded the expected haploid-male non-PAR total: "
+        f"max={summed_an_extremes.max}, expected={expected_an}"
     )
