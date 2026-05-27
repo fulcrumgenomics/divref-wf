@@ -147,8 +147,9 @@ rule subset_phased_genotypes:
 
 ####################################################################################################
 # Extracts and concatenates the chrX phased genotypes from the three HGDP+1KG BCFs (PAR1, non-PAR,
-# PAR2). bcftools concat -a -Ou stitches the regions in genomic order on a single contig, and the
-# INFO field is dropped on output, matching the autosome subset rule.
+# PAR2). The three regions are disjoint on GRCh38 — PAR1 ends well before non-PAR starts, and PAR2
+# starts after non-PAR ends — so plain `bcftools concat` stitches them in genomic order without
+# needing `--allow-overlaps`. The INFO field is dropped on output, matching the autosome subset rule.
 ####################################################################################################
 rule subset_phased_genotypes_chrX:
     output:
@@ -164,7 +165,6 @@ rule subset_phased_genotypes_chrX:
         """
         (
             bcftools concat \
-                --allow-overlaps \
                 --output-type u \
                 {params.par1} {params.non_par} {params.par2} \
             | bcftools annotate \
