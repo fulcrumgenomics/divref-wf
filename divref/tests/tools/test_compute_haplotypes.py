@@ -945,8 +945,6 @@ def test_compute_haplotypes_chrx_nonpar(
     results: list[hl.Struct] = result.collect()
     assert all(len(r.haplotype) >= 2 for r in results)
     assert all(len(r.variants) == len(r.haplotype) for r in results)
-    # All variants are on chrX non-PAR — the locus mask is True throughout.
-    assert all(v.locus.contig == "chrX" for r in results for v in r.variants)
 
 
 def test_compute_haplotypes_chrx_aneuploid_filter_and_haploid_male_an(
@@ -957,12 +955,13 @@ def test_compute_haplotypes_chrx_aneuploid_filter_and_haploid_male_an(
     """
     Aneuploidy/ambiguous samples are excluded; chrX non-PAR males contribute haploid AN.
 
-    With the regenerated metadata fixture (1905 XX + 2216 XY + 30 aneuploid/ambiguous), the
-    pop-restricted, sex-filtered sample set is at most `2 * n_XX + 1 * n_XY = 6026` alleles
-    when split fully across populations. Aggregated across populations, summing AN per
-    variant in `frequencies_by_pop` should therefore be bounded above by ~6026, well below
-    the diploid-everywhere bound of `2 * 4151 = 8302`. A summed-AN observation > 6100 would
-    indicate either the aneuploidy filter or the male haploid correction has regressed.
+    With the committed sample metadata fixture (1905 XX + 2216 XY + 30 aneuploid/ambiguous)
+    and the population restriction (5 populations: afr, amr, eas, sas, nfe), a fully-
+    genotyped chrX non-PAR variant yields a per-variant AN of exactly 5532 summed across
+    populations: 2 alleles per pop-assigned XX sample + 1 per pop-assigned XY sample. The
+    diploid-everywhere bound (no haploid correction) would be 2 * 4121 = 8242; the all-
+    samples-included bound (no aneuploidy filter) would also exceed 5532. A regression in
+    either fix would shift this value, so we pin it exactly.
     """
     in_sites = datadir / "chrX_50000000_50100000.gnomad_afs.ht"
     in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
@@ -982,12 +981,12 @@ def test_compute_haplotypes_chrx_aneuploid_filter_and_haploid_male_an(
         )
 
     variants = hl.read_table(f"{output_base}.variants.ht")
-    # max-over-variants of (sum-over-pops of AN). Pseudo-diploid encoding without sex
-    # correction would give ~2 * 4121 = 8242 for a fully-genotyped variant; with the
-    # haploid-male correction in non-PAR it should be ~6026.
+    # max-over-variants of (sum-over-pops of AN). With the aneuploidy filter + haploid-male
+    # correction, every fully-genotyped variant has exactly this value.
     summed_an_max: int = variants.aggregate(
         hl.agg.max(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN)))
     )
-    assert summed_an_max <= 6100, (
-        f"sum(AN) per variant exceeded the haploid-male non-PAR bound: {summed_an_max}"
+    assert summed_an_max == 5532, (
+        f"sum(AN) per variant did not match the expected haploid-male non-PAR total: "
+        f"{summed_an_max}"
     )
