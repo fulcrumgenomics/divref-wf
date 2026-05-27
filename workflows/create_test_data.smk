@@ -26,6 +26,10 @@ MIN_POP_AF_EXTRACT_GNOMAD_AFS: float = 0.001
 MIN_POP_AF_COMPUTE_HAPLOTYPES: float = 0.005
 MIN_POPMAX_AF_CREATE_GNOMAD_SITES_VCF: float = 0.01
 WINDOW_SIZE_COMPUTE_HAPLOTYPES: int = 25
+# Hail-using divref tools require a GCS credentials path when reading from local-only Hail
+# tables, because hail_init currently sets `use_s3=False` by default and asserts the path is
+# present. Threaded through every rule below for consistency.
+GCS_CREDENTIALS_PATH: str = "~/.config/gcloud/application_default_credentials.json"
 
 ####################################################################################################
 # Rules
@@ -113,6 +117,7 @@ rule extract_gnomad_afs:
     params:
         contig=LOCUS_CHROM,
         freq_threshold=MIN_POP_AF_EXTRACT_GNOMAD_AFS,
+        gcs_credentials_path=GCS_CREDENTIALS_PATH,
     shell:
         """
         (
@@ -120,7 +125,8 @@ rule extract_gnomad_afs:
                 --in-gnomad-sites-table {input.variant_ht} \
                 --out-variant-annotation-table {output.variant_ht} \
                 --contig {params.contig} \
-                --freq-threshold {params.freq_threshold}
+                --freq-threshold {params.freq_threshold} \
+                --gcs-credentials-path {params.gcs_credentials_path}
         ) &> {log}
         """
 
@@ -217,9 +223,7 @@ rule subset_gnomad_hail_tables_chrX:
         (
             divref gnomad-hail-table-test-data \
                 --out-variant-annotation-table {output.variant_ht} \
-                --out-sample-metadata /tmp/_unused_sa_chrX.ht \
                 --locus {params.locus}
-            rm -rf /tmp/_unused_sa_chrX.ht
         ) &> {log}
         """
 
@@ -262,7 +266,7 @@ rule extract_gnomad_afs_chrX:
     params:
         contig=CHRX_LOCUS_CHROM,
         freq_threshold=MIN_POP_AF_EXTRACT_GNOMAD_AFS,
-        gcs_credentials_path="~/.config/gcloud/application_default_credentials.json",
+        gcs_credentials_path=GCS_CREDENTIALS_PATH,
     shell:
         """
         (
