@@ -260,11 +260,21 @@ def _compute_metrics(hap_table: hl.Table, n_pops: int) -> hl.Table:
             - `max_pop` (int)
             - `max_empirical_AF` (float64)
             - `max_empirical_AC` (int)
-            - `min_variant_frequency` (float64): min gnomAD AF over segment variants for `max_pop`.
-            - `all_pop_freqs` (array<struct(pop, empirical_AC, empirical_AF)>): sorted by AF desc.
+            - `min_variant_frequency` (float64): min over component variants of the *local*
+              HGDP+1KG `call_stats` alt AF in `max_pop` — the rarest haplotype-component
+              variant's frequency in the population where the haplotype is most common.
+            - `all_pop_freqs` (array<struct(pop, empirical_AC, empirical_AF, fraction_phased,
+              estimated_gnomad_AF)>): per-population view of all three frequency-derived
+              metrics, sorted by `empirical_AF` descending. `pop` indexes into the table's
+              `globals.pops` legend.
             - `fraction_phased` (float64): `max_empirical_AF / min_variant_frequency`.
+              The proportion of chromosomes carrying the rarest component variant in
+              `max_pop` (in HGDP+1KG) that also carry the full haplotype.
             - `estimated_gnomad_AF` (float64): min over segment variants of
-              `gnomad_freqs[i][max_pop].AF * fraction_phased`.
+              `gnomad_freqs[i][max_pop].AF * fraction_phased`. The haplotype's projected
+              frequency in `max_pop` of the broader gnomAD population, extrapolated from
+              the HGDP+1KG LD pattern. Equivalent to `all_pop_freqs[max_pop]
+              .estimated_gnomad_AF`.
     """
     pops_range = hl.range(0, n_pops)
     hap_table = hap_table.annotate(
@@ -281,36 +291,77 @@ def _compute_metrics(hap_table: hl.Table, n_pops: int) -> hl.Table:
                     )
                 ),
             )
-        )
+        ),
+        # Per-population min over component variants of the *local* HGDP+1KG `call_stats` alt
+        # AF — the rarest haplotype-component variant's frequency in that pop, measured in
+        # the BCF we just processed (not the broader gnomAD sites table). Used as the
+        # denominator of `fraction_phased`, which then scales gnomAD per-variant AFs into
+        # per-haplotype frequency estimates. Using the local AF (rather than the gnomAD
+        # sites AF) is essential: with gnomAD AFs on both sides of the formula the gnomAD
+        # multiplier cancels and `estimated_gnomad_AF` collapses to `max_empirical_AF`.
+        _min_local_variant_AF_by_pop=pops_range.map(
+            lambda p: hl.min(
+                hap_table.frequencies_by_pop.map(
+                    lambda fbp: fbp.get(p, hl.missing(fbp.dtype.value_type)).AF[1]
+                )
+            )
+        ),
+    )
+    # Per-pop fraction_phased and estimated_gnomad_AF, computed up front so we can bundle
+    # all three frequency-derived metrics into `all_pop_freqs` and then pick out the scalar
+    # values at `max_pop` for backward compatibility.
+    hap_table = hap_table.annotate(
+        _per_pop_fraction_phased=pops_range.map(
+            lambda p: hl.bind(
+                lambda emp_af, min_var_af: hl.if_else(
+                    hl.is_defined(emp_af) & hl.is_defined(min_var_af) & (min_var_af > 0),
+                    emp_af / min_var_af,
+                    hl.missing(hl.tfloat64),
+                ),
+                hap_table._per_pop_AF[p],
+                hap_table._min_local_variant_AF_by_pop[p],
+            )
+        ),
+    )
+    hap_table = hap_table.annotate(
+        _per_pop_estimated_gnomad_AF=pops_range.map(
+            lambda p: hl.bind(
+                lambda fp: hl.if_else(
+                    hl.is_defined(fp),
+                    hl.min(hap_table.gnomad_freqs.map(lambda x: x[p].AF * fp)),
+                    hl.missing(hl.tfloat64),
+                ),
+                hap_table._per_pop_fraction_phased[p],
+            )
+        ),
     )
     hap_table = hap_table.annotate(max_pop=hl.argmax(hap_table._per_pop_AF))
     hap_table = hap_table.annotate(
         max_empirical_AF=hap_table._per_pop_AF[hap_table.max_pop],
         max_empirical_AC=hap_table.per_pop_AC[hap_table.max_pop],
-        min_variant_frequency=hl.min(hap_table.gnomad_freqs.map(lambda x: x[hap_table.max_pop].AF)),
+        min_variant_frequency=hap_table._min_local_variant_AF_by_pop[hap_table.max_pop],
+        fraction_phased=hap_table._per_pop_fraction_phased[hap_table.max_pop],
+        estimated_gnomad_AF=hap_table._per_pop_estimated_gnomad_AF[hap_table.max_pop],
         all_pop_freqs=hl.sorted(
             pops_range.map(
                 lambda p: hl.struct(
                     pop=p,
                     empirical_AC=hap_table.per_pop_AC[p],
                     empirical_AF=hap_table._per_pop_AF[p],
+                    fraction_phased=hap_table._per_pop_fraction_phased[p],
+                    estimated_gnomad_AF=hap_table._per_pop_estimated_gnomad_AF[p],
                 )
             ),
             key=lambda s: s.empirical_AF,
             reverse=True,
         ),
     )
-    hap_table = hap_table.annotate(
-        fraction_phased=hap_table.max_empirical_AF / hap_table.min_variant_frequency,
+    return hap_table.drop(
+        "_per_pop_AF",
+        "_min_local_variant_AF_by_pop",
+        "_per_pop_fraction_phased",
+        "_per_pop_estimated_gnomad_AF",
     )
-    hap_table = hap_table.annotate(
-        estimated_gnomad_AF=hl.min(
-            hap_table.gnomad_freqs.map(
-                lambda x: x[hap_table.max_pop].AF * hap_table.fraction_phased
-            )
-        ),
-    )
-    return hap_table.drop("_per_pop_AF")
 
 
 def _is_contiguous_subarray(short: tuple[int, ...], long_: tuple[int, ...]) -> bool:

@@ -582,16 +582,20 @@ class MetricsRow:
 
     haplotype: list[int]
     per_pop_ac: list[int]
-    # One inner list per variant, each entry is the gnomAD AF for that variant in that pop.
+    # One inner list per variant, each entry is the gnomAD sites AF for that variant in that pop.
     variant_pop_af: list[list[float]]
-    # One inner dict per variant, mapping pop_int -> AN.
-    variant_pop_an: list[dict[int, int]]
+    # One inner dict per variant, mapping pop_int -> (AN, local_alt_AF). Local AF is the
+    # HGDP+1KG `call_stats` alt-allele frequency and feeds `min_variant_frequency` /
+    # `fraction_phased`. Missing entries default to AN=0 and local_alt_AF=0.0.
+    variant_pop_fbp: list[dict[int, tuple[int, float]]]
 
 
 def _make_metrics_input_ht(rows: list[MetricsRow]) -> hl.Table:
     """Construct a synthetic hap_table with the schema expected by `_compute_metrics`."""
     freq_type = hl.tstruct(AF=hl.tfloat64)
-    fbp_value_type = hl.tstruct(AN=hl.tint32)
+    # `frequencies_by_pop` mirrors the `hl.agg.call_stats` schema: AF is a per-allele array
+    # (index 0 = ref, index 1 = first alt). Only the alt entry is read.
+    fbp_value_type = hl.tstruct(AN=hl.tint32, AF=hl.tarray(hl.tfloat64))
     row_type = hl.tstruct(
         haplotype=hl.tarray(hl.tint64),
         per_pop_AC=hl.tarray(hl.tint64),
@@ -617,7 +621,8 @@ def _make_metrics_input_ht(rows: list[MetricsRow]) -> hl.Table:
             ],
             "gnomad_freqs": [[{"AF": af} for af in afs] for afs in r.variant_pop_af],
             "frequencies_by_pop": [
-                {p: {"AN": an} for p, an in ans.items()} for ans in r.variant_pop_an
+                {p: {"AN": an, "AF": [1.0 - alt_af, alt_af]} for p, (an, alt_af) in fbp.items()}
+                for fbp in r.variant_pop_fbp
             ],
         }
         for r in rows
@@ -631,8 +636,10 @@ def test_compute_metrics_single_population(hail_context: None) -> None:  # noqa:
         MetricsRow(
             haplotype=[0, 1],
             per_pop_ac=[3],
+            # gnomAD-sites AF per variant in pop 0.
             variant_pop_af=[[0.5], [0.4]],
-            variant_pop_an=[{0: 100}, {0: 200}],
+            # frequencies_by_pop: (AN, local_alt_AF) per variant in pop 0.
+            variant_pop_fbp=[{0: (100, 0.06)}, {0: (200, 0.05)}],
         )
     ])
     rows = _compute_metrics(ht, n_pops=1).collect()
@@ -642,11 +649,19 @@ def test_compute_metrics_single_population(hail_context: None) -> None:  # noqa:
     # min_AN over variants for pop 0 = min(100, 200) = 100. AF = 3/100 = 0.03.
     assert row.max_empirical_AF == pytest.approx(0.03)
     assert row.max_empirical_AC == 3
-    # min_variant_frequency = min(0.5, 0.4) = 0.4
-    assert row.min_variant_frequency == pytest.approx(0.4)
-    assert row.fraction_phased == pytest.approx(0.03 / 0.4)
-    # estimated_gnomad_AF = min(0.5 * fp, 0.4 * fp) = 0.4 * fp
-    assert row.estimated_gnomad_AF == pytest.approx(0.4 * 0.03 / 0.4)
+    # min_variant_frequency = min over variants of LOCAL alt AF in pop 0 = min(0.06, 0.05) = 0.05.
+    assert row.min_variant_frequency == pytest.approx(0.05)
+    assert row.fraction_phased == pytest.approx(0.03 / 0.05)
+    # estimated_gnomad_AF = min over variants of (gnomad_AF * fraction_phased)
+    #                    = min(0.5, 0.4) * 0.6 = 0.4 * 0.6 = 0.24.
+    assert row.estimated_gnomad_AF == pytest.approx(0.4 * 0.03 / 0.05)
+    # all_pop_freqs bundles all three per-pop quantities at pop 0.
+    assert len(row.all_pop_freqs) == 1
+    pop0 = row.all_pop_freqs[0]
+    assert pop0.pop == 0
+    assert pop0.empirical_AF == pytest.approx(0.03)
+    assert pop0.fraction_phased == pytest.approx(0.03 / 0.05)
+    assert pop0.estimated_gnomad_AF == pytest.approx(0.4 * 0.03 / 0.05)
 
 
 def test_compute_metrics_picks_max_population(hail_context: None) -> None:  # noqa: ARG001
@@ -657,7 +672,7 @@ def test_compute_metrics_picks_max_population(hail_context: None) -> None:  # no
             # pop 0: AC=2, AN=200 -> AF=0.01.  pop 1: AC=5, AN=100 -> AF=0.05.  pop 2: AC=0.
             per_pop_ac=[2, 5, 0],
             variant_pop_af=[[0.3, 0.2, 0.1]],
-            variant_pop_an=[{0: 200, 1: 100, 2: 50}],
+            variant_pop_fbp=[{0: (200, 0.04), 1: (100, 0.10), 2: (50, 0.02)}],
         )
     ])
     rows = _compute_metrics(ht, n_pops=3).collect()
@@ -676,7 +691,7 @@ def test_compute_metrics_zero_an_yields_missing(hail_context: None) -> None:  # 
             # pop 0: AC=1, AN=0 -> AF missing.  pop 1: AC=1, AN=10 -> AF=0.1.
             per_pop_ac=[1, 1],
             variant_pop_af=[[0.5, 0.4]],
-            variant_pop_an=[{0: 0, 1: 10}],
+            variant_pop_fbp=[{0: (0, 0.0), 1: (10, 0.20)}],
         )
     ])
     rows = _compute_metrics(ht, n_pops=2).collect()
@@ -698,7 +713,7 @@ def test_compute_metrics_tie_breaks_to_smallest_index(
             haplotype=[0],
             per_pop_ac=[1, 1],  # both AC=1 over AN=100 -> AF=0.01 each
             variant_pop_af=[[0.2, 0.2]],
-            variant_pop_an=[{0: 100, 1: 100}],
+            variant_pop_fbp=[{0: (100, 0.05), 1: (100, 0.05)}],
         )
     ])
     rows = _compute_metrics(ht, n_pops=2).collect()
@@ -823,10 +838,10 @@ def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noq
 @pytest.mark.parametrize(
     "variant_freq_threshold,haplotype_freq_threshold,expected_count",
     [
-        (0.0, 0.0, 457),
+        (0.0, 0.0, 459),
         (0.005, 0.0, 283),
-        (0.0, 0.005, 43),
-        (0.005, 0.005, 35),
+        (0.0, 0.005, 31),
+        (0.005, 0.005, 31),
     ],
 )
 def test_compute_haplotypes(
@@ -909,8 +924,8 @@ def test_compute_haplotypes_no_variants(
     [
         (0.0, 0.0, 1195),
         (0.005, 0.0, 884),
-        (0.0, 0.005, 796),
-        (0.005, 0.005, 670),
+        (0.0, 0.005, 781),
+        (0.005, 0.005, 678),
     ],
 )
 def test_compute_haplotypes_chrx_nonpar(
