@@ -6,3 +6,8 @@ reference_genome_uri: "s3://broad-references/hg38/v0/Homo_sapiens_assembly38.fas
 hgdp_1kg_phased_bcf_prefix: "s3://gnomad-public-us-east-1/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_"
 hgdp_1kg_variant_annotation_hail_table: "s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
 hgdp_1kg_sample_metadata_hail_table: "s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.ht"
+
+hgdp_1kg_phased_bcf_chrX:
+  par1: "s3://gnomad-public-us-east-1/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chrX_par1.shapeit5_common.bcf"
+  non_par: "s3://gnomad-public-us-east-1/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chrX_non_par.full.shapeit5_rare.bcf"
+  par2: "s3://gnomad-public-us-east-1/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chrX_par2.shapeit5_common.bcf"

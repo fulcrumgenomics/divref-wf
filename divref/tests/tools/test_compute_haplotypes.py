@@ -902,3 +902,101 @@ def test_compute_haplotypes_no_variants(
             output_base=output_base,
             temp_dir=tmp_path / "hail_tmp",
         )
+
+
+@pytest.mark.parametrize(
+    "variant_freq_threshold,haplotype_freq_threshold,expected_count",
+    [
+        (0.0, 0.0, 1195),
+        (0.005, 0.0, 884),
+        (0.0, 0.005, 796),
+        (0.005, 0.005, 670),
+    ],
+)
+def test_compute_haplotypes_chrx_nonpar(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    variant_freq_threshold: float,
+    haplotype_freq_threshold: float,
+    expected_count: int,
+) -> None:
+    """Compute haplotypes on a chrX non-PAR window with sex-aware ploidy correction."""
+    in_sites = datadir / "chrX_50000000_50100000.gnomad_afs.ht"
+    in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
+    vcf_path = datadir / "chrX_50000000_50100000.vcf.gz"
+    output_base = tmp_path / "haplos"
+
+    with patch("divref.tools.compute_haplotypes.hl.init"):
+        compute_haplotypes(
+            vcfs_path=vcf_path,
+            gnomad_va_file=in_sites,
+            gnomad_sa_file=in_samples,
+            window_size=5000,
+            variant_freq_threshold=variant_freq_threshold,
+            haplotype_freq_threshold=haplotype_freq_threshold,
+            output_base=output_base,
+            temp_dir=tmp_path / "hail_tmp",
+        )
+
+    result = hl.read_table(f"{output_base}.ht")
+    assert result.count() == expected_count
+
+    results: list[hl.Struct] = result.collect()
+    assert all(len(r.haplotype) >= 2 for r in results)
+    assert all(len(r.variants) == len(r.haplotype) for r in results)
+
+
+def test_compute_haplotypes_chrx_aneuploid_filter_and_haploid_male_an(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """
+    Aneuploidy/ambiguous samples are excluded; chrX non-PAR males contribute haploid AN.
+
+    With the committed sample metadata fixture (1905 XX + 2216 XY + 30 aneuploid/ambiguous)
+    and the population restriction (5 populations: afr, amr, eas, sas, nfe), a fully-
+    genotyped chrX non-PAR variant yields a per-variant AN of exactly 5532 summed across
+    populations: 2 alleles per pop-assigned XX sample + 1 per pop-assigned XY sample. The
+    diploid-everywhere bound (no haploid correction) would be 2 * 4121 = 8242; the all-
+    samples-included bound (no aneuploidy filter) would also exceed 5532. A regression in
+    either fix would shift this value, so we pin it exactly.
+    """
+    in_sites = datadir / "chrX_50000000_50100000.gnomad_afs.ht"
+    in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
+    vcf_path = datadir / "chrX_50000000_50100000.vcf.gz"
+    output_base = tmp_path / "haplos"
+
+    with patch("divref.tools.compute_haplotypes.hl.init"):
+        compute_haplotypes(
+            vcfs_path=vcf_path,
+            gnomad_va_file=in_sites,
+            gnomad_sa_file=in_samples,
+            window_size=5000,
+            variant_freq_threshold=0.0,
+            haplotype_freq_threshold=0.0,
+            output_base=output_base,
+            temp_dir=tmp_path / "hail_tmp",
+        )
+
+    variants = hl.read_table(f"{output_base}.variants.ht")
+    # sum-over-pops of AN per variant. With the aneuploidy filter + haploid-male correction,
+    # every fully-genotyped variant has exactly this value, so min and max coincide. Pinning
+    # both catches regressions that *reduce* AN (e.g., further sample drops) just as readily
+    # as ones that increase it (e.g., disabling either correction).
+    summed_an_extremes = variants.aggregate(
+        hl.struct(
+            min=hl.agg.min(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN))),
+            max=hl.agg.max(hl.sum(variants.frequencies_by_pop.values().map(lambda v: v.AN))),
+        )
+    )
+    expected_an = 5532
+    assert summed_an_extremes.min == expected_an, (
+        f"sum(AN) per variant fell below the expected haploid-male non-PAR total: "
+        f"min={summed_an_extremes.min}, expected={expected_an}"
+    )
+    assert summed_an_extremes.max == expected_an, (
+        f"sum(AN) per variant exceeded the expected haploid-male non-PAR total: "
+        f"max={summed_an_extremes.max}, expected={expected_an}"
+    )

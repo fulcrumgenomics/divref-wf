@@ -61,6 +61,36 @@ properties:
     description: Suffix of the URI for the HGDP+1KG phased BCF files (used for both `gs://` and `s3://`).
     default: ".filtered.SNV_INDEL.phased.shapeit5.bcf"
 
+  hgdp_1kg_phased_bcf_chrX:
+    type: object
+    additionalProperties: false
+    description: |
+      URIs for the three HGDP+1KG phased chrX BCFs (PAR1, non-PAR, PAR2). chrX does not
+      follow the autosome `{prefix}{chrom}{suffix}` pattern because non-PAR uses the
+      shapeit5 rare-variant track while PAR1 and PAR2 use the common-variant track. Both
+      `gs://` and `s3://` are supported; the scheme must match the workflow-level `cloud`.
+      Defaults point to the GCS public-data bucket; S3 alternatives are at
+      `s3://gnomad-public-us-east-1/resources/hgdp_1kg/phased_haplotypes_v2/` with the
+      same basenames.
+    properties:
+      par1:
+        type: string
+        description: URI of the chrX PAR1 phased BCF.
+      non_par:
+        type: string
+        description: URI of the chrX non-PAR phased BCF.
+      par2:
+        type: string
+        description: URI of the chrX PAR2 phased BCF.
+    required:
+      - par1
+      - non_par
+      - par2
+    default:
+      par1: "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chrX_par1.shapeit5_common.bcf"
+      non_par: "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chrX_non_par.full.shapeit5_rare.bcf"
+      par2: "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chrX_par2.shapeit5_common.bcf"
+
   hgdp_1kg_variant_annotation_hail_table:
     type: string
     description: |

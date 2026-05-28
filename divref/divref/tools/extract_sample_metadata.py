@@ -21,6 +21,10 @@ def extract_sample_metadata(
     """
     Extract sample metadata for downstream pipeline tools.
 
+    Output Hail table is keyed by sample id `s` and carries `pop` (gnomAD population
+    code, e.g., "afr") and `sex_karyotype` (imputed karyotype, e.g., "XX", "XY", "X",
+    "XXY").
+
     Args:
         in_gnomad_hgdp_sample_data: Path to the gnomAD HGDP/1KG sample metadata table.
         out_sample_metadata: Output path for the sample metadata Hail table.
@@ -41,5 +45,8 @@ def extract_sample_metadata(
     )
 
     sa = hl.read_table(in_gnomad_hgdp_sample_data).select_globals()
-    sa = sa.select(pop=sa.gnomad_population_inference.pop)
+    sa = sa.select(
+        pop=sa.gnomad_population_inference.pop,
+        sex_karyotype=sa.gnomad_sex_imputation.sex_karyotype,
+    )
     sa.naive_coalesce(4).write(str(out_sample_metadata), overwrite=True)
