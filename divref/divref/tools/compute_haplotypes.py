@@ -475,12 +475,11 @@ def compute_haplotypes(
 
     Samples without an inferred population assignment are excluded from the haplotype
     computation (their `pop_int` is undefined, so `compute_haplotypes` can't credit
-    their carriers to any population). In gnomAD HGDP+1KG v3.1.2 this drops ~330 of
-    4151 samples — every aneuploid sample (`X`, `XXY`, `XYY`, `ambiguous`) plus samples
-    in populations the workflow doesn't currently configure (`fin`, `mid`, `oth`). The
-    aneuploid samples in particular have `pop = None` because gnomAD's PCA-based pop
-    inference declines to assign a population to non-XX/XY karyotypes; this drop is
-    therefore the de-facto guarantee that only XX and XY genotypes reach the algorithm.
+    their carriers to any population). In gnomAD HGDP+1KG v3.1.2 this drops every aneuploid
+    sample (`X`, `XXY`, `XYY`, `ambiguous`) plus samples in populations the workflow doesn't
+    configure. The aneuploid samples in particular have `pop = None` because gnomAD's
+    PCA-based pop inference declines to assign a population to non-XX/XY karyotypes; this
+    drop is therefore the de-facto guarantee that only XX and XY genotypes reach the algorithm.
 
     On chrX non-PAR loci, males (sex_karyotype == "XY") are treated as haploid. The
     SHAPEIT5 phased BCFs encode all chrX non-PAR genotypes as diploid pseudo (males
