@@ -134,11 +134,14 @@ The primary table in the DuckDB index is the `sequences` table, which has one ro
 | `max_pop` | Population code with the highest empirical AF for this haplotype/variant. |
 | `popmax_empirical_AF` | For `HGDP_haplotype`: empirical AF of the haplotype in `max_pop` from observed phased genotypes. For `gnomAD_variant`: the gnomAD AF in `max_pop`. |
 | `popmax_empirical_AC` | Allele count corresponding to `popmax_empirical_AF`. |
-| `estimated_gnomad_AF` | For `HGDP_haplotype`: `fraction_phased x min(gnomAD_AF[component, max_pop])` over the component variants — i.e. the phase ratio applied to the rarest component's gnomAD AF in `max_pop`. For `gnomAD_variant`: the gnomAD AF in `max_pop`. |
-| `fraction_phased` | For `HGDP_haplotype`: phase ratio, `popmax_empirical_AF / min(empirical_AF[component, max_pop])` — empirical haplotype AF over empirical AF of the rarest component variant in the same population. `1.0` for `gnomAD_variant`. |
-| `all_pop_freqs` | Array of structs (one per joint pop legend entry) with fields `pop` (int — index into `pops_legend`), `empirical_AC`, `empirical_AF`, `fraction_phased`, and `estimated_gnomad_AF`. Each entry holds the same metric definitions as the scalar `popmax_*` / `fraction_phased` / `estimated_gnomad_AF` columns but computed using *that pop's own* denominators (not `max_pop`'s). Sorted by `empirical_AF` descending; missing AFs sort to the end. For `gnomAD_variant`: `fraction_phased=1.0` and `estimated_gnomad_AF=empirical_AF` for every pop. |
+| `popmax_estimated_gnomad_AF` | For `HGDP_haplotype`: `popmax_fraction_phased × min(gnomAD_AF[component, max_pop])` over the component variants — i.e. the phase ratio applied to the rarest component's gnomAD AF in `max_pop`. For `gnomAD_variant`: the gnomAD AF in `max_pop`. Equivalent to `estimated_gnomad_AF_{max_pop}`. |
+| `popmax_fraction_phased` | For `HGDP_haplotype`: phase ratio, `popmax_empirical_AF / min(empirical_AF[component, max_pop])` — empirical haplotype AF over empirical AF of the rarest component variant in the same population. `1.0` for `gnomAD_variant`. Equivalent to `fraction_phased_{max_pop}`. |
 | `variants` | Comma-separated list of component variants in `chr:pos:ref:alt` form, in the order they appear in the haplotype. |
 | `gnomAD_AF_{POP}` | One column per configured population (e.g. `gnomAD_AF_AFR`). Comma-separated per-component gnomAD AFs in that population, in the same order as `variants`, formatted to 5 decimal places. |
+| `empirical_AC_{POP}` | One column per pop in `joint_pops_legend`. Scalar allele count in that pop. Missing if the pop has no source data for this row. |
+| `empirical_AF_{POP}` | Scalar empirical AF in that pop, derived from `empirical_AC_{POP}` and the min AN over component variants. Missing if AN is 0 or the pop has no source data. |
+| `fraction_phased_{POP}` | Per-pop phase ratio: `empirical_AF_{POP} / min(local_call_stats_AF[component, POP])`. `1.0` for `gnomAD_variant` rows. Uses *that pop's own* denominators (not `max_pop`'s). |
+| `estimated_gnomad_AF_{POP}` | Per-pop projection: `fraction_phased_{POP} × min(gnomAD_AF[component, POP])`. Equals `empirical_AF_{POP}` for `gnomAD_variant` rows. |
 
 The DuckDB file also contains three single-row metadata tables: `window_size` (the flanking context size used), `pops_legend` (JSON-encoded ordered population list), and `VERSION`.
 
