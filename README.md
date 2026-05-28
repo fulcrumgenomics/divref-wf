@@ -214,7 +214,7 @@ Each pass independently:
 - If the same haplotype appears in both passes (e.g., a block fully contained in one bin of pass 1 and also one bin of pass 2), it is *kept twice* — one row per pass — unless a later `distinct()` collapses them. This is one source of double-counting.
 
 **Stage 5: per-fragment metrics**
-- Same as new: derive `max_pop`, `max_empirical_AF`, `max_empirical_AC`, `min_variant_frequency`, `fraction_phased`, `estimated_gnomad_AF`.
+- Same as new: derive `max_pop`, `max_empirical_AF`, `max_empirical_AC`, `min_variant_frequency`, `fraction_phased`, `estimated_gnomad_AF`. **Note:** in the old algorithm `min_variant_frequency` was derived from the gnomAD-sites AF rather than the local HGDP+1KG `call_stats.AF[1]`; with the gnomAD AF on both sides of the formula the gnomAD multiplier cancels and `estimated_gnomad_AF` collapses to `max_empirical_AF`. This was corrected as part of the rewrite — the column definitions in the table above describe the new (correct) semantic.
 
 **Stage 6: filter**
 - `min_variant_frequency > 0` and `estimated_gnomad_AF >= haplotype_freq_threshold`.
