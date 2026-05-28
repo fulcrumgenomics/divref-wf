@@ -87,6 +87,8 @@ rule subset_gnomad_hail_tables:
 # Extracts the phased genotypes for all HGDP+1KG samples in the specified locus.
 ####################################################################################################
 rule subset_phased_genotypes:
+    input:
+        samples_txt=f"{OUTPUT_DIR}/samples.txt",
     output:
         vcf=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz",
         tbi=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz.tbi",
@@ -100,6 +102,8 @@ rule subset_phased_genotypes:
         (
             bcftools view \
                 --regions {params.locus} \
+                --samples-file {input.samples_txt} \
+                --force-samples \
                 --output-type z \
                 --output {output.vcf} \
                 --write-index=tbi \
@@ -146,12 +150,15 @@ rule extract_sample_metadata:
         sample_ht=directory(f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.extract.ht"),
     log:
         f"logs/create_test_data/extract_sample_metadata.{LOCUS_FILENAME}.log",
+    params:
+        gcs_credentials_path=GCS_CREDENTIALS_PATH,
     shell:
         """
         (
             divref extract-sample-metadata \
                 --in-gnomad-hgdp-sample-data {input.sample_ht} \
-                --out-sample-metadata {output.sample_ht}
+                --out-sample-metadata {output.sample_ht} \
+                --gcs-credentials-path {params.gcs_credentials_path}
         ) &> {log}
         """
 
@@ -215,6 +222,8 @@ rule create_gnomad_sites_vcf:
 # Extracts phased genotypes for the chrX non-PAR test locus directly from the non-PAR BCF.
 ####################################################################################################
 rule subset_phased_genotypes_chrX:
+    input:
+        samples_txt=f"{OUTPUT_DIR}/samples.txt",
     output:
         vcf=f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz",
         tbi=f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz.tbi",
@@ -228,6 +237,8 @@ rule subset_phased_genotypes_chrX:
         (
             bcftools view \
                 --regions {params.locus} \
+                --samples-file {input.samples_txt} \
+                --force-samples \
                 --output-type z \
                 --output {output.vcf} \
                 --write-index=tbi \
