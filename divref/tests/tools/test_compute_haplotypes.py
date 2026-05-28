@@ -754,6 +754,12 @@ def test_compute_metrics_tie_breaks_to_smallest_index(
     ])
     rows = _compute_metrics(ht, n_pops=2).collect()
     assert rows[0].max_pop == 0
+    # `all_pop_freqs` is sorted by `empirical_AF` descending via `hl.sorted`. With ties on
+    # the primary key, Hail's sort stability is undocumented; this assertion pins the
+    # current observed order so a future Hail upgrade that changes stability will surface
+    # here rather than as a flake downstream. If this assertion ever needs to flip,
+    # consider adding a secondary tie-break key on `pop` ascending in `_compute_metrics`.
+    assert [s.pop for s in rows[0].all_pop_freqs] == [0, 1]
 
 
 def test_apply_containment_dedup_canonical_three_rows(
