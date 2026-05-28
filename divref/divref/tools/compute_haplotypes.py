@@ -266,7 +266,13 @@ def _compute_metrics(hap_table: hl.Table, n_pops: int) -> hl.Table:
             - `all_pop_freqs` (array<struct(pop, empirical_AC, empirical_AF, fraction_phased,
               estimated_gnomad_AF)>): per-population view of all three frequency-derived
               metrics, sorted by `empirical_AF` descending. `pop` indexes into the table's
-              `globals.pops` legend.
+              `globals.pops` legend. Each entry's `fraction_phased` and `estimated_gnomad_AF`
+              are computed using *that pop's own* `empirical_AF` and local
+              `call_stats.AF[1]` — not `max_pop`'s. So
+              `all_pop_freqs[p].fraction_phased = empirical_AF_p / min_local_AF_in_p` and
+              `all_pop_freqs[p].estimated_gnomad_AF = min_i(gnomad_freqs[i][p].AF) *
+              all_pop_freqs[p].fraction_phased`. The scalar fields below are equivalent to
+              `all_pop_freqs[max_pop].*`.
             - `fraction_phased` (float64): `max_empirical_AF / min_variant_frequency`.
               The proportion of chromosomes carrying the rarest component variant in
               `max_pop` (in HGDP+1KG) that also carry the full haplotype.
