@@ -90,6 +90,12 @@ AFR, AMR, EAS, SAS, NFE
 
 Haplotypes are derived from the [gnomAD 3.1.2 HGDP+1KG individual-level phased genotypes](https://gnomad.broadinstitute.org/news/2021-10-gnomad-v3-1-2-minor-release/).
 
+> [!IMPORTANT]
+> **Sample-input assumption: sex-aneuploid samples must not have an assigned population.**
+> The haplotype computation assumes all samples that survive the population filter have either an `XX` or `XY` karyotype, so that the chrX non-PAR ploidy correction (males treated as haploid) is well-defined. This invariant is enforced indirectly: samples are kept only when their `gnomad_population_inference.pop` is in the configured set of populations, and the gnomAD 3.1.2 HGDP+1KG sample-meta source declines to assign a population to any sex-aneuploid sample (`X`, `XXY`, `XYY`, `ambiguous`) — their PCA-based pop inference is unreliable on non-diploid sex karyotypes. Aneuploid samples therefore have `pop = None` upstream and get dropped by the population filter before the chrX correction runs.
+>
+> If you point the workflow at a different sample-metadata source that *does* assign populations to aneuploid samples, those samples will pass the population filter and their genotypes will be fed into the chrX non-PAR correction with incorrect ploidy assumptions. The pipeline does not currently check for this; users supplying custom sample metadata are responsible for filtering aneuploid samples upstream.
+
 - Individuals are annotated with continental ancestry using [gnomAD labels](https://gnomad.broadinstitute.org/data).
 - Only variants in the HGDP+1KG subset of gnomAD 3.1.2 are considered for inclusion, as variants only present in the full genomes dataset do not have associated phased genotypes.
 - Variants with less than 0.5%AF in the full gnomAD 3.1.2 genomes (n=76,156) dataset in all of the populations are removed.

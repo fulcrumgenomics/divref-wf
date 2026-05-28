@@ -16,8 +16,8 @@ LOCUS_FILENAME: str = "chr1_100001_200000"
 # `compute_haplotypes`. The window is well inside non-PAR
 # (PAR1 ends at 2,781,479; PAR2 starts at 155,701,383 on GRCh38).
 CHRX_LOCUS_CHROM: str = "chrX"
-CHRX_LOCUS: str = "chrX:50000000-50100000"
-CHRX_LOCUS_FILENAME: str = "chrX_50000000_50100000"
+CHRX_LOCUS: str = "chrX:50000000-50025000"
+CHRX_LOCUS_FILENAME: str = "chrX_50000000_50025000"
 CHRX_BCF_NONPAR: str = (
     "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/"
     "hgdp1kgp_chrX_non_par.full.shapeit5_rare.bcf"
@@ -40,6 +40,7 @@ rule all:
     input:
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.ht",
         f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.ht",
+        f"{OUTPUT_DIR}/samples.txt",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz.tbi",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_afs.ht",
@@ -61,19 +62,23 @@ rule all:
 ####################################################################################################
 rule subset_gnomad_hail_tables:
     output:
-        variant_ht=directory(f"{OUTPUT_DIR}/{LOCUS_FILENAME}.ht"),
+        chr1_variant_ht=directory(f"{OUTPUT_DIR}/{LOCUS_FILENAME}.ht"),
+        chrx_variant_ht=directory(f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.ht"),
         sample_ht=directory(f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.ht"),
+        samples_txt=f"{OUTPUT_DIR}/samples.txt",
     log:
-        f"logs/create_test_data/subset_gnomad_hail_tables.{LOCUS_FILENAME}.log",
+        f"logs/create_test_data/subset_gnomad_hail_tables.log",
     params:
-        locus=LOCUS,
+        chr1_locus=LOCUS,
+        chrx_locus=CHRX_LOCUS,
     shell:
         """
         (
             divref gnomad-hail-table-test-data \
-                --out-variant-annotation-table {output.variant_ht} \
+                --loci {params.chr1_locus} {params.chrx_locus} \
+                --out-variant-annotation-dir {OUTPUT_DIR} \
                 --out-sample-metadata {output.sample_ht} \
-                --locus {params.locus}
+                --out-samples-txt {output.samples_txt}
         ) &> {log}
         """
 
@@ -202,28 +207,6 @@ rule create_gnomad_sites_vcf:
                 --sites-table-path {input.variant_ht} \
                 --output-vcf-path {output.vcf} \
                 --min-popmax {params.min_popmax}
-        ) &> {log}
-        """
-
-
-####################################################################################################
-# Subset the gnomAD HGDP+1KG variant annotation table to the chrX non-PAR test locus.
-#
-# The sample metadata table is contig-independent and is reused from the chr1 rule above.
-####################################################################################################
-rule subset_gnomad_hail_tables_chrX:
-    output:
-        variant_ht=directory(f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.ht"),
-    log:
-        f"logs/create_test_data/subset_gnomad_hail_tables.{CHRX_LOCUS_FILENAME}.log",
-    params:
-        locus=CHRX_LOCUS,
-    shell:
-        """
-        (
-            divref gnomad-hail-table-test-data \
-                --out-variant-annotation-table {output.variant_ht} \
-                --locus {params.locus}
         ) &> {log}
         """
 
