@@ -24,7 +24,6 @@ CHRX_BCF_NONPAR: str = (
 )
 MIN_POP_AF_EXTRACT_GNOMAD_AFS: float = 0.001
 MIN_POP_AF_COMPUTE_HAPLOTYPES: float = 0.005
-MIN_POPMAX_AF_CREATE_GNOMAD_SITES_VCF: float = 0.01
 WINDOW_SIZE_COMPUTE_HAPLOTYPES: int = 25
 # Hail-using divref tools require a GCS credentials path when reading from local-only Hail
 # tables, because hail_init currently sets `use_s3=False` by default and asserts the path is
@@ -46,7 +45,6 @@ rule all:
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_afs.ht",
         f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.extract.ht",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}_haplotypes.ht",
-        f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_sites.vcf.bgz",
         f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.ht",
         f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz",
         f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz.tbi",
@@ -191,29 +189,6 @@ rule compute_haplotypes:
                 --variant-freq-threshold {params.freq_threshold} \
                 --haplotype-freq-threshold {params.freq_threshold} \
                 --output-base {params.output_base}
-        ) &> {log}
-        """
-
-
-####################################################################################################
-# Create a sites VCF from the gnomAD Hail table.
-####################################################################################################
-rule create_gnomad_sites_vcf:
-    input:
-        variant_ht=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_afs.ht",
-    output:
-        vcf=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_sites.vcf.bgz",
-    log:
-        f"logs/create_test_data/create_gnomad_sites_vcf.{LOCUS_FILENAME}.log",
-    params:
-        min_popmax=MIN_POPMAX_AF_CREATE_GNOMAD_SITES_VCF,
-    shell:
-        """
-        (
-            divref create-gnomad-sites-vcf \
-                --sites-table-path {input.variant_ht} \
-                --output-vcf-path {output.vcf} \
-                --min-popmax {params.min_popmax}
         ) &> {log}
         """
 
