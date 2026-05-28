@@ -138,8 +138,8 @@ The primary table in the DuckDB index is the `sequences` table, which has one ro
 | `popmax_fraction_phased` | For `HGDP_haplotype`: phase ratio, `popmax_empirical_AF / min(empirical_AF[component, max_pop])` — empirical haplotype AF over empirical AF of the rarest component variant in the same population. `1.0` for `gnomAD_variant`. Equivalent to `fraction_phased_{max_pop}`. |
 | `variants` | Comma-separated list of component variants in `chr:pos:ref:alt` form, in the order they appear in the haplotype. |
 | `gnomAD_AF_{POP}` | One column per configured population (e.g. `gnomAD_AF_AFR`). Comma-separated per-component gnomAD AFs in that population, in the same order as `variants`, formatted to 5 decimal places. |
-| `empirical_AC_{POP}` | One column per pop in `joint_pops_legend`. Scalar allele count in that pop. Missing if the pop has no source data for this row. |
-| `empirical_AF_{POP}` | Scalar empirical AF in that pop, derived from `empirical_AC_{POP}` and the min AN over component variants. Missing if AN is 0 or the pop has no source data. |
+| `empirical_AC_{POP}` | One column per pop in `joint_pops_legend`. For `HGDP_haplotype`: count of chromosomes carrying the haplotype in that pop (haplotype-level). For `gnomAD_variant`: the gnomAD AC for that variant in that pop (variant-level). Missing if the pop has no source data for this row. |
+| `empirical_AF_{POP}` | For `HGDP_haplotype`: empirical AF of the haplotype in that pop, derived from `empirical_AC_{POP}` and the min AN over component variants. For `gnomAD_variant`: the gnomAD AF for that variant in that pop. Missing if AN is 0 or the pop has no source data. |
 | `fraction_phased_{POP}` | Per-pop phase ratio: `empirical_AF_{POP} / min(local_call_stats_AF[component, POP])`. `1.0` for `gnomAD_variant` rows. Uses *that pop's own* denominators (not `max_pop`'s). |
 | `estimated_gnomad_AF_{POP}` | Per-pop projection: `fraction_phased_{POP} × min(gnomAD_AF[component, POP])`. Equals `empirical_AF_{POP}` for `gnomAD_variant` rows. |
 
