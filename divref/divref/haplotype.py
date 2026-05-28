@@ -113,53 +113,6 @@ def variant_distance(v1: hl.Expression, v2: hl.Expression) -> hl.Expression:
     return v2.locus.position - v1.locus.position - hl.len(v1.alleles[0])
 
 
-def split_haplotypes(ht: hl.Table, window_size: int) -> hl.Table:
-    """
-    Split multi-variant haplotypes at gaps of at least `window_size` bases.
-
-    Haplotypes spanning variants further than or equal to `window_size` bases apart are broken
-    into sub-haplotypes at those gaps. Sub-haplotypes with fewer than two variants
-    are discarded.
-
-    Args:
-        ht: Hail table with variants, haplotype, and gnomad_freqs array fields.
-        window_size: Maximum reference bases allowed between adjacent variants in
-            a haplotype segment.
-
-    Returns:
-        Hail table with haplotypes exploded into sub-haplotypes by window.
-    """
-    breakpoints = hl.range(1, hl.len(ht.variants)).filter(
-        lambda i: variant_distance(ht.variants[i - 1], ht.variants[i]) >= window_size
-    )
-
-    def get_range(i: hl.Expression) -> hl.Expression:
-        """
-        Return the range of variant indices for the i-th haplotype segment.
-
-        Args:
-            i: Hail integer expression for the segment index.
-
-        Returns:
-            Hail range expression of variant indices belonging to segment i.
-        """
-        start_index = hl.if_else(i == 0, 0, breakpoints[i - 1])
-        end_index = hl.if_else(i == hl.len(breakpoints), hl.len(ht.variants), breakpoints[i])
-        return hl.range(start_index, end_index)
-
-    split_hap_indices = (
-        hl.range(0, hl.len(breakpoints) + 1).map(get_range).filter(lambda r: hl.len(r) > 1)
-    )
-    ht = ht.annotate(haplotype_indices=split_hap_indices)
-    ht = ht.explode("haplotype_indices")
-    ht = ht.annotate(
-        haplotype=ht.haplotype_indices.map(lambda i: ht.haplotype[i]),
-        variants=ht.haplotype_indices.map(lambda i: ht.variants[i]),
-        gnomad_freqs=ht.haplotype_indices.map(lambda i: ht.gnomad_freqs[i]),
-    )
-    return ht.drop("haplotype_indices")
-
-
 def haplo_coordinates(
     window_size: int,
     variants: hl.Expression,

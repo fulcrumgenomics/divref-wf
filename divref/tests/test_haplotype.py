@@ -9,7 +9,6 @@ import pytest
 
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
-from divref.haplotype import split_haplotypes
 from divref.haplotype import to_hashable_items
 from divref.haplotype import variant_distance
 
@@ -179,60 +178,6 @@ def test_variant_distance_deletion_closes_gap(hail_context: None) -> None:  # no
     assert (
         hl.eval(variant_distance(_make_variant(100, "AT", "A"), _make_variant(102, "C", "G"))) == 0
     )
-
-
-# ---------------------------------------------------------------------------
-# split_haplotypes
-# ---------------------------------------------------------------------------
-
-
-def test_split_haplotypes_no_split_needed(hail_context: None) -> None:  # noqa: ARG001
-    """All variants within window_size=200; haplotype is kept intact as one row."""
-    ht = _make_haplotype_table([
-        ("chr1", 100, "A", "T"),
-        ("chr1", 150, "C", "G"),
-        ("chr1", 190, "G", "A"),
-    ])
-    rows = split_haplotypes(ht, window_size=200).collect()
-    assert len(rows) == 1
-    assert len(rows[0].variants) == 3
-
-
-def test_split_haplotypes_splits_at_large_gap(hail_context: None) -> None:  # noqa: ARG001
-    """
-    Gap between positions 101 and 500 (398 bases) exceeds window_size=200.
-
-    Results in two sub-haplotypes: [v0, v1] and [v2, v3].
-    """
-    ht = _make_haplotype_table([
-        ("chr1", 100, "A", "T"),
-        ("chr1", 101, "C", "G"),
-        ("chr1", 500, "G", "A"),
-        ("chr1", 501, "T", "C"),
-    ])
-    rows = sorted(
-        split_haplotypes(ht, window_size=200).collect(),
-        key=lambda r: r.variants[0].locus.position,
-    )
-    assert len(rows) == 2
-    assert [v.locus.position for v in rows[0].variants] == [100, 101]
-    assert [v.locus.position for v in rows[1].variants] == [500, 501]
-
-
-def test_split_haplotypes_discards_singleton_segment(hail_context: None) -> None:  # noqa: ARG001
-    """
-    Gap after position 100 isolates it as a singleton (discarded).
-
-    Only the two-variant segment [500, 501] is kept.
-    """
-    ht = _make_haplotype_table([
-        ("chr1", 100, "A", "T"),
-        ("chr1", 500, "C", "G"),
-        ("chr1", 501, "G", "A"),
-    ])
-    rows = split_haplotypes(ht, window_size=200).collect()
-    assert len(rows) == 1
-    assert [v.locus.position for v in rows[0].variants] == [500, 501]
 
 
 # ---------------------------------------------------------------------------
