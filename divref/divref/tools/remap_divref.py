@@ -352,9 +352,14 @@ def remap_divref(  # noqa: C901
     popmax_empirical_af: list[float] = []
     popmax_empirical_ac: list[int] = []
     max_pop: list[str] = []
-    all_pop_freqs_json: list[str] = []
-    estimated_gnomad_af_per_pop_json: list[str] = []
     source: list[str] = []
+    # One column per pop in the joint legend. `gnomad_af_per_pop` holds the comma-delimited
+    # per-variant AF strings (matches DuckDB's `gnomAD_AF_{POP}` columns verbatim);
+    # `estimated_gnomad_af_per_pop` holds the per-pop scalar haplotype-level estimated AF.
+    gnomad_af_per_pop: dict[str, list[str]] = {pop: [] for pop in joint_pops_legend}
+    estimated_gnomad_af_per_pop: dict[str, list[Optional[float]]] = {
+        pop: [] for pop in joint_pops_legend
+    }
 
     for batch_start in tqdm(range(0, len(df), batch_size)):
         batch_end = min(batch_start + batch_size, len(df))
@@ -407,10 +412,9 @@ def remap_divref(  # noqa: C901
             popmax_empirical_ac.append(found_hap.popmax_empirical_ac)
             max_pop.append(found_hap.max_pop)
             source.append(found_hap.source)
-            all_pop_freqs_json.append(json.dumps(rm.population_frequencies).replace(" ", ""))
-            estimated_gnomad_af_per_pop_json.append(
-                json.dumps(found_hap.estimated_gnomad_af_per_pop).replace(" ", "")
-            )
+            for pop in joint_pops_legend:
+                gnomad_af_per_pop[pop].append(found_hap.gnomad_afs[pop])
+                estimated_gnomad_af_per_pop[pop].append(found_hap.estimated_gnomad_af_per_pop[pop])
 
     df["divref_sequence_id"] = df[chrom_field]
     df["divref_start"] = df[start_field]
@@ -426,8 +430,9 @@ def remap_divref(  # noqa: C901
     df["popmax_empirical_AC"] = popmax_empirical_ac
     df["max_pop"] = max_pop
     df["variant_source"] = source
-    df["population_frequencies_json"] = all_pop_freqs_json
-    df["estimated_gnomad_af_per_pop_json"] = estimated_gnomad_af_per_pop_json
+    for pop in joint_pops_legend:
+        df[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] = gnomad_af_per_pop[pop]
+        df[f"{_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX}{pop}"] = estimated_gnomad_af_per_pop[pop]
 
     df.to_csv(output_path, sep=separator, index=False, quoting=csv.QUOTE_MINIMAL)
     logger.info("Wrote remapped output to %s", output_path)
