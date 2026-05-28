@@ -17,6 +17,14 @@ _DEFAULT_GNOMAD_AFS: dict[str, str] = {
     "sas": "0.13,0.23,0.33",
 }
 
+_DEFAULT_ESTIMATED_GNOMAD_AF_PER_POP: dict[str, float] = {
+    "afr": 0.05,
+    "amr": 0.15,
+    "eas": 0.08,
+    "nfe": 0.10,
+    "sas": 0.07,
+}
+
 
 def create_haplotype(
     sequence_id: str = "test_hap",
@@ -25,6 +33,7 @@ def create_haplotype(
     n_variants: int = 3,
     variants: str = "1:500:A:T,1:505:C:G,1:510:T:A",
     gnomad_afs: dict[str, str] | None = None,
+    estimated_gnomad_af_per_pop: dict[str, float | None] | None = None,
     **kwargs: Any,
 ) -> Haplotype:
     """
@@ -44,10 +53,10 @@ def create_haplotype(
         A Haplotype instance for use in tests.
     """
     defaults: dict[str, Any] = {
-        "fraction_phased": 1.0,
+        "popmax_fraction_phased": 1.0,
         "popmax_empirical_AF": 0.25,
         "popmax_empirical_AC": 1000,
-        "estimated_gnomad_AF": 0.15,
+        "popmax_estimated_gnomad_AF": 0.15,
         "max_pop": "amr",
         "source": "test_source",
     }
@@ -59,6 +68,11 @@ def create_haplotype(
         n_variants=n_variants,
         variants=variants,
         gnomad_afs=dict(_DEFAULT_GNOMAD_AFS) if gnomad_afs is None else gnomad_afs,
+        estimated_gnomad_af_per_pop=(
+            dict(_DEFAULT_ESTIMATED_GNOMAD_AF_PER_POP)
+            if estimated_gnomad_af_per_pop is None
+            else estimated_gnomad_af_per_pop
+        ),
         **defaults,
     )
 
@@ -314,27 +328,32 @@ def test_parse_pop_freqs_na_treated_as_missing() -> None:
 
 
 def test_from_row_splits_per_pop_columns() -> None:
-    """Haplotype.from_row should pull gnomAD_AF_* columns into gnomad_afs by pop label."""
+    """Haplotype.from_row should pull per-pop columns into the dict fields by pop label."""
     pops_legend = ["afr", "amr", "eas"]
     row: dict[str, Any] = {
         "sequence_id": "row_hap",
         "sequence": "ACGT",
         "sequence_length": 4,
         "n_variants": 1,
-        "fraction_phased": 1.0,
+        "popmax_fraction_phased": 1.0,
         "popmax_empirical_AF": 0.5,
         "popmax_empirical_AC": 10,
-        "estimated_gnomad_AF": 0.5,
+        "popmax_estimated_gnomad_AF": 0.5,
         "max_pop": "afr",
         "variants": "chr1:100:A:T",
         "source": "test",
         "gnomAD_AF_afr": "0.5",
         "gnomAD_AF_amr": "0.3",
         "gnomAD_AF_eas": "NA",
+        "estimated_gnomad_AF_afr": 0.5,
+        "estimated_gnomad_AF_amr": 0.3,
+        "estimated_gnomad_AF_eas": None,
     }
     hap = Haplotype.from_row(row, pops_legend)
     assert hap.gnomad_afs == {"afr": "0.5", "amr": "0.3", "eas": "NA"}
     assert list(hap.gnomad_afs.keys()) == pops_legend
+    assert hap.estimated_gnomad_af_per_pop == {"afr": 0.5, "amr": 0.3, "eas": None}
+    assert list(hap.estimated_gnomad_af_per_pop.keys()) == pops_legend
 
 
 # ---------------------------------------------------------------------------
