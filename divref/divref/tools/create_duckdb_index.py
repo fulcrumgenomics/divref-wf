@@ -295,6 +295,8 @@ def build_hgdp_haplotype_table_entries(
                 pop=hgdp_remap[x.pop],
                 empirical_AC=x.empirical_AC,
                 empirical_AF=x.empirical_AF,
+                fraction_phased=x.fraction_phased,
+                estimated_gnomad_AF=x.estimated_gnomad_AF,
             )
         ),
         gnomad_freqs=ht.gnomad_freqs.map(
@@ -363,6 +365,12 @@ def build_gnomad_variant_table_entries(
                 pop=gnomad_remap[i],
                 empirical_AC=va.gnomad_freqs[i].AC,
                 empirical_AF=va.gnomad_freqs[i].AF,
+                # For single-variant rows, the haplotype is a single allele, so phasing is
+                # trivially complete and the "estimated" gnomAD AF is just the gnomAD AF in
+                # the pop — matching the scalar `fraction_phased=1.0` and
+                # `estimated_gnomad_AF=va.gnomad_freqs[argmax_pop].AF` convention above.
+                fraction_phased=1.0,
+                estimated_gnomad_AF=va.gnomad_freqs[i].AF,
             )
         ),
         source="gnomAD_variant",
