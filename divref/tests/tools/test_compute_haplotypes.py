@@ -683,6 +683,18 @@ def test_compute_metrics_picks_max_population(hail_context: None) -> None:  # no
     assert rows[0].max_empirical_AF == pytest.approx(0.05)
     # all_pop_freqs sorted by AF desc: pop 1 (0.05), pop 0 (0.01), pop 2 (0.0)
     assert [s.pop for s in rows[0].all_pop_freqs] == [1, 0, 2]
+    # Each entry's `fraction_phased` and `estimated_gnomad_AF` use that pop's own
+    # denominators — not max_pop's. Pin those values to lock in the per-pop semantics.
+    pop_freqs_by_pop = {s.pop: s for s in rows[0].all_pop_freqs}
+    # Pop 0: emp_AF = 2/200 = 0.01; min_local_AF = 0.04; fp = 0.25; est = 0.3 * 0.25 = 0.075.
+    assert pop_freqs_by_pop[0].fraction_phased == pytest.approx(0.01 / 0.04)
+    assert pop_freqs_by_pop[0].estimated_gnomad_AF == pytest.approx(0.3 * 0.01 / 0.04)
+    # Pop 1 (max): emp_AF = 5/100 = 0.05; min_local_AF = 0.10; fp = 0.5; est = 0.2 * 0.5 = 0.10.
+    assert pop_freqs_by_pop[1].fraction_phased == pytest.approx(0.05 / 0.10)
+    assert pop_freqs_by_pop[1].estimated_gnomad_AF == pytest.approx(0.2 * 0.05 / 0.10)
+    # Pop 2: emp_AF = 0/50 = 0.0; min_local_AF = 0.02; fp = 0.0; est = 0.0.
+    assert pop_freqs_by_pop[2].fraction_phased == pytest.approx(0.0)
+    assert pop_freqs_by_pop[2].estimated_gnomad_AF == pytest.approx(0.0)
 
 
 def test_compute_metrics_zero_an_yields_missing(hail_context: None) -> None:  # noqa: ARG001
