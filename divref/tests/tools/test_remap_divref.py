@@ -47,6 +47,8 @@ def create_haplotype(
         variants: Comma-separated variant strings (chrom:pos:ref:alt).
         gnomad_afs: Mapping from pop label to comma-delimited per-variant AF string. Defaults to
             a five-population (afr/amr/eas/nfe/sas) dict if not provided.
+        estimated_gnomad_af_per_pop: Mapping from pop label to per-pop scalar estimated gnomAD
+            AF. Defaults to a five-population dict if not provided.
         **kwargs: Additional fields passed to Haplotype.
 
     Returns:
