@@ -586,7 +586,9 @@ class MetricsRow:
     variant_pop_af: list[list[float]]
     # One inner dict per variant, mapping pop_int -> (AN, local_alt_AF). Local AF is the
     # HGDP+1KG `call_stats` alt-allele frequency and feeds `min_variant_frequency` /
-    # `fraction_phased`. Missing entries default to AN=0 and local_alt_AF=0.0.
+    # `fraction_phased`. A pop key absent from the dict for a given variant becomes
+    # `hl.missing` in `frequencies_by_pop` — the production code's `dict.get(p, missing)`
+    # path. To exercise AN=0 explicitly, supply `(0, 0.0)`.
     variant_pop_fbp: list[dict[int, tuple[int, float]]]
 
 
@@ -702,6 +704,40 @@ def test_compute_metrics_zero_an_yields_missing(hail_context: None) -> None:  # 
     assert rows[0].all_pop_freqs[0].empirical_AF == pytest.approx(0.1)
     assert rows[0].all_pop_freqs[1].pop == 0
     assert rows[0].all_pop_freqs[1].empirical_AF is None
+
+
+def test_compute_metrics_absent_pop_key_skips_variant_in_min(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """A variant lacking a pop entry is silently skipped in that pop's per-variant min."""
+    # `hl.min` over a Hail array drops missing elements (NumPy-`nanmin` semantics), so a
+    # `dict.get(p, missing)` lookup at a variant where pop `p` is absent doesn't make the
+    # whole-haplotype metric missing — the min is taken over the surviving variants.
+    # Variant 0: both pops present. Variant 1: only pop 1.
+    # → `_per_pop_AF[0]` uses min(AN=100, missing) = 100 → empirical_AF[0] = 2/100 = 0.02.
+    # → `_min_local_variant_AF_by_pop[0]` = min(0.05, missing) = 0.05.
+    # → fraction_phased[0] = 0.02 / 0.05 = 0.4.
+    # → estimated_gnomad_AF[0] = min(0.5, 0.6) * 0.4 = 0.5 * 0.4 = 0.2.
+    ht = _make_metrics_input_ht([
+        MetricsRow(
+            haplotype=[0, 1],
+            per_pop_ac=[2, 4],
+            variant_pop_af=[[0.5, 0.4], [0.6, 0.3]],
+            variant_pop_fbp=[{0: (100, 0.05), 1: (200, 0.10)}, {1: (150, 0.08)}],
+        )
+    ])
+    rows = _compute_metrics(ht, n_pops=2).collect()
+    assert len(rows) == 1
+    row = rows[0]
+    # Pop 1 has higher AF (4/150 ≈ 0.027 vs 0.02 for pop 0). argmax picks pop 1.
+    assert row.max_pop == 1
+    pop_freqs_by_pop = {s.pop: s for s in row.all_pop_freqs}
+    # Pop 0: missing-at-variant-1 is silently skipped; metrics use only variant 0's pop-0 data.
+    assert pop_freqs_by_pop[0].empirical_AF == pytest.approx(0.02)
+    assert pop_freqs_by_pop[0].fraction_phased == pytest.approx(0.4)
+    assert pop_freqs_by_pop[0].estimated_gnomad_AF == pytest.approx(0.2)
+    # Pop 1 has data for both variants and is unaffected.
+    assert pop_freqs_by_pop[1].empirical_AF == pytest.approx(4 / 150)
 
 
 def test_compute_metrics_tie_breaks_to_smallest_index(
