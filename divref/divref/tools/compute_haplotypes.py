@@ -271,16 +271,18 @@ def _compute_metrics(hap_table: hl.Table, n_pops: int) -> hl.Table:
               `call_stats.AF[1]` — not `max_pop`'s. So
               `all_pop_freqs[p].fraction_phased = empirical_AF_p / min_local_AF_in_p` and
               `all_pop_freqs[p].estimated_gnomad_AF = min_i(gnomad_freqs[i][p].AF) *
-              all_pop_freqs[p].fraction_phased`. The scalar fields below are equivalent to
-              `all_pop_freqs[max_pop].*`.
+              all_pop_freqs[p].fraction_phased`. The scalar fields below correspond to the
+              entry whose `pop == max_pop` (note `all_pop_freqs` is sorted by `empirical_AF`,
+              not pop-indexed, so `all_pop_freqs[max_pop]` would be a positional access — not
+              the desired entry).
             - `fraction_phased` (float64): `max_empirical_AF / min_variant_frequency`.
               The proportion of chromosomes carrying the rarest component variant in
               `max_pop` (in HGDP+1KG) that also carry the full haplotype.
             - `estimated_gnomad_AF` (float64): min over segment variants of
               `gnomad_freqs[i][max_pop].AF * fraction_phased`. The haplotype's projected
               frequency in `max_pop` of the broader gnomAD population, extrapolated from
-              the HGDP+1KG LD pattern. Equivalent to `all_pop_freqs[max_pop]
-              .estimated_gnomad_AF`.
+              the HGDP+1KG LD pattern. Equivalent to the `estimated_gnomad_AF` value in the
+              `all_pop_freqs` entry whose `pop == max_pop`.
     """
     pops_range = hl.range(0, n_pops)
     hap_table = hap_table.annotate(
