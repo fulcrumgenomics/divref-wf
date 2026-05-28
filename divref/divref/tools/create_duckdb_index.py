@@ -295,6 +295,8 @@ def build_hgdp_haplotype_table_entries(
                 pop=hgdp_remap[x.pop],
                 empirical_AC=x.empirical_AC,
                 empirical_AF=x.empirical_AF,
+                fraction_phased=x.fraction_phased,
+                estimated_gnomad_AF=x.estimated_gnomad_AF,
             )
         ),
         gnomad_freqs=ht.gnomad_freqs.map(
@@ -363,6 +365,12 @@ def build_gnomad_variant_table_entries(
                 pop=gnomad_remap[i],
                 empirical_AC=va.gnomad_freqs[i].AC,
                 empirical_AF=va.gnomad_freqs[i].AF,
+                # For single-variant rows, the haplotype is a single allele, so phasing is
+                # trivially complete and the "estimated" gnomAD AF is just the gnomAD AF in
+                # the pop — matching the scalar `fraction_phased=1.0` and
+                # `estimated_gnomad_AF=va.gnomad_freqs[argmax_pop].AF` convention above.
+                fraction_phased=1.0,
+                estimated_gnomad_AF=va.gnomad_freqs[i].AF,
             )
         ),
         source="gnomAD_variant",
@@ -463,12 +471,37 @@ def export_sequences_table_to_tsv(
     construction time (with missing-padding for pops absent from a source), so a uniform
     positional lookup is safe regardless of which source the row came from.
 
+    Four further per-pop columns are emitted per joint legend entry: `empirical_AC_{pop}`,
+    `empirical_AF_{pop}`, `fraction_phased_{pop}`, `estimated_gnomad_AF_{pop}`. Values come from
+    `all_pop_freqs` by joint-pop-index dict lookup; pops absent from a row's source are emitted
+    as missing.
+
+    The scalar columns `popmax_fraction_phased` and `popmax_estimated_gnomad_AF` are renamed
+    from `fraction_phased` / `estimated_gnomad_AF` to make the max-pop semantic explicit
+    alongside `popmax_empirical_AF` / `popmax_empirical_AC`.
+
     Args:
         ht: Annotated haplotype/variant table with sequences and variant strings.
         out_file: Path for the output TSV file.
         joint_pops_legend: Ordered list of all population codes across both input sources; used to
             resolve `max_pop` integer indices to labels and to name `gnomAD_AF_{pop}` columns.
     """
+    # Per-joint-pop dict lookup over `all_pop_freqs`. After build_*_table_entries the entries'
+    # `pop` field is already in the joint legend index space; pops absent from this row's source
+    # have no entry, and `.get(i, missing_struct)` returns missing for those.
+    pop_freq_value_type = ht.all_pop_freqs.dtype.element_type
+    ht = ht.annotate(
+        _pop_lookup=hl.dict(ht.all_pop_freqs.map(lambda x: (x.pop, x))),
+    )
+    missing_pop_struct = hl.missing(pop_freq_value_type)
+    per_pop_columns: dict[str, hl.Expression] = {}
+    for i, pop in enumerate(joint_pops_legend):
+        entry = ht._pop_lookup.get(i, missing_pop_struct)
+        per_pop_columns[f"empirical_AC_{pop}"] = entry.empirical_AC
+        per_pop_columns[f"empirical_AF_{pop}"] = entry.empirical_AF
+        per_pop_columns[f"fraction_phased_{pop}"] = entry.fraction_phased
+        per_pop_columns[f"estimated_gnomad_AF_{pop}"] = entry.estimated_gnomad_AF
+
     ht.select(
         "sequence",
         "sequence_length",
@@ -479,9 +512,9 @@ def export_sequences_table_to_tsv(
         "end",
         "popmax_empirical_AF",
         "popmax_empirical_AC",
-        "estimated_gnomad_AF",
-        "fraction_phased",
         "source",
+        popmax_estimated_gnomad_AF=ht.estimated_gnomad_AF,
+        popmax_fraction_phased=ht.fraction_phased,
         max_pop=hl.literal(joint_pops_legend)[ht.max_pop],
         variants=hl.delimit(ht.variant_strs, ","),
         **{
@@ -490,6 +523,7 @@ def export_sequences_table_to_tsv(
             )
             for i, pop in enumerate(joint_pops_legend)
         },
+        **per_pop_columns,
     ).export(str(out_file))
 
 

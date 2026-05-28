@@ -18,6 +18,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 _GNOMAD_AF_COLUMN_PREFIX = "gnomAD_AF_"
+_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX = "estimated_gnomad_AF_"
 
 
 class Variant(BaseModel):
@@ -62,46 +63,63 @@ class ReferenceMapping(BaseModel):
 class Haplotype(BaseModel):
     """A DivRef haplotype sequence with metadata and population frequency information."""
 
-    # Field names use aliases to match DuckDB column names (which use mixedCase).
-    model_config = ConfigDict(populate_by_name=True)
+    # Field names use aliases to match DuckDB column names (which use mixedCase). Extra columns
+    # (e.g. the per-pop `empirical_AC_{POP}` family) are ignored: this model only declares the
+    # fields `remap_divref` actually reads.
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     sequence_id: str
     sequence: str
     sequence_length: int
     n_variants: int
-    fraction_phased: float
+    popmax_fraction_phased: float
     popmax_empirical_af: float = Field(alias="popmax_empirical_AF")
     popmax_empirical_ac: int = Field(alias="popmax_empirical_AC")
-    estimated_gnomad_af: float = Field(alias="estimated_gnomad_AF")
+    popmax_estimated_gnomad_af: float = Field(alias="popmax_estimated_gnomad_AF")
     max_pop: str
     variants: str
     source: str
     # Per-pop comma-delimited gnomAD AF strings, keyed by pop label. The dict's iteration order
     # is the order of `joint_pops_legend` used when constructing the index.
     gnomad_afs: dict[str, str]
+    # Per-pop scalar estimated gnomAD AF for the whole haplotype, keyed by pop label. None for
+    # pops with no source data on this row. Iteration order matches `joint_pops_legend`.
+    estimated_gnomad_af_per_pop: dict[str, Optional[float]]
 
     _variants: Optional[list[Variant]] = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any], pops_legend: list[str]) -> "Haplotype":
         """
-        Build a Haplotype from a DuckDB `sequences` row, separating per-pop AF columns.
+        Build a Haplotype from a DuckDB `sequences` row, separating per-pop columns.
 
         Args:
             row: Mapping from DuckDB column name to value for one `sequences` row.
-            pops_legend: Ordered list of population labels expected as `gnomAD_AF_{pop}` columns.
-                The resulting `gnomad_afs` dict preserves this ordering.
+            pops_legend: Ordered list of population labels expected as `gnomAD_AF_{pop}` and
+                `estimated_gnomad_AF_{pop}` columns. The resulting `gnomad_afs` and
+                `estimated_gnomad_af_per_pop` dicts preserve this ordering.
 
         Returns:
-            Haplotype instance with `gnomad_afs` populated from the per-pop columns.
+            Haplotype instance with `gnomad_afs` and `estimated_gnomad_af_per_pop` populated
+            from the per-pop columns.
         """
         gnomad_afs: dict[str, str] = {
             pop: row[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] for pop in pops_legend
         }
-        base: dict[str, Any] = {
-            k: v for k, v in row.items() if not k.startswith(_GNOMAD_AF_COLUMN_PREFIX)
+        estimated_gnomad_af_per_pop: dict[str, Optional[float]] = {
+            pop: row[f"{_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX}{pop}"] for pop in pops_legend
         }
-        return cls(**base, gnomad_afs=gnomad_afs)
+        base: dict[str, Any] = {
+            k: v
+            for k, v in row.items()
+            if not k.startswith(_GNOMAD_AF_COLUMN_PREFIX)
+            and not k.startswith(_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX)
+        }
+        return cls(
+            **base,
+            gnomad_afs=gnomad_afs,
+            estimated_gnomad_af_per_pop=estimated_gnomad_af_per_pop,
+        )
 
     def parsed_variants(self) -> list[Variant]:
         """
@@ -334,8 +352,14 @@ def remap_divref(  # noqa: C901
     popmax_empirical_af: list[float] = []
     popmax_empirical_ac: list[int] = []
     max_pop: list[str] = []
-    all_pop_freqs_json: list[str] = []
     source: list[str] = []
+    # One column per pop in the joint legend. `gnomad_af_per_pop` holds the comma-delimited
+    # per-variant AF strings (matches DuckDB's `gnomAD_AF_{POP}` columns verbatim);
+    # `estimated_gnomad_af_per_pop` holds the per-pop scalar haplotype-level estimated AF.
+    gnomad_af_per_pop: dict[str, list[str]] = {pop: [] for pop in joint_pops_legend}
+    estimated_gnomad_af_per_pop: dict[str, list[Optional[float]]] = {
+        pop: [] for pop in joint_pops_legend
+    }
 
     for batch_start in tqdm(range(0, len(df), batch_size)):
         batch_end = min(batch_start + batch_size, len(df))
@@ -388,7 +412,9 @@ def remap_divref(  # noqa: C901
             popmax_empirical_ac.append(found_hap.popmax_empirical_ac)
             max_pop.append(found_hap.max_pop)
             source.append(found_hap.source)
-            all_pop_freqs_json.append(json.dumps(rm.population_frequencies).replace(" ", ""))
+            for pop in joint_pops_legend:
+                gnomad_af_per_pop[pop].append(found_hap.gnomad_afs[pop])
+                estimated_gnomad_af_per_pop[pop].append(found_hap.estimated_gnomad_af_per_pop[pop])
 
     df["divref_sequence_id"] = df[chrom_field]
     df["divref_start"] = df[start_field]
@@ -404,7 +430,9 @@ def remap_divref(  # noqa: C901
     df["popmax_empirical_AC"] = popmax_empirical_ac
     df["max_pop"] = max_pop
     df["variant_source"] = source
-    df["population_frequencies_json"] = all_pop_freqs_json
+    for pop in joint_pops_legend:
+        df[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] = gnomad_af_per_pop[pop]
+        df[f"{_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX}{pop}"] = estimated_gnomad_af_per_pop[pop]
 
     df.to_csv(output_path, sep=separator, index=False, quoting=csv.QUOTE_MINIMAL)
     logger.info("Wrote remapped output to %s", output_path)

@@ -125,8 +125,9 @@ minversion = "7.4"
 addopts    = [
     "--color=yes",
     "--import-mode=importlib",
-    "--cov"
+    "--cov=divref",
 ]
+testpaths = ["tests"]
 
 [tool.coverage.run]
 omit = ["tests/*"]
