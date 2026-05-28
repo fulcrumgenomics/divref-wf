@@ -42,7 +42,7 @@ divref/                    # Python package (uv-managed)
   divref/
     main.py                # CLI entry point; registers tools in _tools list
     alias.py               # HailPath type alias (str; accepts local, gs://, hdfs://)
-    defaults.py            # Package-wide constants: POPULATIONS, REFERENCE_GENOME, freq thresholds
+    defaults.py            # Package-wide constants: POPULATIONS, REFERENCE_GENOME, gnomAD HT URIs
     hail.py                # Hail initialization with GCS connector setup
     haplotype.py           # Shared Hail utilities for haplotype sequence/windowing
     tools/                 # One module per CLI subcommand
@@ -71,34 +71,26 @@ divref <tool-name> --arg value   # Invokes the registered tool
 The tools implement a data pipeline:
 1. `extract_gnomad_afs` / `extract_gnomad_single_afs` → per-population allele frequency Hail table
 2. `extract_sample_metadata` → simplified sample→population mapping table
-3. `create_gnomad_sites_vcf` → VCF of variants above AF threshold (uses output of step 1)
-4. `compute_haplotypes` → groups phased variants into haplotype windows using Hail
-5. `compute_haplotype_statistics` → haplotype count distributions
-6. `compute_variation_ratios` → per-sample variant counts at multiple freq thresholds
-7. `create_duckdb_index` → DuckDB index merging haplotype + gnomAD sites Hail tables, with reference-context sequences
-8. `create_divref_fasta` → per-chromosome FASTA files streamed from the DuckDB index (final deliverable)
-9. `remap_divref` → maps haplotype coordinates back to reference genome (post-CALITAS step)
+3. `compute_haplotypes` → groups phased variants into haplotype windows using Hail
+4. `create_duckdb_index` → DuckDB index merging haplotype + gnomAD sites Hail tables, with reference-context sequences
+5. `create_divref_fasta` → per-chromosome FASTA files streamed from the DuckDB index (final deliverable)
+6. `remap_divref` → maps haplotype coordinates back to reference genome (post-CALITAS step)
 
-Steps 7 and 8 were split out of a single `create_fasta_and_index` tool (PR #39). `create_duckdb_index` writes the index in chunks (PR #42, `--polars-chunk-size`) and `create_divref_fasta` streams FASTA output (PR #43).
+Steps 4 and 5 were split out of a single `create_fasta_and_index` tool (PR #39). `create_duckdb_index` writes the index in chunks (PR #42, `--polars-chunk-size`) and `create_divref_fasta` streams FASTA output (PR #43).
 
 `extract_gnomad_single_afs` is an alternative to `extract_gnomad_afs` supporting both gnomAD v4.1 (JOINT) and v3.1.2 (HGDP+1KG) table schemas; it is used when the workflow's `gnomad_variant_annotation_source` config selects a gnomAD source different from the haplotype source (the haplotypes themselves always come from gnomAD 3.1.2 HGDP+1KG phased genotypes).
 
 `gnomad_hail_table_test_data` is a separate tool (registered in `main.py`, but not part of the pipeline) used by `workflows/create_test_data.smk` to generate test-data subsets of gnomAD Hail tables.
 
-Note: `divref/tools/rewrite_fasta.py` is a utility script and is NOT registered in `main.py`.
-
 ### Key Shared Modules
 
 **`haplotype.py`**
 - `get_haplo_sequence(context_size, variants)` — builds haplotype sequence strings with flanking reference context; handles SNPs, insertions, deletions
-- `split_haplotypes(ht, window_size)` — splits multi-variant haplotypes at gaps ≥ `window_size` bases; discards sub-haplotypes with <2 variants
 - `variant_distance(v1, v2)` — reference bases between two variants (accounts for indel length)
-
-**`compute_haplotypes.py` two-window strategy**: To avoid systematic edge artefacts, the tool runs two overlapping window passes (offset by `window_size / 2`) and unions the results. Intermediate `.1.ht` / `.2.ht` files are cleaned up after the merge.
 
 **`hail.py`**: `hail_init(gcs_credentials_path)` — sets `GOOGLE_APPLICATION_CREDENTIALS`, verifies GCS connector JAR (installed via `pixi run setup-gcs`), then calls `hl.init()` with Spark GCS config.
 
-**`defaults.py`**: `POPULATIONS`, `REFERENCE_GENOME`, `VARIATION_RATIO_FREQUENCY_THRESHOLDS` — defaults shared across tools.
+**`defaults.py`**: `POPULATIONS`, `REFERENCE_GENOME`, and gnomAD HGDP+1KG Hail-table URI defaults shared across tools.
 
 ### Data Models (`remap_divref.py`)
 
