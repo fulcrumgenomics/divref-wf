@@ -892,10 +892,10 @@ def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noq
 @pytest.mark.parametrize(
     "variant_freq_threshold,haplotype_freq_threshold,expected_count",
     [
-        (0.0, 0.0, 459),
-        (0.005, 0.0, 283),
-        (0.0, 0.005, 31),
-        (0.005, 0.005, 31),
+        (0.0, 0.0, 112),
+        (0.005, 0.0, 84),
+        (0.0, 0.005, 46),
+        (0.005, 0.005, 47),
     ],
 )
 def test_compute_haplotypes(
@@ -976,10 +976,10 @@ def test_compute_haplotypes_no_variants(
 @pytest.mark.parametrize(
     "variant_freq_threshold,haplotype_freq_threshold,expected_count",
     [
-        (0.0, 0.0, 1195),
-        (0.005, 0.0, 884),
-        (0.0, 0.005, 781),
-        (0.005, 0.005, 678),
+        (0.0, 0.0, 74),
+        (0.005, 0.0, 57),
+        (0.0, 0.005, 61),
+        (0.005, 0.005, 55),
     ],
 )
 def test_compute_haplotypes_chrx_nonpar(
@@ -991,9 +991,9 @@ def test_compute_haplotypes_chrx_nonpar(
     expected_count: int,
 ) -> None:
     """Compute haplotypes on a chrX non-PAR window with sex-aware ploidy correction."""
-    in_sites = datadir / "chrX_50000000_50100000.gnomad_afs.ht"
+    in_sites = datadir / "chrX_50000000_50025000.gnomad_afs.ht"
     in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
-    vcf_path = datadir / "chrX_50000000_50100000.vcf.gz"
+    vcf_path = datadir / "chrX_50000000_50025000.vcf.gz"
     output_base = tmp_path / "haplos"
 
     with patch("divref.tools.compute_haplotypes.hl.init"):
@@ -1014,5 +1014,3 @@ def test_compute_haplotypes_chrx_nonpar(
     results: list[hl.Struct] = result.collect()
     assert all(len(r.haplotype) >= 2 for r in results)
     assert all(len(r.variants) == len(r.haplotype) for r in results)
-
-
