@@ -2,14 +2,16 @@
 scalar `estimated_gnomad_AF >= threshold` to a per-population threshold
 (`max over pops of estimated_gnomad_AF_by_pop >= threshold`).
 
-Expected inputs:
-  NEW_HT          - compute_haplotypes output Hail table, generated with the
-                    `estimated_gnomad_AF_by_pop` column populated and the
-                    haplotype-AF threshold lowered (e.g. 0.0) so we can see
-                    haplotypes the current scalar filter would have dropped.
-  OLD_DUCKDB      - original-pipeline DuckDB index (same dataset as the Hail
-                    table; used to cross-tabulate against the Tier 1-5 buckets).
-  HAPLOTYPE_FREQ_THRESHOLD - the inclusion threshold (default 0.005).
+CLI flags (see `--help` for defaults):
+  --old-duckdb   original-pipeline DuckDB index (used to cross-tabulate against
+                 the Tier 1-5 buckets).
+  --new-ht       compute_haplotypes output HT. Supply one generated with the
+                 haplotype-AF threshold lowered (e.g. 0.0) so it includes
+                 haplotypes the current scalar filter would have dropped.
+  --contig       contig to evaluate.
+  --threshold    inclusion threshold the filter rules are evaluated at.
+  --n-examples   how many example rescued haplotypes to print.
+  --divref-pops  comma-separated population codes for the per-pop rescue rule.
 
 Outputs (stdout):
   - Counts of haplotypes that pass under each filter rule.
@@ -19,29 +21,71 @@ Outputs (stdout):
   - A handful of example rescued haplotypes with full per-pop est_af vectors.
 """
 
+import argparse
 from collections import Counter
 from pathlib import Path
 
 import duckdb
 import hail as hl
 
-OLD_DUCKDB = (
-    "data/analysis/compute_haplotypes/test_data_old/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
-)
-# Re-generated with the per-pop est_af patch + threshold lowered. Path can be
-# overridden by the caller; the default mirrors the file that
-# `compare_haplotypes.py` uses.
-NEW_HT = (
-    "data/analysis/compute_haplotypes/test_data_new/hgdp_1kg.haplotypes.chr22.ht"
-)
-CONTIG = "chr22"
-HAPLOTYPE_FREQ_THRESHOLD = 0.005
-N_EXAMPLES = 10
 # Populations the production DivRef bundle filters on. The variant annotation table used
 # to generate the test fixture may include additional gnomAD populations (e.g. `mid`,
 # `fin`, `oth`); restricting the per-pop rescue to these 5 keeps the analysis aligned
 # with what the production bundle actually emits.
-DIVREF_POPS = {"afr", "amr", "eas", "sas", "nfe"}
+_DEFAULT_DIVREF_POPS = "afr,amr,eas,sas,nfe"
+
+parser = argparse.ArgumentParser(
+    description=(
+        "Evaluate the impact of changing the haplotype inclusion filter from a single scalar "
+        "estimated_gnomad_AF >= threshold to a per-population threshold."
+    )
+)
+parser.add_argument(
+    "--old-duckdb",
+    default=(
+        "data/analysis/compute_haplotypes/test_data_old/"
+        "hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
+    ),
+    help="Path to the original-pipeline DuckDB index (for Tier 1-5 cross-tab).",
+)
+parser.add_argument(
+    "--new-ht",
+    default="data/analysis/compute_haplotypes/test_data_new/hgdp_1kg.haplotypes.chr22.ht",
+    help=(
+        "Path to the new compute_haplotypes output HT. For rescue analysis, supply an HT "
+        "generated with the haplotype-AF threshold lowered (e.g. 0.0) so it includes "
+        "haplotypes the current scalar filter would have dropped."
+    ),
+)
+parser.add_argument("--contig", default="chr22", help="Contig to evaluate.")
+parser.add_argument(
+    "--threshold",
+    type=float,
+    default=0.005,
+    help="Haplotype frequency threshold the filter rules are evaluated at.",
+)
+parser.add_argument(
+    "--n-examples",
+    type=int,
+    default=10,
+    help="Number of example rescued haplotypes to print at the end of the report.",
+)
+parser.add_argument(
+    "--divref-pops",
+    default=_DEFAULT_DIVREF_POPS,
+    help=(
+        "Comma-separated population codes used by the per-pop rescue rule (the production "
+        "DivRef bundle's 5 by default)."
+    ),
+)
+_args = parser.parse_args()
+
+OLD_DUCKDB = _args.old_duckdb
+NEW_HT = _args.new_ht
+CONTIG = _args.contig
+HAPLOTYPE_FREQ_THRESHOLD = _args.threshold
+N_EXAMPLES = _args.n_examples
+DIVREF_POPS = {p.strip() for p in _args.divref_pops.split(",") if p.strip()}
 
 
 def parse_variants_string(s: str) -> tuple:
