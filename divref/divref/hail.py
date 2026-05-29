@@ -18,9 +18,10 @@ def hail_init(
     so the JVM subprocess inherits it, then starts Hail with the GCS connector JAR on
     the Spark classpath. When `use_s3` is `True`, the S3A connector JARs
     (`hadoop-aws` and `aws-java-sdk-bundle`) are loaded and the S3A Spark configs
-    are set instead — the GCS connector is not required. AWS credentials are resolved
-    via the standard `DefaultAWSCredentialsProviderChain` (env vars,
-    `~/.aws/credentials`, or IAM role).
+    are set instead — the GCS connector is not required. S3 reads use
+    `AnonymousAWSCredentialsProvider` because every input the workflow consumes
+    (`gnomad-public-us-east-1`, `broad-references`) is on a public Open Data
+    bucket that allows anonymous reads. No AWS credentials are needed.
 
     Args:
         gcs_credentials_path: Absolute path to a GCP Application Default Credentials
@@ -77,7 +78,10 @@ def hail_init(
         cloud_jars.extend([hadoop_aws_jar, aws_sdk_bundle_jar])
         spark_conf.update({
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-            "spark.hadoop.fs.s3a.aws.credentials.provider": "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",  # noqa: E501
+            # All workflow inputs live on public Open Data buckets that allow anonymous
+            # reads; this avoids needing credentials and bypasses any restrictive IAM role
+            # that might be present on the host.
+            "spark.hadoop.fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.AnonymousAWSCredentialsProvider",  # noqa: E501
             # Random-read optimizations for Hail/Parquet workloads. S3A defaults to
             # sequential fadvise, which re-opens the HTTP connection on every backward
             # seek; Hail does many seeks per partition, so `random` is much faster.

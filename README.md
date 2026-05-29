@@ -43,8 +43,9 @@ when running compute in `us-east-1` — run
 pixi run setup-s3
 ```
 
-…and configure AWS credentials via the standard AWS chain (`aws configure`, environment
-variables, or an IAM role).
+No AWS credentials are required: the workflow's S3 reads are configured to use
+`AnonymousAWSCredentialsProvider` because all inputs (`gnomad-public-us-east-1`,
+`broad-references`) are on public Open Data buckets.
 
 To install both connectors at once, run `pixi run setup-cloud`.
 
@@ -65,7 +66,7 @@ pixi run snakemake -j1 -s workflows/generate_divref.smk \
     --configfile workflows/config/config_gcs.yml
 ```
 
-Run on AWS (after `pixi run setup-s3` and configuring AWS credentials):
+Run on AWS (after `pixi run setup-s3`; no AWS credentials needed):
 
 ```bash
 pixi run snakemake -j1 -s workflows/generate_divref.smk \
