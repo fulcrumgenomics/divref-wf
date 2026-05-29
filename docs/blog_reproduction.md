@@ -70,6 +70,11 @@ pixi run snakemake -j1 -s workflows/compare_divref_gnomad.smk
 
 For each `gnomad_version` in `{hgdp_1kg_312, genomes_312, joint_41}` the workflow produces a TSV of all gnomAD variants on chr22 above the 0.5% threshold, runs the R comparator against the DivRef 1.1 single-variant track, and writes a log file.
 The workflow also downloads the published DivRef 1.1 DuckDB index to `data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb`; the haplotype-comparison section below reads it as `--old-duckdb`.
+
+The `joint_41` extract applies an AC0-tolerant intersection filter: genome filter must be PASS, and exome filter must be PASS or contain only `AC0`.
+The filter logic lives in `_apply_filters` in `divref/divref/tools/extract_gnomad_single_afs.py`; the test for it is `test_apply_filters_joint41_keeps_when_genome_pass_and_exome_pass_or_only_AC0` in `divref/tests/tools/test_extract_gnomad_single_afs.py`.
+See the blog draft for the rationale (median exome `AN` = 34 across the AC0-failing chr22 variants under a strict-intersection extract — these are almost entirely positions outside the v4.1 exome capture footprint).
+
 The blog's columns map to log/TSV values as follows.
 
 | Blog column | Source |
@@ -89,8 +94,8 @@ Row mapping:
 
 ### Why DivRef-only variants are missing from gnomAD v4.1 joint
 
-The blog's narrative attributes the 28K DivRef-only variants under v4.1 joint to a combination of filter-set mismatches, sub-threshold AFs in v4.1, and outright absence from the v4.1 callset.
-To produce the breakdown, `scripts/explain_divref_only_v41.py` looks each of the 28K up in the v4.1 joint sites Hail table and bins by reason.
+The blog's narrative attributes the ~16K DivRef-only variants under v4.1 joint (after the AC0-tolerant intersection) to a combination of filter-set mismatches, sub-threshold AFs in v4.1, and outright absence from the v4.1 callset.
+To produce the breakdown, `scripts/explain_divref_only_v41.py` looks each one up in the v4.1 joint sites Hail table and bins by reason.
 
 **Command**:
 
@@ -110,8 +115,9 @@ Stdout reports five mutually exclusive buckets used in the blog table:
 | `genome_filter_only` | in HT, AF >= 0.005, `exomes.filters` empty, `genomes.filters` non-empty |
 | `both_filters_nonempty` | in HT, AF >= 0.005, both filter sets non-empty |
 
-A sixth `unexpected_pass` bucket would catch variants that pass both v4.1 filter sets and have AF >= 0.005 in the 5 selected pops yet still landed in the input list (i.e., a workflow-extract inconsistency).
-Empirically this is 0 for the chr22 chr22.joint_41 run, so the bucket is left empty; it acts as a sanity check that the comparison workflow's extract and this script agree on the AF-threshold + PASS-in-both decision.
+A sixth `unexpected_pass` bucket would catch variants whose `exomes.filters` and `genomes.filters` are both empty and whose AF >= 0.005 in the 5 selected pops yet still landed in the input list (i.e., a workflow-extract inconsistency).
+Empirically this is 0 for the chr22 chr22.joint_41 run, so the bucket is left empty; it acts as a sanity check that the comparison workflow's extract and this script agree on the AF-threshold + both-sides-empty decision.
+The blog's headline filter is the *AC0-tolerant* intersection rather than strict both-sides-empty, so the workflow's actual joint_41 extract additionally keeps variants whose exome filter is exactly `{AC0}` — those won't appear in the DivRef-only input here at all, and so don't need a bucket of their own in this script.
 
 > **Note on freq_meta index lookup.** The v4.1 joint `joint_globals.freq_meta` contains multiple `{group: "adj", gen_anc: <pop>}` entries — one primary entry per population *plus* additional entries with extra keys (e.g. `downsampling`) for restricted slices.
 > An earlier version of this script matched any entry with `group == "adj"` and `gen_anc in selected_pops` and `"subset" not in meta`, which silently picked up `downsampling` entries and overwrote the primary index in the per-pop map.
@@ -138,8 +144,9 @@ For DivRef 1.1, that's 34,547,958 / 506,983 = 68.14.
 This is preferred over a raw chromosome-length ratio (chr22 is ~1.6% of the genome by length, giving ~62x) because chr22 is gene-dense and over-represented in common-variant counts; the empirical figure derived from real common-variant rows is the most defensible multiplier.
 
 For the four non-absent buckets, the script also prints (a) the top distinct `(exomes.filters, genomes.filters)` combinations and (b) per-population AF quantiles (min, p10, median, p90, max across the 5 selected pops).
-For the subset of AC0-failing variants (exome filter contains `AC0`, genome filter empty), the script additionally prints the distribution of `exomes.freq[adj].AN` (number of called alleles in the 730K-exome cohort) to distinguish "outside exome capture" from "in capture but quality failure".
-This AC0 sub-analysis is not used in the current blog draft since AC0-failing variants are excluded from the official gnomAD 4.1 PASS set by construction, but the report is left in place for future investigations.
+The script additionally prints the distribution of `exomes.freq[adj].AN` (number of called alleles in the 730K-exome cohort) for AC0-only-exome-failure variants in the input list; this is what surfaced the "median AN = 34" finding that justifies the workflow's AC0-tolerant filter (see the blog's footnote on the joint_41 row).
+After the filter became AC0-tolerant, the workflow's input list to this script no longer contains any AC0-only-exome failures, so the AN block reports `n=0` in the current chr22 run.
+The report is left in place so re-runs against an upstream gnomAD release where AC0 has different semantics can quickly reveal whether the AC0-tolerant assumption still holds.
 
 A per-variant TSV is written alongside the input as `data/analysis/compare_divref_gnomad/chr22.joint_41.divref_not_in_gnomad.explained.tsv` with columns:
 
@@ -158,8 +165,9 @@ so the breakdown can be inspected row-by-row without re-querying Hail.
 **Commands**:
 
 ```bash
-pixi run python scripts/compare_haplotypes.py
-pixi run Rscript scripts/compare_haplotypes_venn.R
+mkdir -p logs
+pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log
+pixi run Rscript scripts/compare_haplotypes_venn.R &> logs/compare_haplotypes_venn.chr22.log
 ```
 
 The Python script writes `data/analysis/compute_haplotypes/algo_comparison.summary.tsv`; the R script reads the `shared` / `old_only` / `new_only` rows from there and renders the figure.
@@ -167,7 +175,7 @@ No counts are hardcoded in the R script.
 
 ### 1,327 of 1,333 + the 1,197 / 130 split + the new-only 1,590 / 54 / 36 / 21 / 8 numbers (blog lines 121-126)
 
-**Command**: `pixi run python scripts/compare_haplotypes.py`
+**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn section above).
 
 | Blog claim | Summary TSV row |
 |---|---|
@@ -233,7 +241,7 @@ The "i1=24626883" position falls inside the ±100 bp scan window of the script's
 
 ### AC counts table (blog lines 188-191)
 
-**Command**: `pixi run python scripts/compare_haplotypes.py` (same run as the Venn / decomposition counts above).
+**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn / decomposition counts above).
 
 | Blog row | Summary TSV row |
 |---|---|
