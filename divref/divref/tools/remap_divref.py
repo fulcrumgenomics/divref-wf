@@ -18,7 +18,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 _GNOMAD_AF_COLUMN_PREFIX = "gnomAD_AF_"
-_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX = "estimated_gnomad_AF_"
+_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX = "estimated_gnomAD_haplotype_AF_"
 
 
 class Variant(BaseModel):
@@ -96,7 +96,7 @@ class Haplotype(BaseModel):
         Args:
             row: Mapping from DuckDB column name to value for one `sequences` row.
             pops_legend: Ordered list of population labels expected as `gnomAD_AF_{pop}` and
-                `estimated_gnomad_AF_{pop}` columns. The resulting `gnomad_afs` and
+                `estimated_gnomAD_haplotype_AF_{pop}` columns. The resulting `gnomad_afs` and
                 `estimated_gnomad_af_per_pop` dicts preserve this ordering.
 
         Returns:

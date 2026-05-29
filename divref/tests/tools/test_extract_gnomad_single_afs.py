@@ -4,11 +4,13 @@ from inspect import signature
 from pathlib import Path
 from typing import Any
 
+import hail as hl
 import pytest
 
 from divref.tools.extract_gnomad_single_afs import _GNOMAD_TABLE_URI
 from divref.tools.extract_gnomad_single_afs import GnomadCloud
 from divref.tools.extract_gnomad_single_afs import GnomadVersion
+from divref.tools.extract_gnomad_single_afs import _apply_filters
 from divref.tools.extract_gnomad_single_afs import extract_gnomad_single_afs
 
 
@@ -123,6 +125,66 @@ def test_extract_gnomad_single_afs_dispatches_to_correct_cloud(
     assert captured["use_s3"] is expected_use_s3
     assert captured["uri"].startswith(expected_prefix)
     assert captured["uri"].endswith("release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht")
+
+
+def _make_joint41_filter_ht(
+    rows: list[tuple[int, list[str] | None, list[str] | None]],
+) -> hl.Table:
+    """
+    Build a synthetic JOINT_41-shaped Hail table for `_apply_filters` testing.
+
+    Each input row is `(position, exomes_filters, genomes_filters)`. A `None` filter set encodes
+    a missing field (the `hl.coalesce(..., True)` branch in `_apply_filters`, which should be
+    treated as passing). A list (possibly empty) is loaded into a `tset[tstr]` field to mirror
+    the real gnomAD joint HT schema.
+    """
+    schema = hl.tstruct(
+        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+        alleles=hl.tarray(hl.tstr),
+        exomes=hl.tstruct(filters=hl.tset(hl.tstr)),
+        genomes=hl.tstruct(filters=hl.tset(hl.tstr)),
+    )
+    table_rows = []
+    for pos, exome_filters, genome_filters in rows:
+        table_rows.append({
+            "locus": {"contig": "chr22", "position": pos},
+            "alleles": ["A", "T"],
+            "exomes": {"filters": set(exome_filters) if exome_filters is not None else None},
+            "genomes": {"filters": set(genome_filters) if genome_filters is not None else None},
+        })
+    return hl.Table.parallelize(table_rows, schema=schema)
+
+
+def test_apply_filters_joint41_keeps_when_genome_pass_and_exome_pass_or_only_ac0(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    JOINT_41 filter: genome must be empty/missing, exome must be empty/missing or only AC0.
+
+    `AC0` on the exome side is dominated by exome capture-region absence (gnomAD assigns AC0
+    when no sample meets the high-quality genotype threshold; for a whole-genome-sourced
+    catalog like DivRef this is overwhelmingly explained by the position being outside the
+    exome capture footprint). Treating `AC0`-only as PASS on the exome side recovers good
+    genome-supported variants that the strict both-sides-empty intersection would discard.
+    """
+    ht = _make_joint41_filter_ht([
+        (100, [], []),  # both PASS → kept
+        (200, ["AC0"], []),  # exome only AC0, genome PASS → kept
+        (300, ["AC0", "AS_VQSR"], []),  # exome has AC0+AS_VQSR, genome PASS → dropped
+        (400, ["AS_VQSR"], []),  # exome AS_VQSR alone, genome PASS → dropped
+        (500, [], ["AS_VQSR"]),  # exome PASS, genome non-empty → dropped
+        (600, ["AC0"], ["AS_VQSR"]),  # exome AC0 OK but genome non-empty → dropped
+        (700, None, []),  # exome missing, genome PASS → kept
+        (800, [], None),  # exome PASS, genome missing → kept
+        (900, None, None),  # both missing → kept
+        (1000, ["AC0"], None),  # exome only AC0, genome missing → kept
+        (1100, ["AS_VQSR"], None),  # exome AS_VQSR, genome missing → dropped
+    ])
+
+    survivors = sorted(
+        r.locus.position for r in _apply_filters(ht, GnomadVersion.JOINT_41).collect()
+    )
+    assert survivors == [100, 200, 700, 800, 900, 1000]
 
 
 def test_extract_gnomad_single_afs_propagates_hail_init_failure(

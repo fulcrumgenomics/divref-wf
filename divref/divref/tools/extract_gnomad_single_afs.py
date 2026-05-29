@@ -103,9 +103,20 @@ def _apply_filters(va: hl.Table, gnomad_version: GnomadVersion) -> hl.Table:
     """
     Apply gnomAD variant filters, keeping only variants that pass all filters.
 
-    For gnomAD 4.1 joint, exome and genome filter sets are maintained separately and are
-    unioned after filtering. For gnomAD 3.1.2 tables, a single filter set is used.
-    Entries with missing filter sets are treated as passing.
+    For gnomAD 4.1 joint, exome and genome filter sets are maintained separately. A variant is
+    kept when:
+
+      - `genomes.filters` is empty (PASS), and
+      - `exomes.filters` is empty (PASS) or contains only `AC0`.
+
+    The `AC0` exome filter typically indicates the position is outside the exome capture target
+    or otherwise has too little exome coverage for a high-quality alt genotype (gnomAD requires
+    GQ >= 20, DP >= 10, allele balance > 0.2 for hets). Excluding variants whose only exome
+    failure is `AC0` would discard good genome-supported variants for purely coverage reasons,
+    so this filter treats "exome empty or just AC0" as passing on the exome side.
+
+    For gnomAD 3.1.2 tables a single filter set is used. Entries with missing filter sets are
+    treated as passing.
 
     Args:
         va: gnomAD sites Hail table filtered to a single contig.
@@ -115,9 +126,10 @@ def _apply_filters(va: hl.Table, gnomad_version: GnomadVersion) -> hl.Table:
         Filtered Hail table.
     """
     if gnomad_version is GnomadVersion.JOINT_41:
-        va_exome = va.filter(hl.coalesce(hl.len(va.exomes.filters) == 0, True))
-        va_genome = va.filter(hl.coalesce(hl.len(va.genomes.filters) == 0, True))
-        return va_exome.union(va_genome).distinct()
+        return va.filter(
+            hl.coalesce(va.exomes.filters.is_subset(hl.set(["AC0"])), True)
+            & hl.coalesce(hl.len(va.genomes.filters) == 0, True)
+        )
     else:
         return va.filter(hl.coalesce(hl.len(va.filters) == 0, True))
 

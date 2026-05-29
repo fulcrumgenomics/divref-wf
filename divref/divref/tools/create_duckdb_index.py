@@ -472,9 +472,9 @@ def export_sequences_table_to_tsv(
     positional lookup is safe regardless of which source the row came from.
 
     Four further per-pop columns are emitted per joint legend entry: `empirical_AC_{pop}`,
-    `empirical_AF_{pop}`, `fraction_phased_{pop}`, `estimated_gnomad_AF_{pop}`. Values come from
-    `all_pop_freqs` by joint-pop-index dict lookup; pops absent from a row's source are emitted
-    as missing.
+    `empirical_AF_{pop}`, `fraction_phased_{pop}`, `estimated_gnomAD_haplotype_AF_{pop}`. Values
+    come from `all_pop_freqs` by joint-pop-index dict lookup; pops absent from a row's source
+    are emitted as missing.
 
     The scalar columns `popmax_fraction_phased` and `popmax_estimated_gnomad_AF` are renamed
     from `fraction_phased` / `estimated_gnomad_AF` to make the max-pop semantic explicit
@@ -500,7 +500,7 @@ def export_sequences_table_to_tsv(
         per_pop_columns[f"empirical_AC_{pop}"] = entry.empirical_AC
         per_pop_columns[f"empirical_AF_{pop}"] = entry.empirical_AF
         per_pop_columns[f"fraction_phased_{pop}"] = entry.fraction_phased
-        per_pop_columns[f"estimated_gnomad_AF_{pop}"] = entry.estimated_gnomad_AF
+        per_pop_columns[f"estimated_gnomAD_haplotype_AF_{pop}"] = entry.estimated_gnomad_AF
 
     ht.select(
         "sequence",
@@ -517,9 +517,22 @@ def export_sequences_table_to_tsv(
         popmax_fraction_phased=ht.fraction_phased,
         max_pop=hl.literal(joint_pops_legend)[ht.max_pop],
         variants=hl.delimit(ht.variant_strs, ","),
+        # Substitute "NA" per element for variants where this pop's AF is missing (e.g. an
+        # HGDP_haplotype row at a joint pop that isn't in the HGDP source legend). Without the
+        # substitution Hail collapses the whole all-missing array to a single missing token,
+        # which polars then reads as a SQL NULL and trips the downstream Haplotype model.
+        # Always emitting a comma-delimited string of length `n_variants` keeps the column
+        # shape consistent regardless of which source emitted the row.
         **{
             f"gnomAD_AF_{pop}": hl.delimit(
-                ht.gnomad_freqs.map(lambda x, _i=i: hl.format("%.5f", x[_i].AF)), ","
+                ht.gnomad_freqs.map(
+                    lambda x, _i=i: hl.if_else(
+                        hl.is_defined(x[_i].AF),
+                        hl.format("%.5f", x[_i].AF),
+                        hl.literal("NA"),
+                    )
+                ),
+                ",",
             )
             for i, pop in enumerate(joint_pops_legend)
         },
@@ -552,12 +565,23 @@ def iter_dataframe_chunks(
         "sequence_id": polars.String,
         **{f"gnomAD_AF_{pop}": polars.String for pop in joint_pops_legend},
     }
+    # Hail's TSV export emits "NA" for missing scalar fields; "null" is included for
+    # robustness against other writers.
     lf = polars.scan_csv(
         tsv,
         separator="\t",
         schema_overrides=schema_overrides,
-        null_values="null",
+        null_values=["NA", "null"],
     )
+    # `null_values` applies globally and can convert a bare "NA" cell to null even though
+    # the column is declared as String in `schema_overrides`. Restore "NA" so downstream
+    # consumers (e.g. `remap_divref.Haplotype`, which types `gnomad_afs` as `dict[str, str]`)
+    # always see a string. This matters mostly for single-variant rows where the per-pop
+    # cell can degenerate to a bare "NA".
+    lf = lf.with_columns([
+        polars.col(f"gnomAD_AF_{pop}").fill_null("NA").cast(polars.String)
+        for pop in joint_pops_legend
+    ])
     for df in lf.collect_batches(chunk_size=chunk_size):
         if df.height > 0:
             yield df

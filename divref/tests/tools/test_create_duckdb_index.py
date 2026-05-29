@@ -3,10 +3,10 @@
 from pathlib import Path
 
 import hail as hl
-import polars
 import pytest
 
 from divref.tools.create_duckdb_index import export_sequences_table_to_tsv
+from divref.tools.create_duckdb_index import iter_dataframe_chunks
 
 
 def _make_sequences_ht() -> hl.Table:
@@ -58,9 +58,12 @@ def _make_sequences_ht() -> hl.Table:
             "fraction_phased": 1.40,
             "max_pop": 0,
             "variant_strs": ["chr1:100:A:T", "chr1:120:C:G"],
+            # Multi-variant row where the amr AF is present on variant 0 but missing on
+            # variant 1. Exercises the per-element substitution + `hl.delimit` join: the cell
+            # must stay a comma-delimited "0.04000,NA" and not collapse to a single "NA".
             "gnomad_freqs": [
                 [{"AF": 0.05, "AC": 5}, {"AF": 0.04, "AC": 4}],
-                [{"AF": 0.07, "AC": 7}, {"AF": 0.05, "AC": 5}],
+                [{"AF": 0.07, "AC": 7}, {"AF": None, "AC": 0}],
             ],
             "all_pop_freqs": [
                 {
@@ -94,8 +97,13 @@ def _make_sequences_ht() -> hl.Table:
             "fraction_phased": 1.0,
             "max_pop": 0,
             "variant_strs": ["chr1:200:G:C"],
+            # Single-variant row with the amr per-pop AF deliberately missing. Exercises the
+            # writer's `hl.if_else(hl.is_defined(...), ..., hl.literal("NA"))` branch in
+            # export_sequences_table_to_tsv: the resulting `gnomAD_AF_amr` cell degenerates
+            # to a bare "NA" token, which polars' `null_values` would otherwise convert to
+            # None before iter_dataframe_chunks's `fill_null("NA")` restores it.
             "gnomad_freqs": [
-                [{"AF": 0.10, "AC": 10}, {"AF": 0.0, "AC": 0}],
+                [{"AF": 0.10, "AC": 10}, {"AF": None, "AC": 0}],
             ],
             "all_pop_freqs": [
                 {
@@ -122,7 +130,14 @@ def test_export_sequences_table_to_tsv_per_pop_columns(
 
     export_sequences_table_to_tsv(ht=ht, out_file=out_file, joint_pops_legend=joint_pops_legend)
 
-    df = polars.read_csv(out_file, separator="\t", null_values=["NA", "null"])
+    # Read via the production loader so the writer + reader pipeline is end-to-end validated
+    # (in particular, the `fill_null("NA")` step that restores bare-"NA" cells after polars'
+    # `null_values` coercion).
+    chunks = list(
+        iter_dataframe_chunks(tsv=out_file, joint_pops_legend=joint_pops_legend, chunk_size=10)
+    )
+    assert len(chunks) == 1
+    df = chunks[0]
 
     # Renamed scalar columns are present; pre-rename names are gone.
     assert "popmax_estimated_gnomad_AF" in df.columns
@@ -139,33 +154,39 @@ def test_export_sequences_table_to_tsv_per_pop_columns(
             "empirical_AC",
             "empirical_AF",
             "fraction_phased",
-            "estimated_gnomad_AF",
+            "estimated_gnomAD_haplotype_AF",
         ):
             assert f"{field}_{pop}" in df.columns
 
     # gnomAD_AF_{pop} columns still emitted (comma-delimited per-variant strings).
     assert df["gnomAD_AF_afr"][0] == "0.05000,0.07000"
-    assert df["gnomAD_AF_amr"][0] == "0.04000,0.05000"
+    # Variant 0 has an amr AF, variant 1 does not: the cell preserves both elements as a
+    # comma-delimited string rather than collapsing the whole array to a single "NA".
+    assert df["gnomAD_AF_amr"][0] == "0.04000,NA"
+    # Row 1 has a missing amr AF on its single variant: the writer emits a bare "NA" cell,
+    # polars' null_values turns that into None, and iter_dataframe_chunks restores "NA".
+    assert df["gnomAD_AF_afr"][1] == "0.10000"
+    assert df["gnomAD_AF_amr"][1] == "NA"
 
     # Row 0: both pops have data.
     assert df["empirical_AC_afr"][0] == 42
     assert df["empirical_AF_afr"][0] == pytest.approx(0.42)
     assert df["fraction_phased_afr"][0] == pytest.approx(1.40)
-    assert df["estimated_gnomad_AF_afr"][0] == pytest.approx(0.07)
+    assert df["estimated_gnomAD_haplotype_AF_afr"][0] == pytest.approx(0.07)
     assert df["empirical_AC_amr"][0] == 19
     assert df["empirical_AF_amr"][0] == pytest.approx(0.38)
     assert df["fraction_phased_amr"][0] == pytest.approx(1.52)
-    assert df["estimated_gnomad_AF_amr"][0] == pytest.approx(0.05)
+    assert df["estimated_gnomAD_haplotype_AF_amr"][0] == pytest.approx(0.05)
 
     # Row 1: only pop 0 present in all_pop_freqs; pop 1's flat columns must be null.
     assert df["empirical_AC_afr"][1] == 5
     assert df["empirical_AF_afr"][1] == pytest.approx(0.10)
     assert df["fraction_phased_afr"][1] == pytest.approx(1.0)
-    assert df["estimated_gnomad_AF_afr"][1] == pytest.approx(0.10)
+    assert df["estimated_gnomAD_haplotype_AF_afr"][1] == pytest.approx(0.10)
     assert df["empirical_AC_amr"][1] is None
     assert df["empirical_AF_amr"][1] is None
     assert df["fraction_phased_amr"][1] is None
-    assert df["estimated_gnomad_AF_amr"][1] is None
+    assert df["estimated_gnomAD_haplotype_AF_amr"][1] is None
 
     # Scalar `popmax_*` columns match the max_pop entry (pop 0 in both rows).
     assert df["popmax_empirical_AF"][0] == pytest.approx(0.42)
