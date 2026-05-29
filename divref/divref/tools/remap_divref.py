@@ -103,8 +103,15 @@ class Haplotype(BaseModel):
             Haplotype instance with `gnomad_afs` and `estimated_gnomad_af_per_pop` populated
             from the per-pop columns.
         """
+        # A NULL value in the DuckDB column (e.g. `gnomAD_AF_mid` on an HGDP_haplotype row
+        # whose HGDP source legend doesn't include the joint pop) reads through polars as
+        # `None`. Substitute a comma-delimited string of `NA` tokens matching the haplotype's
+        # variant count so `_parse_pop_freqs` produces a list-of-zeros of the right length.
+        n_variants = int(row["n_variants"])
+        missing_freqs = ",".join(["NA"] * n_variants)
         gnomad_afs: dict[str, str] = {
-            pop: row[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] for pop in pops_legend
+            pop: (row[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] or missing_freqs)
+            for pop in pops_legend
         }
         estimated_gnomad_af_per_pop: dict[str, Optional[float]] = {
             pop: row[f"{_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX}{pop}"] for pop in pops_legend
