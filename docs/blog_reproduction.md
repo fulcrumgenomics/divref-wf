@@ -14,7 +14,7 @@ Produced by:
 
 ```bash
 pixi run snakemake \
-    -j 1
+    -j 1 \
     -s workflows/generate_divref.smk \
     --configfile workflows/config/config_gcs.yml \
     --config 'chromosomes=["chr22"]'
@@ -38,7 +38,7 @@ The standard workflow filters out the six original-only haplotypes the blog insp
 Reproduce the intermediates with a direct `divref compute-haplotypes` invocation that uses a lower threshold and writes outside `data/work/`:
 
 ```bash
-mkdir -p data/analysis/compute_haplotypes/test_data_new_low_af
+mkdir -p data/analysis/compute_haplotypes/test_data_new_low_af logs
 pixi run divref compute-haplotypes \
     --vcfs-path data/work/inputs/hgdp_1kg.phased_genotypes.chr22.vcf.gz \
     --gnomad-va-file data/work/inputs/hgdp_1kg.sites.chr22.ht \
@@ -47,7 +47,8 @@ pixi run divref compute-haplotypes \
     --variant-freq-threshold 0.005 \
     --haplotype-freq-threshold 0.002 \
     --output-base data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22 \
-    --spark-driver-memory-gb 16 --spark-executor-memory-gb 16
+    --spark-driver-memory-gb 16 --spark-executor-memory-gb 16 \
+    &> logs/compute_haplotypes.chr22.low_af.log
 ```
 
 Produces:
