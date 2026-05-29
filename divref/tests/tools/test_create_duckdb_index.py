@@ -139,7 +139,7 @@ def test_export_sequences_table_to_tsv_per_pop_columns(
             "empirical_AC",
             "empirical_AF",
             "fraction_phased",
-            "estimated_gnomad_AF",
+            "estimated_gnomAD_haplotype_AF",
         ):
             assert f"{field}_{pop}" in df.columns
 
@@ -151,21 +151,21 @@ def test_export_sequences_table_to_tsv_per_pop_columns(
     assert df["empirical_AC_afr"][0] == 42
     assert df["empirical_AF_afr"][0] == pytest.approx(0.42)
     assert df["fraction_phased_afr"][0] == pytest.approx(1.40)
-    assert df["estimated_gnomad_AF_afr"][0] == pytest.approx(0.07)
+    assert df["estimated_gnomAD_haplotype_AF_afr"][0] == pytest.approx(0.07)
     assert df["empirical_AC_amr"][0] == 19
     assert df["empirical_AF_amr"][0] == pytest.approx(0.38)
     assert df["fraction_phased_amr"][0] == pytest.approx(1.52)
-    assert df["estimated_gnomad_AF_amr"][0] == pytest.approx(0.05)
+    assert df["estimated_gnomAD_haplotype_AF_amr"][0] == pytest.approx(0.05)
 
     # Row 1: only pop 0 present in all_pop_freqs; pop 1's flat columns must be null.
     assert df["empirical_AC_afr"][1] == 5
     assert df["empirical_AF_afr"][1] == pytest.approx(0.10)
     assert df["fraction_phased_afr"][1] == pytest.approx(1.0)
-    assert df["estimated_gnomad_AF_afr"][1] == pytest.approx(0.10)
+    assert df["estimated_gnomAD_haplotype_AF_afr"][1] == pytest.approx(0.10)
     assert df["empirical_AC_amr"][1] is None
     assert df["empirical_AF_amr"][1] is None
     assert df["fraction_phased_amr"][1] is None
-    assert df["estimated_gnomad_AF_amr"][1] is None
+    assert df["estimated_gnomAD_haplotype_AF_amr"][1] is None
 
     # Scalar `popmax_*` columns match the max_pop entry (pop 0 in both rows).
     assert df["popmax_empirical_AF"][0] == pytest.approx(0.42)

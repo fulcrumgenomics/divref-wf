@@ -347,9 +347,9 @@ def test_from_row_splits_per_pop_columns() -> None:
         "gnomAD_AF_afr": "0.5",
         "gnomAD_AF_amr": "0.3",
         "gnomAD_AF_eas": "NA",
-        "estimated_gnomad_AF_afr": 0.5,
-        "estimated_gnomad_AF_amr": 0.3,
-        "estimated_gnomad_AF_eas": None,
+        "estimated_gnomAD_haplotype_AF_afr": 0.5,
+        "estimated_gnomAD_haplotype_AF_amr": 0.3,
+        "estimated_gnomAD_haplotype_AF_eas": None,
     }
     hap = Haplotype.from_row(row, pops_legend)
     assert hap.gnomad_afs == {"afr": "0.5", "amr": "0.3", "eas": "NA"}
