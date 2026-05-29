@@ -82,6 +82,9 @@ rule extract_gnomad_single_afs:
         contig=CONTIG,
         freq_threshold=FREQUENCY_THRESHOLD,
         gnomad_version=lambda wildcards: wildcards.gnomad_version.upper(),
+        gcs_credentials_path="~/.config/gcloud/application_default_credentials.json",
+        spark_driver_memory_gb=16,
+        spark_executor_memory_gb=16,
     shell:
         """
         (
@@ -89,7 +92,10 @@ rule extract_gnomad_single_afs:
                 --contig {params.contig} \
                 --freq-threshold {params.freq_threshold} \
                 --gnomad-version {params.gnomad_version} \
-                --out-sites-tsv {output.tsv}
+                --out-sites-tsv {output.tsv} \
+                --gcs-credentials-path '{params.gcs_credentials_path}' \
+                --spark-driver-memory-gb {params.spark_driver_memory_gb} \
+                --spark-executor-memory-gb {params.spark_executor_memory_gb}
         ) &> {log}
         """
 
