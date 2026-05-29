@@ -138,8 +138,8 @@ Comparing the two algorithms on chr22 (≥0.5% for at least one per-population A
 ![chr22 haplotype overlap between the original and new algorithms: 29,548 shared, 1,333 original-only, 1,680 new-only](../data/analysis/compute_haplotypes/algo_comparison.venn.png)
 
 1,327 of the 1,333 original-only haplotypes are proper contiguous sub-fragments of some new haplotype with identical per-population AC vectors.
-For 1,197 of those, both algorithms find the longer fragment, but only the new recognises the short one as redundant.
-For the remaining 130 sub-fragments, the original algorithm emitted the short fragment but never accumulated enough AC for the longer haplotype to pass the AF filter, while the new algorithm's containment counting correctly credited the longer fragment with carriers from every parent block in which it appears.
+For 1,242 of those, both algorithms find the longer fragment, but only the new recognises the short one as redundant.
+For the remaining 85 sub-fragments, the original algorithm emitted the short fragment but never accumulated enough AC for the longer haplotype to pass the AF filter, while the new algorithm's containment counting correctly credited the longer fragment with carriers from every parent block in which it appears.
 
 Of the 1,680 new-only haplotypes, 1,590 contain only variants the original already emitted in some other haplotype, 54 mix shared and novel variants, and 36 are entirely novel.
 Most (21) of those 36 are 2 variant haplotypes, one contains 8.
@@ -185,18 +185,6 @@ The new algorithm computes `min(hgdp_1kg_AF[v, max_pop])` on the sub-haplotype's
 The new single-pass containment counting redistributes `hgdp_1kg_haplotype_AC[p]` across populations differently from the original's per-bin tuple aggregation.
 Containment AC includes chromosomes from longer parent blocks where the haplotype appears as a contiguous sub-fragment, not just chromosomes whose exact bin tuple is the haplotype.
 In cases 2, 3, and 6 the redistribution moves `max_pop` to a population with a larger sample size (and therefore larger `hgdp_1kg_AN[v, max_pop]`), which lowers `hgdp_1kg_haplotype_AF[max_pop]` for the same `AC` and pulls `est AF` below 0.005.
-
-Case 6 is the lone example of the contiguous-only rule mattering for emission.
-Across all 8,182 chromosomes:
-
-| chromosomes | 24626868 | 24626884 | 24626892 | parent block formed in new |
-|---:|:---:|:---:|:---:|---|
-| 84 | alt | alt | alt | `(v1, v2, v3)`, contiguous |
-| 45 | alt | ref | alt | `(v1, v3)`, pure (no alt between) |
-| 2  | alt | ref | alt | `(v1, i1, v3)`, also alt at intermediate `i1=24626883` |
-| 37 | alt | ref | ref | singleton `v1`, dropped (length < 2) |
-
-Containment counting gives `(v1, v3)` only the 45 pure carriers (plus a few more from longer parent blocks where `(v1, v3)` is adjacency-contiguous); the 84 `(v1, v2, v3)` carriers don't contribute, because `(v1, v3)` isn't a contiguous sub-fragment of `(v1, v2, v3)`.
 
 ### AC counts
 
