@@ -573,6 +573,15 @@ def iter_dataframe_chunks(
         schema_overrides=schema_overrides,
         null_values=["NA", "null"],
     )
+    # `null_values` applies globally and can convert a bare "NA" cell to null even though
+    # the column is declared as String in `schema_overrides`. Restore "NA" so downstream
+    # consumers (e.g. `remap_divref.Haplotype`, which types `gnomad_afs` as `dict[str, str]`)
+    # always see a string. This matters mostly for single-variant rows where the per-pop
+    # cell can degenerate to a bare "NA".
+    lf = lf.with_columns([
+        polars.col(f"gnomAD_AF_{pop}").fill_null("NA").cast(polars.String)
+        for pop in joint_pops_legend
+    ])
     for df in lf.collect_batches(chunk_size=chunk_size):
         if df.height > 0:
             yield df
