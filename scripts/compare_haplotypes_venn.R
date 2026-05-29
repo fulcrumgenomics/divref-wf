@@ -17,9 +17,9 @@ out_path <- file.path(out_dir, "algo_comparison.venn.png")
 
 # Counts from compare_haplotypes.py on chr22 fixtures
 venn_counts <- c(
-  "Original" = 2616,
-  "New" = 1871,
-  "Original&New" = 28265
+  "Original" = 1333,
+  "New" = 1680,
+  "Original&New" = 29548
 )
 
 fit <- euler(venn_counts)
