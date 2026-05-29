@@ -4,9 +4,11 @@ from inspect import signature
 from pathlib import Path
 from typing import Any
 
+import hail as hl
 import pytest
 
 from divref.tools.extract_gnomad_single_afs import _GNOMAD_TABLE_URI
+from divref.tools.extract_gnomad_single_afs import _apply_filters
 from divref.tools.extract_gnomad_single_afs import GnomadCloud
 from divref.tools.extract_gnomad_single_afs import GnomadVersion
 from divref.tools.extract_gnomad_single_afs import extract_gnomad_single_afs
@@ -123,6 +125,52 @@ def test_extract_gnomad_single_afs_dispatches_to_correct_cloud(
     assert captured["use_s3"] is expected_use_s3
     assert captured["uri"].startswith(expected_prefix)
     assert captured["uri"].endswith("release/4.1/ht/joint/gnomad.joint.v4.1.sites.ht")
+
+
+def _make_joint41_filter_ht(
+    rows: list[tuple[int, list[str] | None, list[str] | None]],
+) -> hl.Table:
+    """
+    Build a synthetic JOINT_41-shaped Hail table for `_apply_filters` testing.
+
+    Each input row is `(position, exomes_filters, genomes_filters)`. A `None` filter list
+    encodes a missing filter set (the `hl.coalesce(..., True)` branch in `_apply_filters`,
+    which should be treated as passing). A list (possibly empty) encodes a present filter set.
+    """
+    schema = hl.tstruct(
+        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32),
+        alleles=hl.tarray(hl.tstr),
+        exomes=hl.tstruct(filters=hl.tarray(hl.tstr)),
+        genomes=hl.tstruct(filters=hl.tarray(hl.tstr)),
+    )
+    table_rows = []
+    for pos, exome_filters, genome_filters in rows:
+        table_rows.append({
+            "locus": {"contig": "chr22", "position": pos},
+            "alleles": ["A", "T"],
+            "exomes": {"filters": exome_filters},
+            "genomes": {"filters": genome_filters},
+        })
+    return hl.Table.parallelize(table_rows, schema=schema)
+
+
+def test_apply_filters_joint41_keeps_only_variants_passing_both(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """JOINT_41 filter requires both exome and genome filter sets to be empty (or missing)."""
+    ht = _make_joint41_filter_ht([
+        (100, [], []),  # both empty → kept
+        (200, [], ["AC0"]),  # exome empty, genome non-empty → dropped
+        (300, ["AC0"], []),  # exome non-empty, genome empty → dropped
+        (400, ["AC0"], ["AC0"]),  # both non-empty → dropped
+        (500, None, []),  # exome missing, genome empty → kept (missing coalesces to pass)
+        (600, [], None),  # exome empty, genome missing → kept
+        (700, None, None),  # both missing → kept
+        (800, ["AC0"], None),  # exome non-empty, genome missing → dropped (exome fails)
+    ])
+
+    survivors = sorted(r.locus.position for r in _apply_filters(ht, GnomadVersion.JOINT_41).collect())
+    assert survivors == [100, 500, 600, 700]
 
 
 def test_extract_gnomad_single_afs_propagates_hail_init_failure(

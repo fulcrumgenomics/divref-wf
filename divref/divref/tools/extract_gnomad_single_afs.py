@@ -103,9 +103,9 @@ def _apply_filters(va: hl.Table, gnomad_version: GnomadVersion) -> hl.Table:
     """
     Apply gnomAD variant filters, keeping only variants that pass all filters.
 
-    For gnomAD 4.1 joint, exome and genome filter sets are maintained separately and are
-    unioned after filtering. For gnomAD 3.1.2 tables, a single filter set is used.
-    Entries with missing filter sets are treated as passing.
+    For gnomAD 4.1 joint, exome and genome filter sets are maintained separately; a variant is
+    kept only when both pass (the filter set is empty in each). For gnomAD 3.1.2 tables, a
+    single filter set is used. Entries with missing filter sets are treated as passing.
 
     Args:
         va: gnomAD sites Hail table filtered to a single contig.
@@ -115,9 +115,10 @@ def _apply_filters(va: hl.Table, gnomad_version: GnomadVersion) -> hl.Table:
         Filtered Hail table.
     """
     if gnomad_version is GnomadVersion.JOINT_41:
-        va_exome = va.filter(hl.coalesce(hl.len(va.exomes.filters) == 0, True))
-        va_genome = va.filter(hl.coalesce(hl.len(va.genomes.filters) == 0, True))
-        return va_exome.union(va_genome).distinct()
+        return va.filter(
+            hl.coalesce(hl.len(va.exomes.filters) == 0, True)
+            & hl.coalesce(hl.len(va.genomes.filters) == 0, True)
+        )
     else:
         return va.filter(hl.coalesce(hl.len(va.filters) == 0, True))
 
