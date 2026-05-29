@@ -25,6 +25,8 @@ I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workf
 | `sequence_window_size` | 25 | Flanking reference context length around each variant/haplotype |
 | `chromosomes` | chr1..chr22, chrX, chrY | Iterate on a subset during development |
 
+The actual config schema separates the HGDP+1KG-derived and gnomAD-derived parameters (see [`workflows/config/config_schema.yml`](../workflows/config/config_schema.yml) for the exact names).
+
 ## DivRef 1.1 doesn't contain gnomAD 4.1 variants
 
 The published bundle README states that DivRef's HGDP+1KG-derived haplotypes are "merged with the common variants in the gnomAD 4.1 release".
