@@ -36,11 +36,30 @@ To verify this, I compared the DivRef 1.1 gnomAD variant sites on chr22 from the
 |---|---:|---:|---:|---:|
 | 3.1.2 HGDP+1KG subset (4K) | 506,983 | 506,983 | 0 | 0 |
 | 3.1.2 genomes (76K) | 511,006 | 506,983 | 0 | 4,023 |
-| 4.1 joint (76K genomes, 730K exomes) | 602,166 | 504,879 | 2,104 | 97,287 |
+| 4.1 joint (76K genomes, 730K exomes) | 497,031 | 490,931 | 16,052 | 6,100 |
 
-It's clear from this that the 3.1.2 HGDP+1KG row matches exactly: every DivRef single-variant entry traces back to the v3.1.2 HGDP+1KG subset.
-Against gnomAD v4.1 joint, DivRef is missing ~97K chr22 variants above the 0.5% threshold.
-Extrapolated across the genome, that's >2 million common variants absent from the resource for these 5 populations.
+The 3.1.2 HGDP+1KG row matches exactly: every DivRef single-variant entry traces back to the v3.1.2 HGDP+1KG subset.
+The 3.1.2 genomes row adds ~4K chr22 variants which are common in the broader 76K-genome cohort.
+
+For v4.1 joint, I keep variants with genome filter `PASS` and exome filter `PASS` or only `AC0`.
+The `AC0` flag is gnomAD's "no sample had a high-quality genotype" filter.
+On the v4.1 exome track, `AC0` almost always means the position is outside the exome capture footprint rather than that exome data exists and is low quality (looking up the `AC0`-failing variants from a strict-intersection extract shows median exome `AN` = 34 of a possible ~1.46M for a fully called site).
+Treating "exome `PASS` or `AC0`-only" as passing on the exome side retains good genome-supported variants that would otherwise be discarded for purely coverage reasons.
+
+16,052 chr22 variants in DivRef 1.1 are not in v4.1 joint above the 0.5% threshold:
+
+| Bucket | Count | % of 16,052 |
+|---|---:|---:|
+| Fails v4.1 genome filter, passes exome | 9,072 | 56.5% |
+| Fails v4.1 exome filter (not AC0-only), passes genome | 4,876 | 30.4% |
+| `max(pop_AF) < 0.005` in v4.1 | 1,629 | 10.1% |
+| Fails both v4.1 filter sets | 467 | 2.9% |
+| Absent from v4.1 callset entirely | 8 | < 0.1% |
+
+Most of the missing variants (89.9%) pass only one or neither of v4.1's two filter sets, or are simply not called at all.
+The remaining 10.1% fall below the AF filter in the larger dataset.
+A smaller set of ~6K variants are more common in v4.1 joint and now pass the 0.5% threshold.
+Extrapolating to the whole genome, I estimate ~420K v4.1 common variants absent from DivRef 1.1 for these 5 populations, and ~1.1M DivRef variants that v4.1's filter sets no longer consider high enough quality or high enough AF to include.
 
 ## Improving haplotype computation
 

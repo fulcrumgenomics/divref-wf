@@ -87,6 +87,68 @@ Row mapping:
 | 3.1.2 genomes (76K) | `chr22.genomes_312.log` |
 | 4.1 joint (76K genomes, 730K exomes) | `chr22.joint_41.log` |
 
+### Why DivRef-only variants are missing from gnomAD v4.1 joint
+
+The blog's narrative attributes the 28K DivRef-only variants under v4.1 joint to a combination of filter-set mismatches, sub-threshold AFs in v4.1, and outright absence from the v4.1 callset.
+To produce the breakdown, `scripts/explain_divref_only_v41.py` looks each of the 28K up in the v4.1 joint sites Hail table and bins by reason.
+
+**Command**:
+
+```bash
+pixi run python scripts/explain_divref_only_v41.py \
+    --variants-tsv data/analysis/compare_divref_gnomad/chr22.joint_41.divref_not_in_gnomad.tsv \
+    &> logs/explain_divref_only_v41.chr22.log
+```
+
+Stdout reports five mutually exclusive buckets used in the blog table:
+
+| Bucket | Definition |
+|---|---|
+| `absent_from_v41` | variant not in the v4.1 joint sites HT at all |
+| `below_af_threshold` | in HT but `max(AF over 5 pops) < 0.005` (regardless of filter sets) |
+| `exome_filter_only` | in HT, AF >= 0.005, `exomes.filters` non-empty, `genomes.filters` empty |
+| `genome_filter_only` | in HT, AF >= 0.005, `exomes.filters` empty, `genomes.filters` non-empty |
+| `both_filters_nonempty` | in HT, AF >= 0.005, both filter sets non-empty |
+
+A sixth `unexpected_pass` bucket would catch variants that pass both v4.1 filter sets and have AF >= 0.005 in the 5 selected pops yet still landed in the input list (i.e., a workflow-extract inconsistency).
+Empirically this is 0 for the chr22 chr22.joint_41 run, so the bucket is left empty; it acts as a sanity check that the comparison workflow's extract and this script agree on the AF-threshold + PASS-in-both decision.
+
+> **Note on freq_meta index lookup.** The v4.1 joint `joint_globals.freq_meta` contains multiple `{group: "adj", gen_anc: <pop>}` entries — one primary entry per population *plus* additional entries with extra keys (e.g. `downsampling`) for restricted slices.
+> An earlier version of this script matched any entry with `group == "adj"` and `gen_anc in selected_pops` and `"subset" not in meta`, which silently picked up `downsampling` entries and overwrote the primary index in the per-pop map.
+> The result was inflated per-pop AFs (off by a percent or two), which pushed a few hundred variants whose true AF was just below 0.005 into the wrong buckets.
+> The fix is to require an exact `{group, gen_anc}` key match (`dict(meta) == {"group": "adj", "gen_anc": pop}`) rather than excluding individual extra keys.
+> If you adapt this script to a different gnomAD release, audit the freq_meta entries first and verify the resolved indices against `hl.eval(ht.joint_globals.freq_index_dict)` if available.
+
+### Whole-genome extrapolation
+
+The blog's whole-genome extrapolations from the chr22 counts use an empirical multiplier of **68.14x**, derived from DivRef 1.1's own DuckDB index:
+
+```bash
+pixi run duckdb -readonly data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb -c "
+SELECT
+  COUNT(*) AS total_gnomad_variant_rows,
+  SUM(CASE WHEN contig = 'chr22' THEN 1 ELSE 0 END) AS chr22_rows,
+  CAST(COUNT(*) AS DOUBLE) / SUM(CASE WHEN contig = 'chr22' THEN 1 ELSE 0 END) AS genome_to_chr22_ratio
+FROM sequences
+WHERE source = 'gnomAD_variant';
+"
+```
+
+For DivRef 1.1, that's 34,547,958 / 506,983 = 68.14.
+This is preferred over a raw chromosome-length ratio (chr22 is ~1.6% of the genome by length, giving ~62x) because chr22 is gene-dense and over-represented in common-variant counts; the empirical figure derived from real common-variant rows is the most defensible multiplier.
+
+For the four non-absent buckets, the script also prints (a) the top distinct `(exomes.filters, genomes.filters)` combinations and (b) per-population AF quantiles (min, p10, median, p90, max across the 5 selected pops).
+For the subset of AC0-failing variants (exome filter contains `AC0`, genome filter empty), the script additionally prints the distribution of `exomes.freq[adj].AN` (number of called alleles in the 730K-exome cohort) to distinguish "outside exome capture" from "in capture but quality failure".
+This AC0 sub-analysis is not used in the current blog draft since AC0-failing variants are excluded from the official gnomAD 4.1 PASS set by construction, but the report is left in place for future investigations.
+
+A per-variant TSV is written alongside the input as `data/analysis/compare_divref_gnomad/chr22.joint_41.divref_not_in_gnomad.explained.tsv` with columns:
+
+```
+variant  bucket  max_pop_af  AF_afr  AF_amr  AF_eas  AF_sas  AF_nfe  exomes_filters  genomes_filters  exomes_AC  exomes_AN
+```
+
+so the breakdown can be inspected row-by-row without re-querying Hail.
+
 ## Section: "Comparing against the original algorithm"
 
 ### Venn figure (blog line 119)
