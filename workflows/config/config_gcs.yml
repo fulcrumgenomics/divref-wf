@@ -1,4 +1,3 @@
-version: "0.1-dev"
 cloud: "GCS"
 
 # Explicit GCS sources for all cloud inputs.
