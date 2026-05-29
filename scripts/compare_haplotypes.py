@@ -24,9 +24,7 @@ import hail as hl
 DEFAULT_OLD_DUCKDB = (
     "data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb"
 )
-DEFAULT_NEW_HT = (
-    "data/analysis/compute_haplotypes/test_data_new/hgdp_1kg.haplotypes.chr22.ht"
-)
+DEFAULT_NEW_HT = "data/work/haplotypes/hgdp_1kg.haplotypes.chr22.ht"
 CONTIG = "chr22"
 SUMMARY_TSV = Path("data/analysis/compute_haplotypes/algo_comparison.summary.tsv")
 

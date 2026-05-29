@@ -5,38 +5,32 @@ The aim is that someone running the workflows on their own machine can verify ea
 
 ## Prerequisite data fixtures
 
-The blog draws on three independent sets of pre-computed Hail / DuckDB artefacts.
+The blog draws on two independent sets of pre-computed Hail / DuckDB artefacts.
 All paths in this document are relative to the repository root.
 
 ### From the main `generate_divref` workflow (chr22 standard run)
 
-Produced by `pixi run snakemake -s workflows/generate_divref.smk` with the default config:
-
-- `data/work/inputs/hgdp_1kg.phased_genotypes.chr22.vcf.gz`
-- `data/work/inputs/hgdp_1kg.sites.chr22.ht`
-- `data/work/inputs/hgdp_1kg.sample_metadata.ht`
-- `data/work/haplotypes/hgdp_1kg.haplotypes.chr22.ht`
-
-### From the new algorithm chr22 rebuild
-
-Produced by a direct `divref compute-haplotypes` invocation at the production 0.005 haplotype threshold, reusing the standard workflow's chr22 inputs:
+Produced by:
 
 ```bash
-mkdir -p data/analysis/compute_haplotypes/test_data_new
-pixi run divref compute-haplotypes \
-    --vcfs-path data/work/inputs/hgdp_1kg.phased_genotypes.chr22.vcf.gz \
-    --gnomad-va-file data/work/inputs/hgdp_1kg.sites.chr22.ht \
-    --gnomad-sa-file data/work/inputs/hgdp_1kg.sample_metadata.ht \
-    --window-size 25 \
-    --variant-freq-threshold 0.005 \
-    --haplotype-freq-threshold 0.005 \
-    --output-base data/analysis/compute_haplotypes/test_data_new/hgdp_1kg.haplotypes.chr22 \
-    --spark-driver-memory-gb 16 --spark-executor-memory-gb 16
+pixi run snakemake \
+    -j 1
+    -s workflows/generate_divref.smk \
+    --configfile workflows/config/config_gcs.yml \
+    --config 'chromosomes=["chr22"]'
 ```
 
-Produces:
+Outputs:
 
-- `data/analysis/compute_haplotypes/test_data_new/hgdp_1kg.haplotypes.chr22.ht`
+- `data/work/inputs/hgdp_1kg.phased_genotypes.chr22.vcf.gz` (+ `.tbi` index)
+- `data/work/inputs/hgdp_1kg.sites.chr22.ht` (HGDP+1KG per-pop AFs)
+- `data/work/inputs/hgdp_1kg.sample_metadata.ht`
+- `data/work/inputs/gnomad.sites.chr22.ht` (gnomAD single-variant track for the DuckDB build)
+- `data/work/inputs/Homo_sapiens_assembly38.fasta` (+ `.fai` index)
+- `data/work/inputs/table_pairs.tsv`
+- `data/work/haplotypes/hgdp_1kg.haplotypes.chr22.ht` (new algorithm haplotype output)
+- `data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb` (final DivRef-style DuckDB)
+- `data/work/output/hgdp_1kg.haplotypes_gnomad_merge.chr22.fasta` (per-chromosome FASTA)
 
 ### From the low-haplotype-AF rebuild (for the six-case deep dive only)
 
@@ -70,7 +64,7 @@ The 3 by 4 table at blog lines 35-39.
 **Command**:
 
 ```bash
-pixi run snakemake -s workflows/compare_divref_gnomad.smk --cores N
+pixi run snakemake -j1 -s workflows/compare_divref_gnomad.smk
 ```
 
 For each `gnomad_version` in `{hgdp_1kg_312, genomes_312, joint_41}` the workflow produces a TSV of all gnomAD variants on chr22 above the 0.5% threshold, runs the R comparator against the DivRef 1.1 single-variant track, and writes a log file.
@@ -79,7 +73,7 @@ The blog's columns map to log/TSV values as follows.
 
 | Blog column | Source |
 |---|---|
-| gnomAD variants | `wc -l < data/analysis/compare_divref_gnomad_0_005/chr22.<v>.tsv` minus the header row (equivalently the `Loaded N gnomAD variants for chr22` line in `chr22.<v>.log`) |
+| gnomAD variants | `wc -l < data/analysis/compare_divref_gnomad/chr22.<v>.tsv` minus the header row (equivalently the `Loaded N gnomAD variants for chr22` line in `chr22.<v>.log`) |
 | In DivRef 1.1 | `N DivRef variants found in gnomAD` in `chr22.<v>.log` |
 | DivRef 1.1-only | `N DivRef variants not found in gnomAD` in `chr22.<v>.log` |
 | gnomAD-only | "gnomAD variants" column minus "In DivRef 1.1"; also written as `n_gnomad_only` on the `N gnomAD variants not found in DivRef` log line |

@@ -10,7 +10,7 @@ from pathlib import Path
 ####################################################################################################
 
 OUTPUT_DIR: Path = Path("data/analysis")
-COMPARISON_NAME: str = "compare_divref_gnomad_0_005"
+COMPARISON_NAME: str = "compare_divref_gnomad"
 CONTIG: str = "chr22"
 FREQUENCY_THRESHOLD: float = 0.005
 DIVREF_DUCKDB_URL: str = (
