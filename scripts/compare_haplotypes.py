@@ -476,13 +476,26 @@ for k in tier2_filterable:
         continue
     per_pop_mins_absent = [min(afs[p] for afs in component_afs) for p in range(n_pops)]
     max_pop_min_absent = max(per_pop_mins_absent)
-    # Use the same implied fraction_phased that explained the full-haplotype
-    # est_af, and apply it to the reduced-variant-set lower bound. This is an
-    # upper-bound estimate on what the reduced haplotype's est_af could be —
-    # the true value for the reduced haplotype, computed end-to-end, can only
-    # be lower because the empirical_AC over a subset of variants is ≤ the
-    # original.
-    fp = old_est_af[k] / max_pop_min_absent if max_pop_min_absent > 0 else 0.0
+    # Look up the full haplotype's component AFs to recover the implied
+    # fraction_phased that produced the original est_af: fp = old_est_af /
+    # max_pop_min_full. Apply that fp to the reduced-variant-set max_pop_min
+    # to get an upper-bound on the reduced haplotype's est_af. The true
+    # end-to-end value can only be lower because the empirical AC over a
+    # subset of variants is ≤ the original.
+    full_component_afs: list[list[float]] = []
+    full_missing = False
+    for v in k:
+        key = (v[1], v[2][0], v[2][1])
+        if key not in sites_map:
+            full_missing = True
+            break
+        full_component_afs.append(sites_map[key])
+    if full_missing:
+        tier2_missing_sites += 1
+        continue
+    per_pop_mins_full = [min(afs[p] for afs in full_component_afs) for p in range(n_pops)]
+    max_pop_min_full = max(per_pop_mins_full)
+    fp = old_est_af[k] / max_pop_min_full if max_pop_min_full > 0 else 0.0
     reduced_full_est_af = fp * max_pop_min_absent
     reduced_halved_est_af = reduced_full_est_af / 2
     tier2_reduced_results.append((

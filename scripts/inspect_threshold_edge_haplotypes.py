@@ -56,14 +56,14 @@ def main() -> None:
     ht_variants = hl.read_table(f"{BASE}.variants.ht")
     ht_hap_ac = hl.read_table(f"{BASE}.hap_ac.ht")
     ht_parents = hl.read_table(f"{BASE}.parents.ht")
-    try:
+    if hl.hadoop_exists(f"{BASE}.ht"):
         ht_final = hl.read_table(f"{BASE}.ht")
-    except Exception:
+    else:
         ht_final = None
 
-    try:
+    if hl.hadoop_exists(GNOMAD_AFS_HT_FALLBACK):
         pops_legend = hl.read_table(GNOMAD_AFS_HT_FALLBACK).globals.pops.collect()[0]
-    except Exception:
+    else:
         pops_legend = ht_variants.globals.pops.collect()[0]
     print(f"pops legend: {pops_legend}")
     n_pops = len(pops_legend)

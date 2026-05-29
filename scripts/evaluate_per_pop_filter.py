@@ -22,6 +22,7 @@ Outputs (stdout):
 """
 
 import argparse
+import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -169,6 +170,13 @@ keys = set(new_data.keys())
 scalar_pass = {k for k in keys if passes_scalar(new_data[k])}
 
 divref_pop_indices = {i for i, p in enumerate(pops_legend) if p in DIVREF_POPS}
+missing_pops = [p for p in DIVREF_POPS if p not in pops_legend]
+if missing_pops:
+    warnings.warn(
+        f"--divref-pops requested populations not present in pops_legend "
+        f"(silently dropped): {sorted(missing_pops)}. Available pops: {sorted(pops_legend)}",
+        stacklevel=2,
+    )
 all_pop_indices = set(range(len(pops_legend)))
 per_pop_divref_pass = {k for k in keys if passes_per_pop(new_data[k], divref_pop_indices)}
 per_pop_all_pass = {k for k in keys if passes_per_pop(new_data[k], all_pop_indices)}
@@ -253,6 +261,8 @@ for i, k in enumerate(rescued_sorted[:N_EXAMPLES]):
     in_old = "in original DuckDB" if k in old_keys else "genuinely new"
     print(f"\nrescued example #{i + 1} ({in_old}):")
     print(f"  variants: [{', '.join(fmt_variant(v) for v in k)}]")
-    print(f"  scalar est_af: {d['scalar_est_af']:.4g}")
+    scalar_est_af = d['scalar_est_af']
+    scalar_est_af_str = f"{scalar_est_af:.4g}" if scalar_est_af is not None else "NA"
+    print(f"  scalar est_af: {scalar_est_af_str}")
     print(f"  per-pop est_af: {by_pop_str}")
     print(f"  AC (max pop): {d['max_empirical_AC']}")

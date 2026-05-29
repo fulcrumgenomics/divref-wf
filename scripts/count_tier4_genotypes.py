@@ -71,6 +71,7 @@ rows = mt.entries().select("locus", "pop", "left", "right").collect()
 
 # Aggregate: for each (sample, strand), one chromosome.
 # combo[v_name] = 0 (ref) or 1 (alt)
+import itertools
 from collections import Counter, defaultdict
 
 per_chrom_combos: dict[tuple[str, int], dict[str, int]] = defaultdict(dict)
@@ -108,7 +109,8 @@ print()
 print(f"{'v1':>5} {'v2':>5} {'v3':>5}   total  " + "  ".join(
     f"{p:>5}" for p in sorted(DIVREF_POPS)
 ))
-for k in sorted(combo_counts_overall, key=combo_counts_overall.get, reverse=True):
+all_combos = list(itertools.product([0, 1], repeat=3))
+for k in sorted(all_combos, key=lambda c: combo_counts_overall.get(c, 0), reverse=True):
     cells = "  ".join(
         f"{combo_counts_per_pop[p].get(k, 0):>5}" for p in sorted(DIVREF_POPS)
     )
@@ -116,7 +118,7 @@ for k in sorted(combo_counts_overall, key=combo_counts_overall.get, reverse=True
         f"{('alt' if k[0] else 'ref'):>5} "
         f"{('alt' if k[1] else 'ref'):>5} "
         f"{('alt' if k[2] else 'ref'):>5}  "
-        f"{combo_counts_overall[k]:>6}  {cells}"
+        f"{combo_counts_overall.get(k, 0):>6}  {cells}"
     )
 
 print()

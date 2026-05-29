@@ -14,7 +14,7 @@ The [DivRef generation workflow](https://github.com/e9genomics/human-diversity-r
 I wanted a bundle where I could trust the provenance of every haplotype and variant, and tune parameters for individual Fulcrum clients.
 I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workflow wrapping a Python toolkit, with a configuration schema, GCS or AWS Open Data ingestion, and per-chromosome parallelism so a full rebuild takes less than a day on a sufficiently large VM.
 
-TODO: actually regenerate the whole thing on an EC2 with chonky memory, get all the benchmarks
+*Note: end-to-end benchmark numbers (wall time, peak memory, instance specs) are pending a full whole-genome rebuild on a suitably provisioned EC2 instance and will be added before publishing.*
 
 | Parameter | Default | Why you'd change it |
 |---|---|---|
