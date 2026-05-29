@@ -13,7 +13,11 @@ Output:
   - Sanity check: AC for each individual variant.
 """
 
+from pathlib import Path
+
 import hail as hl
+
+from divref.hail import hail_init
 
 CONTIG = "chr22"
 POSITIONS: dict[str, int] = {
@@ -28,7 +32,9 @@ PHASED_BCF = (
 SAMPLE_HT = "data/work/inputs/hgdp_1kg.sample_meta.extract.ht"
 DIVREF_POPS = {"afr", "amr", "eas", "sas", "nfe"}
 
-hl.init(quiet=True)
+hail_init(
+    gcs_credentials_path=Path("~/.config/gcloud/application_default_credentials.json").expanduser()
+)
 
 # Read sample meta to filter to (pop ∈ DIVREF_POPS, sex_karyotype ∈ {XX, XY})
 sa = hl.read_table(SAMPLE_HT)
