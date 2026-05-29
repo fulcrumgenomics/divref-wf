@@ -84,6 +84,32 @@ If `min(hgdp_1kg_AF[v,p]) == 0` or missing, `fraction_phased[p]` is missing; eit
 
 `max_pop` is the population with the highest empirical haplotype AF, so haplotypes common in some ancestries and rare in others aren't penalized by being averaged.
 
+### Sex chromosome haplotypes
+
+The original DivRef workflow doesn't compute haplotypes on chrX or chrY.
+The new workflow extends haplotype computation to chrX, with two complications that don't arise on the autosomes.
+chrY still only contains single gnomAD variants and their sequence contexts.
+
+#### Three input BCFs
+
+The gnomAD HGDP+1KG v3.1.2 release ships chrX as three separate SHAPEIT5 phased BCFs covering PAR1, non-PAR, and PAR2.
+PAR1 and PAR2 use the SHAPEIT5 common-variant track; non-PAR uses the rare-variant track.
+The workflow concatenates the three in genomic order into a single chrX VCF before feeding it into the haplotype computation tool.
+
+#### Haploid males in non-PAR
+
+The SHAPEIT5 BCFs encode every chrX non-PAR genotype as pseudo-diploid.
+Males appear as `0|0` or `1|1` rather than as a single haploid call.
+gnomAD's per-variant chrX non-PAR `AN` counts males as haploid, so without a correction `hgdp_1kg_AN[v, p]` on chrX non-PAR would be inflated by the number of XY samples in pop `p` relative to gnomAD's `AN`, and `hgdp_1kg_AF[v, p]` would be correspondingly deflated.
+We apply the correction in two places on chrX non-PAR loci.
+First, we only look at the first allele for male samples, so each male contributes a single haploid allele to the per-population aggregation.
+This is lossless because both alleles are always the same.
+Second, the per-sample adjacency walk only collects carriers from the left strand for non-PAR males; the right strand would double-count the same haploid call.
+Autosomes, PAR1, PAR2, and chrY are unaffected.
+
+The ploidy correction relies on every sample having a determinable sex karyotype.
+gnomAD HGDP+1KG v3.1.2's PCA-based pop inference declines to assign a population to any sex-aneuploid sample (`X`, `XXY`, `XYY`, `ambiguous`), so those samples are dropped by the population filter and are never counted for any haplotypes on autosomes or chrX.
+
 ### Comparing against the original algorithm
 
 Comparing the two algorithms on chr22 (≥0.5% for at least one per-population AF, 25 bp window):
