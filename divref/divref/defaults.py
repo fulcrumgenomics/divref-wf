@@ -27,6 +27,3 @@ POPULATIONS: list[str] = ["afr", "amr", "eas", "sas", "nfe"]
 
 REFERENCE_GENOME: str = "GRCh38"
 """Default reference genome assembly."""
-
-VARIATION_RATIO_FREQUENCY_THRESHOLDS = [0, 0.0001, 0.001, 0.005, 0.01, 0.05, 0.1]
-"""Default frequency thresholds for variation ratio calculation."""

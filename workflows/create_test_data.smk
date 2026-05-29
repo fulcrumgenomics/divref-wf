@@ -16,15 +16,14 @@ LOCUS_FILENAME: str = "chr1_100001_200000"
 # `compute_haplotypes`. The window is well inside non-PAR
 # (PAR1 ends at 2,781,479; PAR2 starts at 155,701,383 on GRCh38).
 CHRX_LOCUS_CHROM: str = "chrX"
-CHRX_LOCUS: str = "chrX:50000000-50100000"
-CHRX_LOCUS_FILENAME: str = "chrX_50000000_50100000"
+CHRX_LOCUS: str = "chrX:50000000-50025000"
+CHRX_LOCUS_FILENAME: str = "chrX_50000000_50025000"
 CHRX_BCF_NONPAR: str = (
     "gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/"
     "hgdp1kgp_chrX_non_par.full.shapeit5_rare.bcf"
 )
 MIN_POP_AF_EXTRACT_GNOMAD_AFS: float = 0.001
 MIN_POP_AF_COMPUTE_HAPLOTYPES: float = 0.005
-MIN_POPMAX_AF_CREATE_GNOMAD_SITES_VCF: float = 0.01
 WINDOW_SIZE_COMPUTE_HAPLOTYPES: int = 25
 # Hail-using divref tools require a GCS credentials path when reading from local-only Hail
 # tables, because hail_init currently sets `use_s3=False` by default and asserts the path is
@@ -40,12 +39,12 @@ rule all:
     input:
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.ht",
         f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.ht",
+        f"{OUTPUT_DIR}/samples.txt",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz.tbi",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_afs.ht",
         f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.extract.ht",
         f"{OUTPUT_DIR}/{LOCUS_FILENAME}_haplotypes.ht",
-        f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_sites.vcf.bgz",
         f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.ht",
         f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz",
         f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz.tbi",
@@ -61,19 +60,23 @@ rule all:
 ####################################################################################################
 rule subset_gnomad_hail_tables:
     output:
-        variant_ht=directory(f"{OUTPUT_DIR}/{LOCUS_FILENAME}.ht"),
+        chr1_variant_ht=directory(f"{OUTPUT_DIR}/{LOCUS_FILENAME}.ht"),
+        chrx_variant_ht=directory(f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.ht"),
         sample_ht=directory(f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.ht"),
+        samples_txt=f"{OUTPUT_DIR}/samples.txt",
     log:
-        f"logs/create_test_data/subset_gnomad_hail_tables.{LOCUS_FILENAME}.log",
+        f"logs/create_test_data/subset_gnomad_hail_tables.log",
     params:
-        locus=LOCUS,
+        chr1_locus=LOCUS,
+        chrx_locus=CHRX_LOCUS,
     shell:
         """
         (
             divref gnomad-hail-table-test-data \
-                --out-variant-annotation-table {output.variant_ht} \
+                --loci {params.chr1_locus} {params.chrx_locus} \
+                --out-variant-annotation-dir {OUTPUT_DIR} \
                 --out-sample-metadata {output.sample_ht} \
-                --locus {params.locus}
+                --out-samples-txt {output.samples_txt}
         ) &> {log}
         """
 
@@ -82,6 +85,8 @@ rule subset_gnomad_hail_tables:
 # Extracts the phased genotypes for all HGDP+1KG samples in the specified locus.
 ####################################################################################################
 rule subset_phased_genotypes:
+    input:
+        samples_txt=f"{OUTPUT_DIR}/samples.txt",
     output:
         vcf=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz",
         tbi=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.vcf.gz.tbi",
@@ -95,6 +100,8 @@ rule subset_phased_genotypes:
         (
             bcftools view \
                 --regions {params.locus} \
+                --samples-file {input.samples_txt} \
+                --force-samples \
                 --output-type z \
                 --output {output.vcf} \
                 --write-index=tbi \
@@ -141,12 +148,15 @@ rule extract_sample_metadata:
         sample_ht=directory(f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.extract.ht"),
     log:
         f"logs/create_test_data/extract_sample_metadata.{LOCUS_FILENAME}.log",
+    params:
+        gcs_credentials_path=GCS_CREDENTIALS_PATH,
     shell:
         """
         (
             divref extract-sample-metadata \
                 --in-gnomad-hgdp-sample-data {input.sample_ht} \
-                --out-sample-metadata {output.sample_ht}
+                --out-sample-metadata {output.sample_ht} \
+                --gcs-credentials-path {params.gcs_credentials_path}
         ) &> {log}
         """
 
@@ -184,54 +194,11 @@ rule compute_haplotypes:
 
 
 ####################################################################################################
-# Create a sites VCF from the gnomAD Hail table.
-####################################################################################################
-rule create_gnomad_sites_vcf:
-    input:
-        variant_ht=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_afs.ht",
-    output:
-        vcf=f"{OUTPUT_DIR}/{LOCUS_FILENAME}.gnomad_sites.vcf.bgz",
-    log:
-        f"logs/create_test_data/create_gnomad_sites_vcf.{LOCUS_FILENAME}.log",
-    params:
-        min_popmax=MIN_POPMAX_AF_CREATE_GNOMAD_SITES_VCF,
-    shell:
-        """
-        (
-            divref create-gnomad-sites-vcf \
-                --sites-table-path {input.variant_ht} \
-                --output-vcf-path {output.vcf} \
-                --min-popmax {params.min_popmax}
-        ) &> {log}
-        """
-
-
-####################################################################################################
-# Subset the gnomAD HGDP+1KG variant annotation table to the chrX non-PAR test locus.
-#
-# The sample metadata table is contig-independent and is reused from the chr1 rule above.
-####################################################################################################
-rule subset_gnomad_hail_tables_chrX:
-    output:
-        variant_ht=directory(f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.ht"),
-    log:
-        f"logs/create_test_data/subset_gnomad_hail_tables.{CHRX_LOCUS_FILENAME}.log",
-    params:
-        locus=CHRX_LOCUS,
-    shell:
-        """
-        (
-            divref gnomad-hail-table-test-data \
-                --out-variant-annotation-table {output.variant_ht} \
-                --locus {params.locus}
-        ) &> {log}
-        """
-
-
-####################################################################################################
 # Extracts phased genotypes for the chrX non-PAR test locus directly from the non-PAR BCF.
 ####################################################################################################
 rule subset_phased_genotypes_chrX:
+    input:
+        samples_txt=f"{OUTPUT_DIR}/samples.txt",
     output:
         vcf=f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz",
         tbi=f"{OUTPUT_DIR}/{CHRX_LOCUS_FILENAME}.vcf.gz.tbi",
@@ -245,6 +212,8 @@ rule subset_phased_genotypes_chrX:
         (
             bcftools view \
                 --regions {params.locus} \
+                --samples-file {input.samples_txt} \
+                --force-samples \
                 --output-type z \
                 --output {output.vcf} \
                 --write-index=tbi \
