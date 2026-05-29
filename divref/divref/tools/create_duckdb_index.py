@@ -552,11 +552,13 @@ def iter_dataframe_chunks(
         "sequence_id": polars.String,
         **{f"gnomAD_AF_{pop}": polars.String for pop in joint_pops_legend},
     }
+    # Hail's TSV export emits "NA" for missing scalar fields; "null" is included for
+    # robustness against other writers.
     lf = polars.scan_csv(
         tsv,
         separator="\t",
         schema_overrides=schema_overrides,
-        null_values="null",
+        null_values=["NA", "null"],
     )
     for df in lf.collect_batches(chunk_size=chunk_size):
         if df.height > 0:
