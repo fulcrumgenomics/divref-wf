@@ -155,10 +155,11 @@ def _make_joint41_filter_ht(
     return hl.Table.parallelize(table_rows, schema=schema)
 
 
-def test_apply_filters_joint41_keeps_when_genome_pass_and_exome_pass_or_only_AC0(
+def test_apply_filters_joint41_keeps_when_genome_pass_and_exome_pass_or_only_ac0(
     hail_context: None,  # noqa: ARG001
 ) -> None:
-    """JOINT_41 filter: genome must be empty/missing, exome must be empty/missing or only AC0.
+    """
+    JOINT_41 filter: genome must be empty/missing, exome must be empty/missing or only AC0.
 
     `AC0` on the exome side is dominated by exome capture-region absence (gnomAD assigns AC0
     when no sample meets the high-quality genotype threshold; for a whole-genome-sourced
@@ -167,17 +168,17 @@ def test_apply_filters_joint41_keeps_when_genome_pass_and_exome_pass_or_only_AC0
     genome-supported variants that the strict both-sides-empty intersection would discard.
     """
     ht = _make_joint41_filter_ht([
-        (100, [], []),                      # both PASS → kept
-        (200, ["AC0"], []),                 # exome only AC0, genome PASS → kept
-        (300, ["AC0", "AS_VQSR"], []),      # exome has AC0+AS_VQSR, genome PASS → dropped
-        (400, ["AS_VQSR"], []),             # exome AS_VQSR alone, genome PASS → dropped
-        (500, [], ["AS_VQSR"]),             # exome PASS, genome non-empty → dropped
-        (600, ["AC0"], ["AS_VQSR"]),        # exome AC0 OK but genome non-empty → dropped
-        (700, None, []),                    # exome missing, genome PASS → kept
-        (800, [], None),                    # exome PASS, genome missing → kept
-        (900, None, None),                  # both missing → kept
-        (1000, ["AC0"], None),              # exome only AC0, genome missing → kept
-        (1100, ["AS_VQSR"], None),          # exome AS_VQSR, genome missing → dropped
+        (100, [], []),  # both PASS → kept
+        (200, ["AC0"], []),  # exome only AC0, genome PASS → kept
+        (300, ["AC0", "AS_VQSR"], []),  # exome has AC0+AS_VQSR, genome PASS → dropped
+        (400, ["AS_VQSR"], []),  # exome AS_VQSR alone, genome PASS → dropped
+        (500, [], ["AS_VQSR"]),  # exome PASS, genome non-empty → dropped
+        (600, ["AC0"], ["AS_VQSR"]),  # exome AC0 OK but genome non-empty → dropped
+        (700, None, []),  # exome missing, genome PASS → kept
+        (800, [], None),  # exome PASS, genome missing → kept
+        (900, None, None),  # both missing → kept
+        (1000, ["AC0"], None),  # exome only AC0, genome missing → kept
+        (1100, ["AS_VQSR"], None),  # exome AS_VQSR, genome missing → dropped
     ])
 
     survivors = sorted(
