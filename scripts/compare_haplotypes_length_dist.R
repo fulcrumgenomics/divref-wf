@@ -2,9 +2,10 @@
 #
 # Plot the per-tier length distribution (as proportions within each tier) of
 # original-only haplotypes from the compute_haplotypes algorithm comparison
-# on chr22. Shared is included as a reference baseline. Tiers 3 and 4 are
-# omitted from the plot — both have n < 20 and don't read meaningfully as
-# proportions.
+# on chr22. Shared and New-only are included as reference baselines. Tiers
+# 1-4 are omitted from the plot — after the min_variant_frequency formula
+# correction they're all n < 5 and don't read meaningfully as proportions.
+# The dominant original-only story is now Tier 5 (1,327 / 1,333 = 99.5%).
 #
 # Counts are taken from `scripts/compare_haplotypes.py` output. Re-run that
 # script and update the data block below if the underlying outputs change.
@@ -23,49 +24,35 @@ out_path <- file.path(out_dir, "length_dist_by_tier.png")
 # Lengths >= 11 are collapsed into a single "11+" bin to keep the x-axis tidy.
 counts <- tribble(
   ~category, ~length, ~count,
-  "Tier 1 (fully variant-disjoint)",          2, 854,
-  "Tier 1 (fully variant-disjoint)",          3,  64,
-  "Tier 1 (fully variant-disjoint)",          4,   5,
-  "Tier 1 (fully variant-disjoint)",          5,   2,
-  "Tier 1 (fully variant-disjoint)",          6,   4,
-  "Tier 1 (fully variant-disjoint)",          7,   1,
-  "Tier 2 (partially missing variants)",      2, 266,
-  "Tier 2 (partially missing variants)",      3, 105,
-  "Tier 2 (partially missing variants)",      4,  24,
-  "Tier 2 (partially missing variants)",      5,  11,
-  "Tier 2 (partially missing variants)",      6,   2,
-  "Tier 2 (partially missing variants)",      7,   4,
-  "Tier 2 (partially missing variants)",      8,   2,
-  "Tier 2 (partially missing variants)",     10,   1,
-  "Tier 5 (sub-fragment of new)",     2, 911,
-  "Tier 5 (sub-fragment of new)",     3, 200,
-  "Tier 5 (sub-fragment of new)",     4,  65,
-  "Tier 5 (sub-fragment of new)",     5,  31,
+  "Tier 5 (sub-fragment of new)",     2, 967,
+  "Tier 5 (sub-fragment of new)",     3, 208,
+  "Tier 5 (sub-fragment of new)",     4,  73,
+  "Tier 5 (sub-fragment of new)",     5,  32,
   "Tier 5 (sub-fragment of new)",     6,  22,
-  "Tier 5 (sub-fragment of new)",     7,   9,
-  "Tier 5 (sub-fragment of new)",     8,   6,
+  "Tier 5 (sub-fragment of new)",     7,  11,
+  "Tier 5 (sub-fragment of new)",     8,   8,
   "Tier 5 (sub-fragment of new)",     9,   4,
   "Tier 5 (sub-fragment of new)",    10,   1,
   "Tier 5 (sub-fragment of new)",    11,   1,
-  "Shared (both algorithms)",                 2, 24103,
-  "Shared (both algorithms)",                 3,  3137,
-  "Shared (both algorithms)",                 4,   684,
-  "Shared (both algorithms)",                 5,   208,
-  "Shared (both algorithms)",                 6,    68,
-  "Shared (both algorithms)",                 7,    34,
-  "Shared (both algorithms)",                 8,    14,
-  "Shared (both algorithms)",                 9,     7,
-  "Shared (both algorithms)",                10,     5,
+  "Shared (both algorithms)",                 2, 25168,
+  "Shared (both algorithms)",                 3,  3306,
+  "Shared (both algorithms)",                 4,   708,
+  "Shared (both algorithms)",                 5,   221,
+  "Shared (both algorithms)",                 6,    74,
+  "Shared (both algorithms)",                 7,    37,
+  "Shared (both algorithms)",                 8,    15,
+  "Shared (both algorithms)",                 9,     8,
+  "Shared (both algorithms)",                10,     6,
   "Shared (both algorithms)",                11,     4,
   "Shared (both algorithms)",                13,     1,
-  "New-only (found only by new)",             2, 1203,
-  "New-only (found only by new)",             3,  371,
-  "New-only (found only by new)",             4,  142,
-  "New-only (found only by new)",             5,   60,
-  "New-only (found only by new)",             6,   33,
-  "New-only (found only by new)",             7,   23,
-  "New-only (found only by new)",             8,   11,
-  "New-only (found only by new)",             9,    9,
+  "New-only (found only by new)",             2, 1067,
+  "New-only (found only by new)",             3,  333,
+  "New-only (found only by new)",             4,  128,
+  "New-only (found only by new)",             5,   59,
+  "New-only (found only by new)",             6,   30,
+  "New-only (found only by new)",             7,   22,
+  "New-only (found only by new)",             8,   12,
+  "New-only (found only by new)",             9,   10,
   "New-only (found only by new)",            10,    8,
   "New-only (found only by new)",            11,    1,
   "New-only (found only by new)",            12,    7,
@@ -93,8 +80,6 @@ proportions <- counts %>%
 category_levels <- c(
   "Shared (both algorithms)",
   "New-only (found only by new)",
-  "Tier 1 (fully variant-disjoint)",
-  "Tier 2 (partially missing variants)",
   "Tier 5 (sub-fragment of new)"
 )
 proportions <- proportions %>%
@@ -105,8 +90,6 @@ proportions <- proportions %>%
 palette <- c(
   "Shared (both algorithms)"            = "#999999",
   "New-only (found only by new)"        = "#009E73",
-  "Tier 1 (fully variant-disjoint)"     = "#D55E00",
-  "Tier 2 (partially missing variants)" = "#E69F00",
   "Tier 5 (sub-fragment of new)"        = "#0072B2"
 )
 
