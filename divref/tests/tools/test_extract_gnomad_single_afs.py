@@ -8,9 +8,9 @@ import hail as hl
 import pytest
 
 from divref.tools.extract_gnomad_single_afs import _GNOMAD_TABLE_URI
-from divref.tools.extract_gnomad_single_afs import _apply_filters
 from divref.tools.extract_gnomad_single_afs import GnomadCloud
 from divref.tools.extract_gnomad_single_afs import GnomadVersion
+from divref.tools.extract_gnomad_single_afs import _apply_filters
 from divref.tools.extract_gnomad_single_afs import extract_gnomad_single_afs
 
 
@@ -169,7 +169,9 @@ def test_apply_filters_joint41_keeps_only_variants_passing_both(
         (800, ["AC0"], None),  # exome non-empty, genome missing → dropped (exome fails)
     ])
 
-    survivors = sorted(r.locus.position for r in _apply_filters(ht, GnomadVersion.JOINT_41).collect())
+    survivors = sorted(
+        r.locus.position for r in _apply_filters(ht, GnomadVersion.JOINT_41).collect()
+    )
     assert survivors == [100, 500, 600, 700]
 
 
