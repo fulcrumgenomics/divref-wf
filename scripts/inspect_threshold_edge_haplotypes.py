@@ -11,17 +11,17 @@ and estimated_gnomad_AF by hand (same formula as `_compute_metrics`), so the
 analysis works even if the final .ht hasn't been written yet.
 """
 
+import argparse
 from collections import Counter
 from pathlib import Path
 
 import duckdb
 import hail as hl
 
-BASE = "data/work/haplotypes/hgdp_1kg.haplotypes.chr22"
+DEFAULT_BASE = "data/work/haplotypes/hgdp_1kg.haplotypes.chr22"
 GNOMAD_AFS_HT_FALLBACK = "data/work/inputs/hgdp_1kg.sites.chr22.ht"
-OLD_DUCKDB = (
-    "data/analysis/compute_haplotypes/test_data_old/"
-    "hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
+DEFAULT_OLD_DUCKDB = (
+    "data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb"
 )
 
 CASES = [
@@ -50,14 +50,37 @@ CASES = [
 def main() -> None:
     import os
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--base",
+        default=DEFAULT_BASE,
+        help=(
+            "Base path of the compute_haplotypes output bundle (without the "
+            ".variants.ht / .hap_ac.ht / .parents.ht / .ht suffix). "
+            f"Default: {DEFAULT_BASE}"
+        ),
+    )
+    parser.add_argument(
+        "--old-duckdb",
+        default=DEFAULT_OLD_DUCKDB,
+        help=(
+            "Path to the original-pipeline DuckDB index (defaults to the file "
+            "produced by `workflows/compare_divref_gnomad.smk`'s "
+            "`download_divref_index` rule)."
+        ),
+    )
+    args = parser.parse_args()
+    base = args.base
+    old_duckdb = args.old_duckdb
+
     os.environ["PYSPARK_SUBMIT_ARGS"] = "--driver-memory 8g --executor-memory 8g pyspark-shell"
     hl.init(quiet=True)
 
-    ht_variants = hl.read_table(f"{BASE}.variants.ht")
-    ht_hap_ac = hl.read_table(f"{BASE}.hap_ac.ht")
-    ht_parents = hl.read_table(f"{BASE}.parents.ht")
-    if hl.hadoop_exists(f"{BASE}.ht"):
-        ht_final = hl.read_table(f"{BASE}.ht")
+    ht_variants = hl.read_table(f"{base}.variants.ht")
+    ht_hap_ac = hl.read_table(f"{base}.hap_ac.ht")
+    ht_parents = hl.read_table(f"{base}.parents.ht")
+    if hl.hadoop_exists(f"{base}.ht"):
+        ht_final = hl.read_table(f"{base}.ht")
     else:
         ht_final = None
 
@@ -157,8 +180,8 @@ def main() -> None:
         return ", ".join(fmt_v(rid_to_pa[r]) if r in rid_to_pa else f"rid={r}" for r in rids)
 
     # Look up each case's row in the OLD DuckDB so we can compare max_pop labels.
-    print(f"querying OLD DuckDB at {OLD_DUCKDB} ...")
-    con = duckdb.connect(str(Path(OLD_DUCKDB).resolve()), read_only=True)
+    print(f"querying OLD DuckDB at {old_duckdb} ...")
+    con = duckdb.connect(str(Path(old_duckdb).resolve()), read_only=True)
     old_lookup: dict = {}
     for label, expected in CASES:
         variants_str = ",".join(
