@@ -197,8 +197,10 @@ Among the 29,548 haplotypes found by both algorithms:
 | New > old        |  3,785 | 12.8% |
 | Old > new        |     45 |  0.2% |
 
-The `new > old` cases reflect the same two mechanisms identified in the case study: containment AC is at least as large as the corresponding per-bin tuple AC, and `max_pop` may shift to a population with more carriers.
-The 45 `old > new` cases are mostly the inverse, where a `max_pop` shift to a pop with a higher empirical AF (smaller AN, similar AC) leaves new's popmax AC smaller than old's.
+Both columns report `popmax_empirical_AC` — the AC at whichever population has the highest empirical haplotype AF.
+Two things move that value between the algorithms.
+First, the new algorithm's containment counting credits a haplotype with every parent block where it appears as a contiguous sub-fragment, so within any single population the new AC is at least the per-bin tuple AC the original would have computed.
+Second, `popmax` may shift to a different population: when it shifts to a population with more carriers, `popmax_AC` rises (the `new > old` rows); when it shifts to a population that happens to have a smaller AN but a higher empirical AF, the same haplotype's `popmax_AC` can fall (the 45 `old > new` rows).
 
 ## Summary
 

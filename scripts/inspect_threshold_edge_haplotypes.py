@@ -172,12 +172,119 @@ def main() -> None:
     ).collect()
     print(f"parent blocks touching any case variant: {len(parents_touched)}\n")
 
+    # Build a rid -> variants.ht row map for the case-window variants we already
+    # collected. We extend this below with any rids that appear in parent blocks
+    # but outside the ±100 bp window, so the enclosing-haplotype metrics can be
+    # computed for any strict superset of a case haplotype.
+    rid_to_v: dict[int, hl.Struct] = {r.row_idx: r for r in variant_rows}
+
+    # Enumerate enclosing haplotype keys (strict supersets of each case haplotype
+    # that appear as a contiguous sub-array of some parent block touching the case).
+    def _strict_supersets(block: tuple, case: tuple) -> set[tuple]:
+        out: set[tuple] = set()
+        n = len(case)
+        if len(block) <= n:
+            return out
+        for i in range(len(block) - n + 1):
+            if block[i : i + n] != case:
+                continue
+            for start in range(i + 1):
+                for end in range(i + n, len(block) + 1):
+                    sub = block[start:end]
+                    if len(sub) > n:
+                        out.add(sub)
+        return out
+
+    enclosing_keys_per_case: list[set[tuple]] = []
+    for case_rids in case_rids_per_case:
+        keys: set[tuple] = set()
+        if None not in case_rids:
+            case_tuple = tuple(case_rids)
+            for p in parents_touched:
+                block = tuple(c.row_idx for c in p.parent_block)
+                keys.update(_strict_supersets(block, case_tuple))
+        enclosing_keys_per_case.append(keys)
+
+    all_enclosing_keys: set[tuple] = set()
+    for ek in enclosing_keys_per_case:
+        all_enclosing_keys.update(ek)
+
+    # Pull hap_ac entries and final HT entries for the enclosing keys, plus any
+    # variants.ht rows for rids that aren't already in our window-restricted set.
+    encl_hap_ac_by_hap: dict[tuple, hl.Struct] = {}
+    encl_final_by_hap: dict[tuple, hl.Struct] = {}
+    if all_enclosing_keys:
+        encl_keys_lit = hl.literal(
+            {",".join(str(r) for r in k) for k in all_enclosing_keys},
+            dtype=hl.tset(hl.tstr),
+        )
+        print(
+            f"filtering hap_ac.ht to {len(all_enclosing_keys)} enclosing-haplotype keys ..."
+        )
+        ht_hap_ac_encl = ht_hap_ac.annotate(
+            _hap_str=hl.delimit(ht_hap_ac.haplotype.map(hl.str), ",")
+        )
+        ht_hap_ac_encl = ht_hap_ac_encl.filter(
+            encl_keys_lit.contains(ht_hap_ac_encl._hap_str)
+        )
+        encl_hap_ac_by_hap = {tuple(r.haplotype): r for r in ht_hap_ac_encl.collect()}
+        print(f"  hap_ac rows matched: {len(encl_hap_ac_by_hap)}")
+
+        if ht_final is not None:
+            ht_final_encl = ht_final.annotate(
+                _hap_str=hl.delimit(ht_final.haplotype.map(hl.str), ",")
+            )
+            ht_final_encl = ht_final_encl.filter(
+                encl_keys_lit.contains(ht_final_encl._hap_str)
+            )
+            encl_final_by_hap = {tuple(r.haplotype): r for r in ht_final_encl.collect()}
+
+        needed_rids: set[int] = set()
+        for k in all_enclosing_keys:
+            needed_rids.update(k)
+        missing_rids = needed_rids - set(rid_to_v.keys())
+        if missing_rids:
+            print(
+                f"loading {len(missing_rids)} extra variants.ht rows for enclosing haplotypes ..."
+            )
+            missing_lit = hl.literal(missing_rids, dtype=hl.tset(hl.tint64))
+            ht_variants_extra = ht_variants.filter(
+                missing_lit.contains(ht_variants.row_idx)
+            )
+            for r in ht_variants_extra.collect():
+                rid_to_v[r.row_idx] = r
+                rid_to_pa.setdefault(r.row_idx, (r.locus.position, tuple(r.alleles)))
+
     def fmt_v(pa: tuple) -> str:
         pos, (ref, alt) = pa
         return f"{pos}:{ref}>{alt}"
 
     def fmt_block(rids: tuple) -> str:
         return ", ".join(fmt_v(rid_to_pa[r]) if r in rid_to_pa else f"rid={r}" for r in rids)
+
+    def _compute_metrics(rids: tuple, per_pop_AC: list[int]) -> list:
+        """Return [(emp_af, fp, est_af) | None] per pop_int, mirroring the case loop's math."""
+        vrows = [rid_to_v[r] for r in rids]
+        rows_out: list = []
+        for p in range(n_pops):
+            ans = [v.frequencies_by_pop.get(p) for v in vrows]
+            if any(an is None for an in ans):
+                rows_out.append(None)
+                continue
+            min_an = min(a.AN for a in ans)
+            if min_an == 0:
+                rows_out.append(None)
+                continue
+            emp_af = per_pop_AC[p] / min_an
+            min_local = min(a.AF[1] for a in ans)
+            if min_local == 0:
+                rows_out.append((emp_af, None, None))
+                continue
+            fp = emp_af / min_local
+            gnomad_min = min(v.freq[p].AF for v in vrows)
+            est_af = gnomad_min * fp
+            rows_out.append((emp_af, fp, est_af))
+        return rows_out
 
     # Look up each case's row in the OLD DuckDB so we can compare max_pop labels.
     print(f"querying OLD DuckDB at {old_duckdb} ...")
@@ -197,7 +304,9 @@ def main() -> None:
         old_lookup[label] = rows[0] if rows else None
     con.close()
 
-    for (label, expected), case_rids in zip(CASES, case_rids_per_case, strict=True):
+    for case_idx, ((label, expected), case_rids) in enumerate(
+        zip(CASES, case_rids_per_case, strict=True)
+    ):
         print(f"==== {label} ====")
         print(f"  variants: {', '.join(fmt_v(e) for e in expected)}")
         if None in case_rids:
@@ -229,8 +338,15 @@ def main() -> None:
                 f"est_af={final_row.estimated_gnomad_AF:.5f}"
             )
         elif ht_final is not None:
+            # Final HT can omit a case for either of two reasons: the inferred est_af
+            # fell below the run's haplotype-AF threshold, or containment dedup dropped
+            # the haplotype because a strictly longer enclosing fragment had the same
+            # per_pop_AC vector. We don't compute the dedup test here -- see the
+            # `inferred ... est_af` and `PARENT BLOCK PATTERNS` blocks below to
+            # distinguish.
             print(
-                "  NEW HT:     not present (est_af below the threshold this run was filtered to)"
+                "  NEW HT:     not present in final HT (suppressed by AF threshold "
+                "and/or containment dedup; see inferred metrics + parent blocks below)"
             )
 
         hap_key = tuple(case_rids)
@@ -240,28 +356,10 @@ def main() -> None:
                 "  HAP_AC: case haplotype NOT enumerated as a contiguous sub-fragment of "
                 "any parent block (algorithmically absent — not just filtered)"
             )
+            per_pop_AC = None
         else:
             per_pop_AC = list(hap_row.per_pop_AC)
-            vrows = [pa_to_v[pa] for pa in expected]
-            rows_out = []
-            for p in range(n_pops):
-                ans = [v.frequencies_by_pop.get(p) for v in vrows]
-                if any(an is None for an in ans):
-                    rows_out.append(None)
-                    continue
-                min_an = min(a.AN for a in ans)
-                if min_an == 0:
-                    rows_out.append(None)
-                    continue
-                emp_af = per_pop_AC[p] / min_an
-                min_local = min(a.AF[1] for a in ans)
-                if min_local == 0:
-                    rows_out.append((emp_af, None, None))
-                    continue
-                fp = emp_af / min_local
-                gnomad_min = min(v.freq[p].AF for v in vrows)
-                est_af = gnomad_min * fp
-                rows_out.append((emp_af, fp, est_af))
+            rows_out = _compute_metrics(hap_key, per_pop_AC)
 
             defined = [(i, r) for i, r in enumerate(rows_out) if r is not None]
             print(
@@ -332,6 +430,49 @@ def main() -> None:
                 print(
                     f"    [{fmt_block(rids)}]{marker}  total={tot}  ({labels})"
                 )
+
+        # Enclosing-haplotype analysis: for each strict superset of the case that
+        # appears as a contiguous sub-array of some parent block, report its inferred
+        # metrics and whether it survives to the final HT. This distinguishes "the case
+        # was dropped by dedup (a longer enclosing fragment had the same per_pop_AC and
+        # survived)" from "the case was dropped by AF threshold (every enclosing fragment
+        # also fell below the threshold)".
+        enclosing_keys = enclosing_keys_per_case[case_idx]
+        if enclosing_keys and per_pop_AC is not None:
+            case_ac_tuple = tuple(per_pop_AC)
+            print(
+                f"  ENCLOSING HAPLOTYPES "
+                f"({len(enclosing_keys)} strict supersets seen in parent blocks):"
+            )
+            for encl_key in sorted(enclosing_keys, key=lambda k: (len(k), k)):
+                encl_label = fmt_block(encl_key)
+                encl_hap_row = encl_hap_ac_by_hap.get(encl_key)
+                encl_final_row = encl_final_by_hap.get(encl_key)
+                if encl_hap_row is None:
+                    print(f"    [{encl_label}]  not in hap_ac.ht")
+                    continue
+                encl_ac = list(encl_hap_row.per_pop_AC)
+                same_ac = tuple(encl_ac) == case_ac_tuple
+                encl_rows_out = _compute_metrics(encl_key, encl_ac)
+                encl_defined = [(i, r) for i, r in enumerate(encl_rows_out) if r is not None]
+                in_final = "yes" if encl_final_row is not None else "no"
+                same_str = "yes" if same_ac else "no"
+                if encl_defined:
+                    max_i = max(encl_defined, key=lambda kv: kv[1][0])[0]
+                    emp_af_e, fp_e, est_af_e = encl_rows_out[max_i]
+                    est_s = f"{est_af_e:.5f}" if est_af_e is not None else "n/a"
+                    fp_s = f"{fp_e:.4f}" if fp_e is not None else "n/a"
+                    print(
+                        f"    [{encl_label}]  max_pop={pops_legend[max_i]} "
+                        f"AC={encl_ac[max_i]} emp_AF={emp_af_e:.5f} fp={fp_s} "
+                        f"est_af={est_s}  same_AC_as_case={same_str}  "
+                        f"in_final_HT={in_final}"
+                    )
+                else:
+                    print(
+                        f"    [{encl_label}]  no pop has min_AN > 0  "
+                        f"same_AC_as_case={same_str}  in_final_HT={in_final}"
+                    )
         print()
 
 

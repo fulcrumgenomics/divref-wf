@@ -3,14 +3,10 @@
 This document lists every numeric claim, table cell, and figure in [`blog_draft.md`](blog_draft.md) and points to the command, output file, and log line that produces it.
 The aim is that someone running the workflows on their own machine can verify each value against current data without re-reading the analysis scripts.
 
-## Prerequisite data fixtures
+## Prerequisite: standard chr22 workflow run
 
-The blog draws on two independent sets of pre-computed Hail / DuckDB artefacts.
 All paths in this document are relative to the repository root.
-
-### From the main `generate_divref` workflow (chr22 standard run)
-
-Produced by:
+Every section below depends on the standard `generate_divref` workflow run for chr22:
 
 ```bash
 pixi run snakemake \
@@ -32,35 +28,9 @@ Outputs:
 - `data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb` (final DivRef-style DuckDB)
 - `data/work/output/hgdp_1kg.haplotypes_gnomad_merge.chr22.fasta` (per-chromosome FASTA)
 
-### From the low-haplotype-AF rebuild (for the six-case deep dive only)
-
-The standard workflow filters out the six original-only haplotypes the blog inspects (their new-algorithm `estimated_gnomad_AF` falls below the 0.005 threshold) and deletes the per-chromosome intermediate Hail tables that the inspector script needs.
-Reproduce the intermediates with a direct `divref compute-haplotypes` invocation that uses a lower threshold and writes outside `data/work/`:
-
-```bash
-mkdir -p data/analysis/compute_haplotypes/test_data_new_low_af logs
-pixi run divref compute-haplotypes \
-    --vcfs-path data/work/inputs/hgdp_1kg.phased_genotypes.chr22.vcf.gz \
-    --gnomad-va-file data/work/inputs/hgdp_1kg.sites.chr22.ht \
-    --gnomad-sa-file data/work/inputs/hgdp_1kg.sample_metadata.ht \
-    --window-size 25 \
-    --variant-freq-threshold 0.005 \
-    --haplotype-freq-threshold 0.002 \
-    --output-base data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22 \
-    --spark-driver-memory-gb 16 --spark-executor-memory-gb 16 \
-    &> logs/compute_haplotypes.chr22.low_af.log
-```
-
-Produces:
-
-- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.variants.ht`
-- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.hap_ac.ht`
-- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.parents.ht`
-- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.ht`
-
 ## Section: "DivRef 1.1 doesn't contain gnomAD 4.1 variants"
 
-The 3 by 4 table at blog lines 35-39.
+The 3-by-4 comparison table.
 
 **Command**:
 
@@ -122,7 +92,7 @@ WHERE source = 'gnomAD_variant';
 
 ## Section: "Comparing against the original algorithm"
 
-### Venn figure (blog line 119)
+### Venn figure
 
 `data/analysis/compute_haplotypes/algo_comparison.venn.png`
 
@@ -137,7 +107,7 @@ pixi run Rscript scripts/compare_haplotypes_venn.R &> logs/compare_haplotypes_ve
 The Python script writes `data/analysis/compute_haplotypes/algo_comparison.summary.tsv`; the R script reads the `shared` / `old_only` / `new_only` rows from there and renders the figure.
 No counts are hardcoded in the R script.
 
-### Sub-fragment counts and new-only decomposition (blog lines 121-126)
+### Sub-fragment counts and new-only decomposition
 
 **Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn section above).
 
@@ -159,9 +129,51 @@ The residual `old_only` - `old_only_subfragment_of_new` haplotypes are the deep-
 
 ## Section: "A closer look at the six original-only haplotypes"
 
-The 6-row case table (blog lines 134-150).
+The 6-row case table and the surrounding Mechanism prose.
 
-**Command**:
+The standard workflow filters out the six original-only haplotypes the blog inspects (their new-algorithm `estimated_gnomad_AF` falls below the 0.005 threshold) and deletes the per-chromosome intermediate Hail tables that the inspector script needs.
+Two steps reconstruct just what's needed.
+
+### Step 1: rebuild per-case intermediates with no AF cutoff
+
+Subset the existing chr22 phased VCF to ±500 bp around each case window and run `compute-haplotypes` on that subset with threshold 0.
+The case regions sum to ~6 kb (0.01% of chr22), so the run takes a couple of minutes instead of ~20.
+
+```bash
+mkdir -p data/analysis/compute_haplotypes/test_data_new_low_af logs
+
+# Subset the chr22 phased VCF to ±500 bp around the six case windows.
+# Regions cover the case variants in scripts/inspect_threshold_edge_haplotypes.py CASES.
+pixi run bcftools view \
+    -r chr22:19950635-19951656,chr22:40456973-40457977,chr22:32402062-32403068,chr22:22626850-22627866,chr22:24600487-24601522,chr22:24626368-24627406 \
+    -O z -o data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.phased_genotypes.chr22.cases.vcf.gz \
+    data/work/inputs/hgdp_1kg.phased_genotypes.chr22.vcf.gz
+pixi run bcftools index --tbi \
+    data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.phased_genotypes.chr22.cases.vcf.gz
+
+# Run compute_haplotypes on the subset with no haplotype-AF filter so every case is emitted.
+pixi run divref compute-haplotypes \
+    --vcfs-path data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.phased_genotypes.chr22.cases.vcf.gz \
+    --gnomad-va-file data/work/inputs/hgdp_1kg.sites.chr22.ht \
+    --gnomad-sa-file data/work/inputs/hgdp_1kg.sample_metadata.ht \
+    --window-size 25 \
+    --variant-freq-threshold 0.005 \
+    --haplotype-freq-threshold 0 \
+    --output-base data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22 \
+    --spark-driver-memory-gb 16 --spark-executor-memory-gb 16 \
+    &> logs/compute_haplotypes.chr22.cases.log
+```
+
+Produces:
+
+- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.variants.ht`
+- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.hap_ac.ht`
+- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.parents.ht`
+- `data/analysis/compute_haplotypes/test_data_new_low_af/hgdp_1kg.haplotypes.chr22.ht`
+
+The output Hail tables are restricted to variants in the subset regions, but the per-variant call_stats and per-sample parent-block formation use the same logic as the full workflow, so the case-specific `popmax_AC`, `fp`, and `est_af` values match what the full-chr22 run with the same threshold would produce.
+
+### Step 2: run the inspector against the case intermediates
 
 ```bash
 mkdir -p logs
@@ -186,12 +198,12 @@ For each case (`Adjacent #1`, `VNTR`, `Short-gap`, `Intermediate`, `Triple+skip`
 | 5 | Triple+skip |
 | 6 | Non-contig |
 
-The "Mechanism 1 / Mechanism 2" classification in the prose (blog lines 157-168) is derived by inspection from the per-case OLD/NEW print lines:
+The "Mechanism 1 / Mechanism 2" classification in the prose is derived by inspection from the per-case OLD/NEW print lines:
 
 - Mechanism 1 ("`fp = 1.0000` exactly in the original") applies when the OLD DUCKDB line reports `fp=1.0000` and the NEW HT line reports a smaller `fp` at the same `max_pop` (cases 1, 4, 5).
 - Mechanism 2 ("`max_pop` shifts under containment counting") applies when the two `max_pop=` values differ (cases 2, 3, 6).
 
-### AC counts table (blog lines 188-191)
+### AC counts table
 
 **Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn / decomposition counts above).
 

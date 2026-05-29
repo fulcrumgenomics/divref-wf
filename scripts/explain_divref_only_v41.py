@@ -1,20 +1,22 @@
 """Explain why DivRef 1.1 chr22 variants are absent from the gnomAD v4.1 joint sites table
-under the intersection filter.
+under the AC0-tolerant intersection filter (see `_apply_filters` in
+`divref/divref/tools/extract_gnomad_single_afs.py`: genome must be PASS, exome must be
+PASS or `{AC0}`).
 
 Reads the `compare_divref_gnomad` workflow's `chr22.joint_41.divref_not_in_gnomad.tsv`
-(DivRef variants with no match in v4.1 joint after both-filters PASS), looks each one up
-in the v4.1 joint sites Hail table, and bins by reason for absence:
+(DivRef variants with no match in the v4.1 joint extract), looks each one up in the v4.1
+joint sites Hail table, and bins by reason for absence:
 
   - absent_from_v41:      not in the HT at all (e.g. v4.1 callset didn't call the site)
-  - below_af_threshold:   in HT, both filter sets empty (= PASS), but `max(pop_AF) < 0.005`
-                          across the selected populations
+  - below_af_threshold:   in HT but `max(pop_AF) < 0.005` across the selected populations
   - exome_filter_only:    in HT with `max(pop_AF) >= 0.005`, exomes.filters non-empty,
                           genomes.filters empty
   - genome_filter_only:   in HT with `max(pop_AF) >= 0.005`, exomes.filters empty,
                           genomes.filters non-empty
   - both_filters_nonempty: in HT with `max(pop_AF) >= 0.005`, both filter sets non-empty
 
-For the three filtered buckets, also reports the top filter codes observed.
+For each of the four non-`absent` buckets, also reports the top distinct filter-code
+combinations observed and per-population AF quantiles.
 
 By default points at the GCS public-data v4.1 joint sites table. Run via `pixi run python`
 so the Hail+Spark+gcs-connector environment is set up.
