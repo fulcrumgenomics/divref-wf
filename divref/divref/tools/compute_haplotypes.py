@@ -51,6 +51,27 @@ def _compute_locus_groups(
     return group_of, current_group + 1
 
 
+def _multi_member_locus_groups(rows_with_groups: hl.Table) -> hl.Table:
+    """
+    Return the `locus_group` ids that have at least two member variants.
+
+    A singleton locus group (one variant) can never form a parent block of ≥2 carriers, so its
+    variant never reaches a haplotype. Filtering to these multi-member groups before the
+    per-sample entries explosion is exact (identical downstream result) and shrinks that step —
+    the dominant early-stage cost on large chromosomes, where most variants are isolated
+    singletons. Returns the small group-id table (one row per surviving group) so callers can
+    filter by `locus_group` membership directly, without a row-level re-key/join.
+
+    Args:
+        rows_with_groups: table with a `locus_group` field.
+
+    Returns:
+        Table keyed by `locus_group`, one row per group with ≥2 members.
+    """
+    sizes = rows_with_groups.group_by(rows_with_groups.locus_group).aggregate(n=hl.agg.count())
+    return sizes.filter(sizes.n > 1)
+
+
 def _form_parent_blocks(
     blocks_ht: hl.Table,
     window_size: int,
@@ -619,6 +640,14 @@ def compute_haplotypes(
     group_of, _n_groups = _compute_locus_groups(variants_ht, window_size)
     group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))
     mt = mt.annotate_rows(locus_group=group_lit[mt.row_idx])
+
+    # Drop variants alone in their locus group before the per-sample entries explosion below
+    # (the dominant early-stage cost): a singleton group can never form a parent block of ≥2
+    # carriers, so its variant never reaches a haplotype. Exact, and shrinks the explosion since
+    # most variants are isolated singletons. Filter by `locus_group` membership against the small
+    # multi-member-group table -- no row-level re-key shuffle.
+    multi_member_groups = _multi_member_locus_groups(mt.rows())
+    mt = mt.filter_rows(hl.is_defined(multi_member_groups[mt.locus_group]))
 
     # Skip the right strand for non-PAR males so each male carrier is counted once (via the
     # left strand). Without this, the pseudo-`1|1` encoding would double-count male

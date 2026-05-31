@@ -576,6 +576,35 @@ def test_attach_component_info_array_lengths_match_haplotype(
     assert len(rows[0].frequencies_by_pop) == 4
 
 
+def test_multi_member_locus_groups_excludes_singletons(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Singleton locus groups are excluded; groups with >=2 members are kept.
+
+    A singleton locus group has one variant, which can never form a >=2-carrier parent block, so
+    it never reaches a haplotype -- filtering to multi-member groups before the entries explosion
+    is exact.
+    """
+    from divref.tools.compute_haplotypes import _multi_member_locus_groups
+
+    rows = hl.Table.parallelize(
+        [
+            {"row_idx": 0, "locus_group": 0},
+            {"row_idx": 1, "locus_group": 0},  # group 0 has 2 members -> kept
+            {"row_idx": 2, "locus_group": 1},  # group 1 singleton -> dropped
+            {"row_idx": 3, "locus_group": 2},
+            {"row_idx": 4, "locus_group": 2},
+            {"row_idx": 5, "locus_group": 2},  # group 2 has 3 members -> kept
+        ],
+        schema=hl.tstruct(row_idx=hl.tint64, locus_group=hl.tint32),
+    ).key_by("row_idx")
+
+    multi = _multi_member_locus_groups(rows)
+    kept = {r.row_idx for r in rows.filter(hl.is_defined(multi[rows.locus_group])).collect()}
+    assert kept == {0, 1, 3, 4, 5}
+
+
 def test_attach_component_info_ignores_unreferenced_variants(
     hail_context: None,  # noqa: ARG001
 ) -> None:
@@ -598,7 +627,7 @@ def test_attach_component_info_ignores_unreferenced_variants(
         (2, 120, "G", "A", [0.5, 0.6], {0: 99, 1: 201}),
     ])
 
-    def summarize(variants_ht: hl.Table) -> list:
+    def summarize(variants_ht: hl.Table) -> list[object]:
         row = _attach_component_info(hap_table, variants_ht).collect()[0]
         return [
             [v.locus.position for v in row.variants],
