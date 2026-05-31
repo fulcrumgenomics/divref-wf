@@ -212,6 +212,23 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
             - `frequencies_by_pop` (array<dict<int, struct(AF, AC, AN)>>): the per-variant
               call-stats grouping. Used downstream for per-population min-AN computation.
     """
+    # Restrict the broadcast to variants that actually appear in a haplotype. Most variants are
+    # isolated singletons (median locus-group size 1) that never enter a parent block, so they
+    # are dead weight in the broadcast (measured ~6.5x fewer on chr2). The output is identical:
+    # every row_idx the per-haplotype lookup below uses is, by construction, referenced here and
+    # so retained. Done as a distributed semi-join -- no driver collect, no extra literal.
+    referenced = hap_table.key_by()
+    referenced = (
+        referenced.select(row_idx=referenced.haplotype)
+        .explode("row_idx")
+        .key_by("row_idx")
+        .distinct()
+    )
+    variants_ht = variants_ht.key_by("row_idx").semi_join(referenced)
+
+    # INSTRUMENTATION: bracket the driver-side collect so we can attribute memory peaks.
+    # `len(pairs)` reads the already-materialized Python list (no extra Hail evaluation).
+    logger.info("attach_component_info: collecting variant components to driver ...")
     pairs = variants_ht.aggregate(
         hl.agg.collect(
             hl.tuple([
@@ -225,6 +242,7 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
             ])
         )
     )
+    logger.info("attach_component_info: collected %d variant components for broadcast", len(pairs))
     components_dict = hl.literal(dict(pairs))
     hap_table = hap_table.annotate(
         _components=hap_table.haplotype.map(lambda idx: components_dict[hl.int32(idx)])
@@ -416,14 +434,17 @@ def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
       - `X.haplotype` is a strictly shorter adjacency-contiguous sub-array of `Y.haplotype`, AND
       - `X.per_pop_AC == Y.per_pop_AC` (element-wise across all populations).
 
-    Implementation: collects `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC
-    tuple, scans each group for proper sub-array containment, and filters the Hail table by
-    the resulting set of stringified haplotype keys. Driver memory is proportional to the
-    number of unique haplotypes; within each AC group, candidates are sorted by length
-    descending and the inner scan exits as soon as the running candidate is no longer strictly
-    longer than the target (proper containment requires `len(h_long) > len(h_short)`). This
-    keeps the worst case at O(G²) but prunes most pairs in practice when groups span a wide
-    length range.
+    Implementation: restricts to rows whose `per_pop_AC` vector is shared by at least one
+    other row (a drop requires an AC-equal pair, so rows with a unique AC are irrelevant),
+    collects only those `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC tuple,
+    scans each group for proper sub-array containment, and filters the full Hail table by the
+    resulting set of stringified haplotype keys. Driver memory is proportional to the number
+    of haplotypes in multi-member AC groups, not the total; the per-AC group counts and the
+    membership filter run distributed in Hail. Within each AC group, candidates are sorted by
+    length descending and the inner scan exits as soon as the running candidate is no longer
+    strictly longer than the target (proper containment requires `len(h_long) > len(h_short)`).
+    This keeps the worst case at O(G²) but prunes most pairs in practice when groups span a
+    wide length range.
 
     Args:
         hap_table: Hail table with `haplotype` (array<int64>) and `per_pop_AC` (array<int64>).
@@ -431,14 +452,33 @@ def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
     Returns:
         `hap_table` with subsumed rows removed.
     """
-    rows = hap_table.aggregate(
-        hl.agg.collect(hl.struct(haplotype=hap_table.haplotype, per_pop_AC=hap_table.per_pop_AC))
+    # Only haplotypes that SHARE a per_pop_AC vector with another row can participate in
+    # containment (a drop requires `X.per_pop_AC == Y.per_pop_AC`). Rows whose per_pop_AC is
+    # unique can neither be subsumed nor subsume anything, so they are irrelevant to the dedup
+    # and need not be pulled to the driver. Restricting the collect to multi-member per_pop_AC
+    # groups keeps this — the memory-dominant step on large chromosomes, where the collect
+    # materializes every haplotype on the driver — proportional to the ambiguous subset only.
+    # The per-AC group counts and the semi-join filter run distributed in Hail.
+    ac_counts = hap_table.group_by(_ac=hap_table.per_pop_AC).aggregate(n=hl.agg.count())
+    ambiguous = hap_table.filter(ac_counts[hap_table.per_pop_AC].n > 1)
+
+    # INSTRUMENTATION: bracket the driver-side collect; `len(rows)`/`len(by_ac)` read
+    # already-materialized Python objects (no extra Hail evaluation).
+    logger.info("containment_dedup: collecting multi-AC haplotypes to driver ...")
+    rows = ambiguous.aggregate(
+        hl.agg.collect(hl.struct(haplotype=ambiguous.haplotype, per_pop_AC=ambiguous.per_pop_AC))
     )
     by_ac: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
     for r in rows:
         by_ac.setdefault(tuple(r.per_pop_AC), []).append(tuple(r.haplotype))
+    logger.info(
+        "containment_dedup: collected %d haplotypes across %d multi-member AC groups",
+        len(rows),
+        len(by_ac),
+    )
 
     drop = _find_subsumed_haplotypes(by_ac)
+    logger.info("containment_dedup: dropping %d subsumed haplotypes", len(drop))
     if not drop:
         return hap_table
 

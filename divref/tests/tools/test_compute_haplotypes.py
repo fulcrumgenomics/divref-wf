@@ -576,6 +576,42 @@ def test_attach_component_info_array_lengths_match_haplotype(
     assert len(rows[0].frequencies_by_pop) == 4
 
 
+def test_attach_component_info_ignores_unreferenced_variants(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Variants absent from every haplotype don't affect the output.
+
+    The broadcast is restricted to haplotype-referenced variants; the result must be identical
+    to passing only those variants. Also guards against the restriction wrongly dropping a
+    referenced variant (which would change the looked-up components).
+    """
+    hap_table = _make_hap_table([([0, 2], [1, 0])])
+    with_extras = _make_variants_ht([
+        (0, 100, "A", "T", [0.1, 0.2], {0: 100, 1: 200}),
+        (1, 110, "C", "G", [0.3, 0.4], {0: 102, 1: 198}),  # unreferenced
+        (2, 120, "G", "A", [0.5, 0.6], {0: 99, 1: 201}),
+        (3, 130, "T", "C", [0.7, 0.8], {0: 95, 1: 205}),  # unreferenced
+    ])
+    referenced_only = _make_variants_ht([
+        (0, 100, "A", "T", [0.1, 0.2], {0: 100, 1: 200}),
+        (2, 120, "G", "A", [0.5, 0.6], {0: 99, 1: 201}),
+    ])
+
+    def summarize(variants_ht: hl.Table) -> list:
+        row = _attach_component_info(hap_table, variants_ht).collect()[0]
+        return [
+            [v.locus.position for v in row.variants],
+            [[s.AF for s in r] for r in row.gnomad_freqs],
+            [{p: s.AN for p, s in fbp.items()} for fbp in row.frequencies_by_pop],
+        ]
+
+    # Identical output whether or not the unreferenced variants are present.
+    assert summarize(with_extras) == summarize(referenced_only)
+    # And it picked up exactly the referenced variants, in haplotype order.
+    assert summarize(with_extras)[0] == [100, 120]
+
+
 @dataclass
 class MetricsRow:
     """Helper to construct one row for testing `_compute_metrics`."""
