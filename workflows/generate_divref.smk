@@ -100,6 +100,12 @@ GCS_CREDENTIALS_FLAG: str = (
 
 VCF_EXTS: list[str] = [".vcf.gz", ".vcf.gz.tbi"]
 
+# Run every shell rule under strict bash so a failing command aborts the rule instead of being
+# masked. Without this the create_divref_index per-contig append loop would continue past a failed
+# contig (and still run finalize), and compute_haplotypes would run its intermediate-file cleanup
+# even if the tool failed. Subshells `( ... )` inherit these flags. `run:` directives are unaffected.
+shell.prefix("set -euo pipefail; ")
+
 ####################################################################################################
 # Rules
 ####################################################################################################
