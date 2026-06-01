@@ -5,8 +5,8 @@ from pathlib import Path
 import hail as hl
 import pytest
 
-from divref.tools.create_duckdb_index import export_sequences_table_to_tsv
-from divref.tools.create_duckdb_index import iter_dataframe_chunks
+from divref.duckdb_index import export_sequences_table_to_tsv
+from divref.duckdb_index import iter_dataframe_chunks
 
 
 def _make_sequences_ht() -> hl.Table:
