@@ -33,8 +33,21 @@ def at_joint(source_pops: list[str], joint_pops: list[str]) -> list[int]:
     return [source_pops.index(p) if p in source_pops else -1 for p in joint_pops]
 
 
+_LEGEND_TABLES = frozenset({
+    "joint_pops_legend",
+    "gnomad_variant_pops_legend",
+    "hgdp_haplotype_pops_legend",
+})
+
+
 def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     """Read a stored *_pops_legend table back into a list of pop codes."""
+    if table not in _LEGEND_TABLES:
+        raise ValueError(
+            f"Unknown legend table {table!r}; expected one of {sorted(_LEGEND_TABLES)}."
+        )
+    # `table` is checked against the allowlist above, so the interpolation is safe; bandit (S608)
+    # still flags the f-string statically, hence the suppression.
     row = conn.execute(f"SELECT pops_legend FROM {table}").fetchone()  # noqa: S608
     if row is None:
         raise ValueError(f"Metadata table {table} is empty; run init_duckdb_index first.")
