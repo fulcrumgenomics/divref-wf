@@ -358,6 +358,38 @@ def test_from_row_splits_per_pop_columns() -> None:
     assert list(hap.estimated_gnomad_af_per_pop.keys()) == pops_legend
 
 
+def test_haplotype_filter_defaults_to_pass() -> None:
+    """haplotype_filter defaults to PASS (back-compat with indexes built before the column)."""
+    assert create_haplotype().haplotype_filter == "PASS"
+    assert (
+        create_haplotype(haplotype_filter="snp_in_deletion").haplotype_filter == "snp_in_deletion"
+    )
+
+
+def test_from_row_reads_haplotype_filter() -> None:
+    """from_row reads the haplotype_filter column when present, else defaults to PASS."""
+    pops_legend = ["afr"]
+    row: dict[str, Any] = {
+        "sequence_id": "row_hap",
+        "sequence": "ACGT",
+        "sequence_length": 4,
+        "n_variants": 2,
+        "popmax_fraction_phased": 1.0,
+        "popmax_empirical_AF": 0.5,
+        "popmax_empirical_AC": 10,
+        "popmax_estimated_gnomad_AF": 0.5,
+        "max_pop": "afr",
+        "variants": "chr1:300:AT:A,chr1:301:T:A",
+        "source": "HGDP_haplotype",
+        "haplotype_filter": "snp_in_deletion",
+        "gnomAD_AF_afr": "0.5",
+        "estimated_gnomAD_haplotype_AF_afr": 0.5,
+    }
+    assert Haplotype.from_row(row, pops_legend).haplotype_filter == "snp_in_deletion"
+    del row["haplotype_filter"]
+    assert Haplotype.from_row(row, pops_legend).haplotype_filter == "PASS"
+
+
 # ---------------------------------------------------------------------------
 # Error paths: malformed variant strings
 # ---------------------------------------------------------------------------

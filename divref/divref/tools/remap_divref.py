@@ -79,6 +79,10 @@ class Haplotype(BaseModel):
     max_pop: str
     variants: str
     source: str
+    # VCF-style compatibility flag: "PASS", or the ';'-joined incompatibility reason(s) when the
+    # haplotype's component variants overlap. Defaults to "PASS" for indexes built before this
+    # column existed.
+    haplotype_filter: str = "PASS"
     # Per-pop comma-delimited gnomAD AF strings, keyed by pop label. The dict's iteration order
     # is the order of `joint_pops_legend` used when constructing the index.
     gnomad_afs: dict[str, str]
@@ -354,6 +358,7 @@ def remap_divref(  # noqa: C901
     popmax_empirical_ac: list[int] = []
     max_pop: list[str] = []
     source: list[str] = []
+    haplotype_filter: list[str] = []
     # One column per pop in the joint legend. `gnomad_af_per_pop` holds the comma-delimited
     # per-variant AF strings (matches DuckDB's `gnomAD_AF_{POP}` columns verbatim);
     # `estimated_gnomad_af_per_pop` holds the per-pop scalar haplotype-level estimated AF.
@@ -413,6 +418,7 @@ def remap_divref(  # noqa: C901
             popmax_empirical_ac.append(found_hap.popmax_empirical_ac)
             max_pop.append(found_hap.max_pop)
             source.append(found_hap.source)
+            haplotype_filter.append(found_hap.haplotype_filter)
             for pop in joint_pops_legend:
                 gnomad_af_per_pop[pop].append(found_hap.gnomad_afs[pop])
                 estimated_gnomad_af_per_pop[pop].append(found_hap.estimated_gnomad_af_per_pop[pop])
@@ -431,6 +437,7 @@ def remap_divref(  # noqa: C901
     df["popmax_empirical_AC"] = popmax_empirical_ac
     df["max_pop"] = max_pop
     df["variant_source"] = source
+    df["haplotype_filter"] = haplotype_filter
     for pop in joint_pops_legend:
         df[f"{_GNOMAD_AF_COLUMN_PREFIX}{pop}"] = gnomad_af_per_pop[pop]
         df[f"{_ESTIMATED_GNOMAD_AF_COLUMN_PREFIX}{pop}"] = estimated_gnomad_af_per_pop[pop]

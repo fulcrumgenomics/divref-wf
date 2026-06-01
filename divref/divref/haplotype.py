@@ -123,8 +123,11 @@ def haplo_coordinates(
     The variant position coordinate is 1-based.
 
     The window spans from `window_size` bases before the first variant to `window_size` bases
-    after the end of the last variant's reference allele — matching the flanking context added
-    by get_haplo_sequence.
+    after the rightmost reference base touched by any variant. `end` uses the maximum reference
+    end over all variants, not just the last-by-position variant: an earlier deletion can have a
+    reference allele that extends past the last variant (which happens only for haplotypes whose
+    variants overlap, i.e. those flagged incompatible). For a haplotype with no overlapping
+    variants the maximum reference end is the last variant's, so `end` is unchanged.
 
     Args:
         window_size: Number of flanking reference bases on each side (same value passed to
@@ -136,8 +139,8 @@ def haplo_coordinates(
     """
     sorted_variants = hl.sorted(variants, key=lambda x: x.locus.position)
     min_variant = sorted_variants[0]
-    max_variant = sorted_variants[-1]
+    max_ref_end = hl.max(sorted_variants.map(lambda v: v.locus.position + hl.len(v.alleles[0])))
     return hl.struct(
         start=min_variant.locus.position - 1 - window_size,
-        end=max_variant.locus.position - 1 + hl.len(max_variant.alleles[0]) + window_size,
+        end=max_ref_end - 1 + window_size,
     )

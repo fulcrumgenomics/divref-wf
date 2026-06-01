@@ -149,6 +149,7 @@ The primary table in the DuckDB index is the `sequences` table, which has one ro
 | `empirical_AF_{POP}` | For `HGDP_haplotype`: empirical AF of the haplotype in that pop, derived from `empirical_AC_{POP}` and the min AN over component variants. For `gnomAD_variant`: the gnomAD AF for that variant in that pop. Missing if AN is 0 or the pop has no source data. |
 | `fraction_phased_{POP}` | Per-pop phase ratio: `empirical_AF_{POP} / min(local_call_stats_AF[component, POP])`. `1.0` for `gnomAD_variant` rows. Uses *that pop's own* denominators (not `max_pop`'s). |
 | `estimated_gnomAD_haplotype_AF_{POP}` | Per-pop projection: `fraction_phased_{POP} × min(gnomAD_AF[component, POP])`. Equals `empirical_AF_{POP}` for `gnomAD_variant` rows. |
+| `haplotype_filter` | VCF-style compatibility flag. `PASS` for `gnomAD_variant` rows and for `HGDP_haplotype` rows whose component variants do not overlap; otherwise the `;`-joined reason(s) the haplotype is incompatible (e.g. `snp_in_deletion`, `overlapping_deletions`, `same_position`, `indel_in_deletion`). Incompatible haplotypes are component variants that cannot co-occur on one chromosome — upstream phasing artifacts at tandem repeats — and are flagged rather than dropped. |
 
 The DuckDB file also contains three single-row metadata tables: `window_size` (the flanking context size used), `pops_legend` (JSON-encoded ordered population list), and `VERSION`.
 

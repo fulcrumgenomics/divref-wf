@@ -19,6 +19,7 @@ from divref.duckdb_index import TablePair
 from divref.duckdb_index import read_and_validate_pops_legends
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
+from divref.haplotype_compat import compatibility_flag
 
 logger = logging.getLogger(__name__)
 
@@ -508,6 +509,33 @@ def _resolve_legends_and_remaps(
     return joint_pops_legend, remaps
 
 
+def _add_compatibility_flag(df: polars.DataFrame) -> polars.DataFrame:
+    """
+    Append the `haplotype_filter` column to a sequences DataFrame.
+
+    The value is VCF-style: `PASS` for `gnomAD_variant` rows, single-variant rows, and
+    haplotypes whose component variants do not overlap; otherwise the `;`-joined incompatibility
+    reason(s) (e.g. `snp_in_deletion`). Computed with `divref.haplotype_compat.compatibility_flag`
+    over the row's `variants` string; the classifier runs only on multi-variant HGDP rows.
+
+    Args:
+        df: A sequences DataFrame with `variants`, `source`, and `n_variants` columns. May be empty.
+
+    Returns:
+        The DataFrame with a `haplotype_filter` String column appended.
+    """
+    flags = [
+        "PASS" if (source == "gnomAD_variant" or n_variants < 2) else compatibility_flag(variants)
+        for variants, source, n_variants in zip(
+            df["variants"].to_list(),
+            df["source"].to_list(),
+            df["n_variants"].to_list(),
+            strict=True,
+        )
+    ]
+    return df.with_columns(polars.Series("haplotype_filter", flags, dtype=polars.String))
+
+
 def _stream_tsv_into_sequences(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -536,15 +564,20 @@ def _stream_tsv_into_sequences(
         "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
     ).fetchone()
     if table_exists is None:
-        empty_df = _scan_sequences_tsv(tsv, joint_pops_legend).limit(0).collect()  # noqa: F841
+        # `haplotype_filter` is appended last in both the schema-defining empty frame and every
+        # inserted chunk, so column order stays consistent across the CREATE and the INSERTs.
+        empty_df = _add_compatibility_flag(  # noqa: F841
+            _scan_sequences_tsv(tsv, joint_pops_legend).limit(0).collect()
+        )
         conn.execute("CREATE TABLE sequences AS SELECT * FROM empty_df")
 
     appended_rows: int = 0
-    for df in iter_dataframe_chunks(
+    for chunk in iter_dataframe_chunks(
         tsv=tsv,
         joint_pops_legend=joint_pops_legend,
         chunk_size=chunk_size,
     ):
+        df = _add_compatibility_flag(chunk)  # noqa: F841
         conn.execute("INSERT INTO sequences SELECT * FROM df")
         appended_rows += df.height
     return appended_rows

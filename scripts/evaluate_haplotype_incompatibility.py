@@ -29,148 +29,15 @@ from pathlib import Path
 
 import duckdb
 
+from divref.haplotype_compat import REASONS
+from divref.haplotype_compat import classify_haplotype
+from divref.haplotype_compat import count_bypass_resolutions
+from divref.haplotype_compat import end_coordinate_shortfall
+from divref.haplotype_compat import parse_variants_string
+from divref.haplotype_compat import start_coordinate_shortfall
+
 DEFAULT_DUCKDB = "data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
 DEFAULT_OUT_DIR = Path("data/analysis/haplotype_incompatibility")
-
-# A component variant: (contig, pos, ref, alt). pos is 1-based.
-Variant = tuple[str, int, str, str]
-
-# Reason labels in precedence order (first match wins in classify_pair) and stable output order.
-REASONS: tuple[str, ...] = (
-    "same_position",
-    "snp_in_deletion",
-    "overlapping_deletions",
-    "indel_in_deletion",
-    "insertion_anchor_conflict",
-    "other_overlap",
-)
-
-
-def parse_variants_string(s: str) -> list[Variant]:
-    """Parse a comma-separated `chr:pos:ref:alt` list, sorted by (pos, len(ref))."""
-    out: list[Variant] = []
-    for token in s.split(","):
-        contig, pos, ref, alt = token.split(":")
-        out.append((contig, int(pos), ref, alt))
-    out.sort(key=lambda v: (v[1], len(v[2])))
-    return out
-
-
-def variant_distance(v1: Variant, v2: Variant) -> int:
-    """Reference bases between v1 and v2; < 0 means their reference spans overlap."""
-    return v2[1] - v1[1] - len(v1[2])
-
-
-def classify_pair(v1: Variant, v2: Variant) -> str | None:
-    """Reason label for an incompatible adjacent pair, or None if compatible (distance >= 0)."""
-    if variant_distance(v1, v2) >= 0:
-        return None
-    pos1, ref1, alt1 = v1[1], v1[2], v1[3]
-    pos2, ref2, alt2 = v2[1], v2[2], v2[3]
-    v1_del = len(ref1) > len(alt1)
-    v2_del = len(ref2) > len(alt2)
-    v2_snp = len(ref2) == 1 and len(alt2) == 1
-    v1_ins = len(alt1) > len(ref1)
-    if pos1 == pos2:
-        return "same_position"
-    if v1_del and v2_snp and pos1 < pos2 < pos1 + len(ref1):
-        return "snp_in_deletion"
-    if v1_del and v2_del:
-        return "overlapping_deletions"
-    if v1_del and pos1 < pos2 < pos1 + len(ref1):
-        return "indel_in_deletion"
-    if v1_ins:
-        return "insertion_anchor_conflict"
-    return "other_overlap"
-
-
-def classify_haplotype(variants: list[Variant]) -> list[str]:
-    """Reasons from every incompatible consecutive pair (position-sorted); may repeat / be empty.
-
-    Adjacent pairs are sufficient: positions are non-decreasing and each reference allele is
-    >= 1 bp, so if no consecutive pair overlaps then no pair overlaps at all. A long deletion
-    swallowing a non-adjacent downstream variant is still flagged at its own adjacent boundary.
-    """
-    reasons: list[str] = []
-    for v1, v2 in zip(variants, variants[1:]):
-        reason = classify_pair(v1, v2)
-        if reason is not None:
-            reasons.append(reason)
-    return reasons
-
-
-def variants_overlap(v1: Variant, v2: Variant) -> bool:
-    """True iff two variants' reference spans overlap (order-independent)."""
-    earlier, later = (v1, v2) if v1[1] <= v2[1] else (v2, v1)
-    return later[1] < earlier[1] + len(earlier[2])
-
-
-def count_bypass_resolutions(variants: list[Variant]) -> int:
-    """Distinct maximal pairwise-compatible sub-haplotypes (>= 2 variants) for this haplotype.
-
-    Models the "explode the conflict" alternative to dropping: a resolution keeps a maximal set
-    of variants with no two overlapping (a maximal independent set in the overlap graph), and is
-    a valid haplotype only if it retains >= 2 variants. Returns the count of such resolutions.
-
-    Interpretation for an INCOMPATIBLE haplotype:
-      - 0  -> exploding recovers nothing (e.g. a length-2 conflict: both resolutions are
-              singletons, which are not haplotypes and are already in the gnomAD_variant track).
-      - 1  -> a single unambiguous resolution.
-      - >1 -> exploding would spawn this many speculative candidates from one (mis-phased) block;
-              larger values quantify the combinatorial blow-up at multi-conflict repeat loci.
-    """
-    n = len(variants)
-    if n < 2:
-        return 0
-    # Complement adjacency: i ~ j iff the two variants do NOT overlap (i.e. are compatible).
-    compatible: list[set[int]] = [set() for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            if not variants_overlap(variants[i], variants[j]):
-                compatible[i].add(j)
-                compatible[j].add(i)
-
-    count = 0
-
-    def bron_kerbosch(r: set[int], p: set[int], x: set[int]) -> None:
-        # Maximal cliques in the complement graph == maximal independent sets in the overlap graph.
-        nonlocal count
-        if not p and not x:
-            if len(r) >= 2:
-                count += 1
-            return
-        pivot = max(p | x, key=lambda u: len(compatible[u] & p))
-        for v in list(p - compatible[pivot]):
-            bron_kerbosch(r | {v}, p & compatible[v], x & compatible[v])
-            p = p - {v}
-            x = x | {v}
-
-    bron_kerbosch(set(), set(range(n)), set())
-    return count
-
-
-def end_coordinate_shortfall(variants: list[Variant], window_size: int, stored_end: int) -> int:
-    """bp by which the stored 0-based-exclusive `end` fails to cover every variant's reference
-    span plus window_size of trailing context. > 0 means deleted reference is truncated.
-
-    The stored `end` is set from the last-by-position variant, but an earlier deletion can reach
-    further right. window_size cancels in the comparison, but is included so the result is the
-    literal bp shortfall against the stored value.
-    """
-    rightmost_ref_end = max(v[1] - 1 + len(v[2]) for v in variants)  # 0-based exclusive
-    return rightmost_ref_end + window_size - stored_end
-
-
-def start_coordinate_shortfall(variants: list[Variant], window_size: int, stored_start: int) -> int:
-    """bp by which the stored 0-based-inclusive `start` is too far right (should always be 0).
-
-    Reference alleles only extend rightward, so the leftmost touched base is the min-position
-    variant and `start` is structurally correct. This is a defensive check.
-    """
-    leftmost_ref_start = min(v[1] - 1 for v in variants)  # 0-based inclusive
-    required_start = leftmost_ref_start - window_size
-    return stored_start - required_start
-
 
 @dataclass
 class Summary:

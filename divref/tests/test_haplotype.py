@@ -220,6 +220,24 @@ def test_haplo_coordinates_multi_variant(hail_context: None) -> None:  # noqa: A
     assert coords.end == 211  # 200 -1 + 2 + 10
 
 
+def test_haplo_coordinates_early_deletion_extends_past_last_variant(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    `end` uses the rightmost reference end over all variants, not the last-by-position one.
+
+    A deletion at 100 spans 100-104 (ref len 5); the SNP at 102 is last by position but reaches
+    only to 102, so `end` must use the deletion's reach (ref end 105).
+    """
+    variants = hl.array([
+        _make_variant(100, "AAAAA", "A"),
+        _make_variant(102, "C", "T"),
+    ])
+    coords = hl.eval(haplo_coordinates(10, variants))
+    assert coords.start == 89  # 100 - 1 - 10
+    assert coords.end == 114  # max_ref_end (100 + 5) - 1 + 10
+
+
 def test_haplo_coordinates_matches_sequence_length(hail_context: None) -> None:  # noqa: ARG001
     """For a SNP-only haplotype, end - start must equal len(sequence)."""
     reference = "0" * 300

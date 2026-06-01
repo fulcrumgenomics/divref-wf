@@ -5,8 +5,10 @@ from pathlib import Path
 
 import duckdb
 import hail as hl
+import polars
 import pytest
 
+from divref.tools.append_contig_to_duckdb_index import _add_compatibility_flag
 from divref.tools.append_contig_to_duckdb_index import _stream_tsv_into_sequences
 from divref.tools.append_contig_to_duckdb_index import append_contig_to_duckdb_index
 from divref.tools.append_contig_to_duckdb_index import export_sequences_table_to_tsv
@@ -383,16 +385,23 @@ def test_stream_empty_tsv_creates_sequences_table(tmp_path: Path) -> None:
     directly with a header-only TSV.
     """
     joint_pops_legend = ["afr"]
+    # Mirror the real export header (export_sequences_table_to_tsv), including the `variants`,
+    # `source`, and `n_variants` columns the compatibility-flag step reads.
     columns = [
-        "sequence_id",
+        "sequence",
         "sequence_length",
+        "sequence_id",
         "n_variants",
+        "contig",
         "start",
         "end",
         "popmax_empirical_AF",
         "popmax_empirical_AC",
+        "source",
         "popmax_estimated_gnomad_AF",
         "popmax_fraction_phased",
+        "max_pop",
+        "variants",
         "gnomAD_AF_afr",
         "empirical_AC_afr",
         "empirical_AF_afr",
@@ -418,3 +427,33 @@ def test_stream_empty_tsv_creates_sequences_table(tmp_path: Path) -> None:
         count = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
         assert count is not None
         assert count[0] == 0
+
+
+def test_add_compatibility_flag_values() -> None:
+    """PASS for gnomAD/single/clean rows; the incompatibility reason for an overlapping pair."""
+    df = polars.DataFrame({
+        "variants": [
+            "chr1:300:AT:A,chr1:301:T:A",  # SNP at a deleted base
+            "chr1:200:A:T,chr1:210:C:G",  # clean haplotype
+            "chr1:50:A:T",  # gnomAD single variant
+        ],
+        "source": ["HGDP_haplotype", "HGDP_haplotype", "gnomAD_variant"],
+        "n_variants": [2, 2, 1],
+    })
+    out = _add_compatibility_flag(df)
+    assert out["haplotype_filter"].to_list() == ["snp_in_deletion", "PASS", "PASS"]
+
+
+def test_add_compatibility_flag_empty_frame() -> None:
+    """An empty frame (used to create the table) still gains a String haplotype_filter column."""
+    df = polars.DataFrame(
+        {"variants": [], "source": [], "n_variants": []},
+        schema={
+            "variants": polars.String,
+            "source": polars.String,
+            "n_variants": polars.Int64,
+        },
+    )
+    out = _add_compatibility_flag(df)
+    assert out.height == 0
+    assert out.schema["haplotype_filter"] == polars.String
