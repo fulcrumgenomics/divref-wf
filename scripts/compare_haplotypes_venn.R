@@ -2,7 +2,7 @@
 #
 # Render a Venn diagram comparing the haplotype catalogs produced by the
 # original (two-pass-union) and new (per-sample adjacency) compute_haplotypes
-# algorithms on chr22 (HGDP+1KG, AF >= 0.005 in at least one population,
+# algorithms on the autosomes (chr1-22) (HGDP+1KG, AF >= 0.005 in at least one population,
 # 25 bp window). Counts are read from the summary TSV emitted by
 # `scripts/compare_haplotypes.py` so the figure stays in sync with the data.
 #
@@ -56,7 +56,7 @@ plot(
   quantities = list(cex = 1.1),
   fills = list(fill = c("#4e79a7", "#f28e2b"), alpha = 0.55),
   labels = list(fontfamily = "sans", cex = 1.2),
-  main = "chr22 haplotypes: original vs new algorithm"
+  main = "Autosome haplotypes: original vs new algorithm"
 )
 invisible(dev.off())
 
