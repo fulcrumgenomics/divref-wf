@@ -1,6 +1,6 @@
-# Reproducing `docs/blog_draft.md`
+# Reproducing `docs/blog.md`
 
-This document lists every numeric claim, table cell, and figure in [`blog_draft.md`](blog_draft.md) and points to the command, output file, and log line that produces it.
+This document lists every numeric claim, table cell, and figure in [`blog.md`](blog.md) and points to the command, output file, and log line that produces it.
 The aim is that someone running the workflows on their own machine can verify each value against current data without re-reading the analysis scripts.
 
 ## Prerequisite: standard chr22 workflow run
