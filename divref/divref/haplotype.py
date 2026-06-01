@@ -24,6 +24,25 @@ def to_hashable_items(d: dict[str, _V]) -> tuple[tuple[str, _V], ...]:
     return tuple(sorted(d.items()))
 
 
+def max_reference_end(variants: hl.Expression) -> hl.Expression:
+    """
+    Return one past the rightmost reference base any variant in the haplotype touches.
+
+    Computed as the maximum over variants of `locus.position + len(ref_allele)`. For a haplotype
+    whose variants do not overlap this equals the last-by-position variant's reference end, but an
+    earlier deletion can have a reference allele that reaches further right. Shared by
+    `haplo_coordinates` and `get_haplo_sequence` so the stored `end` coordinate and the emitted
+    sequence span always agree.
+
+    Args:
+        variants: Hail array expression of variant structs with locus and alleles fields.
+
+    Returns:
+        Hail int expression: the maximum `locus.position + len(ref_allele)` over the variants.
+    """
+    return hl.max(variants.map(lambda v: v.locus.position + hl.len(v.alleles[0])))
+
+
 def get_haplo_sequence(
     context_size: int,
     variants: hl.Expression,
@@ -54,15 +73,15 @@ def get_haplo_sequence(
         )
     sorted_variants = hl.sorted(variants, key=lambda x: x.locus.position)
     min_variant = sorted_variants[0]
-    max_variant = sorted_variants[-1]
     min_pos = min_variant.locus.position
-    max_pos = max_variant.locus.position
-    max_variant_size = hl.len(max_variant.alleles[0])
+    # Shared with haplo_coordinates so the sequence span matches the stored `end` even when an
+    # earlier deletion reaches past the last-by-position variant (an overlapping/flagged haplotype).
+    max_ref_end = max_reference_end(sorted_variants)
     full_context = hl.get_sequence(
         min_variant.locus.contig,
         min_pos,
         before=context_size,
-        after=(max_pos - min_pos + max_variant_size + context_size - 1),
+        after=(max_ref_end - min_pos + context_size - 1),
         reference_genome=reference_genome,
     )
 
@@ -84,7 +103,9 @@ def get_haplo_sequence(
         variant_size = hl.len(v.alleles[0])
         reference_buffer_size = hl.if_else(
             i == hl.len(sorted_variants) - 1,
-            context_size,
+            # Trailing context reaches max_ref_end (+ context_size), so an earlier deletion that
+            # extends past this last-by-position variant still has its full span represented.
+            max_ref_end - (v.locus.position + variant_size) + context_size,
             sorted_variants[i + 1].locus.position - (v.locus.position + variant_size),
         )
         start = v.locus.position - index_translation + variant_size
@@ -139,8 +160,7 @@ def haplo_coordinates(
     """
     sorted_variants = hl.sorted(variants, key=lambda x: x.locus.position)
     min_variant = sorted_variants[0]
-    max_ref_end = hl.max(sorted_variants.map(lambda v: v.locus.position + hl.len(v.alleles[0])))
     return hl.struct(
         start=min_variant.locus.position - 1 - window_size,
-        end=max_ref_end - 1 + window_size,
+        end=max_reference_end(sorted_variants) - 1 + window_size,
     )

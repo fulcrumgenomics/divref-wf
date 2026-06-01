@@ -93,6 +93,23 @@ def test_get_haplo_sequence_edge_cases(hail_context: None) -> None:  # noqa: ARG
         assert hl.eval(get_haplo_sequence(context_size=2, variants=two_deletions)) == "23A6G91"
 
 
+def test_get_haplo_sequence_early_deletion_extends_trailing_context(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Trailing context reaches the rightmost reference end over all variants, not the last one.
+
+    A deletion at 4 (ref len 5, spans 4-8) plus a SNP at 6 inside it: the deletion's reference end
+    (9) exceeds the last-by-position variant's (7), so the trailing context runs to 9 + context.
+    The sequence is `23` + `D` (del alt) + `T` (snp alt) + reference `789A`, two bases longer than
+    the old last-variant-only trailing would give (`23DT78`).
+    """
+    reference = "0123456789A"
+    variants = [_make_variant(4, "AAAAA", "D"), _make_variant(6, "C", "T")]
+    with patch("hail.get_sequence", side_effect=_create_reference_mock(reference)):
+        assert hl.eval(get_haplo_sequence(context_size=2, variants=variants)) == "23DT789A"
+
+
 def test_get_haplo_sequence_single(
     datadir: Path,
     hail_reference_genome: hl.ReferenceGenome,
