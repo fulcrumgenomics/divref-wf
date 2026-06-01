@@ -3,6 +3,20 @@
 This document lists every numeric claim, table cell, and figure in [`blog.md`](blog.md) and points to the command, output file, and log line that produces it.
 The aim is that someone running the workflows on their own machine can verify each value against current data without re-reading the analysis scripts.
 
+## Environment
+
+All commands run through `pixi`, which manages two environments.
+
+The default environment (`pixi run ...`) provides Python, Snakemake, Hail, `bcftools`, `samtools`, and the `duckdb` Python package.
+It runs the `generate_divref` workflow and the Python comparison scripts.
+
+The `analysis` environment (`pixi run -e analysis ...`) adds R and is required for the R-based steps: the gnomAD-release comparison workflow (`compare_divref_gnomad.smk`) and the Venn figure (`compare_haplotypes_venn.R`).
+The R packages those scripts import (`duckdb`, `duckplyr`, `eulerr`) are not available as conda builds for all platforms, so install them once before running any analysis step:
+
+```bash
+pixi run -e analysis setup-r-packages
+```
+
 ## Prerequisite: standard chr22 workflow run
 
 All paths in this document are relative to the repository root.
@@ -35,7 +49,7 @@ The 3-by-4 comparison table.
 **Command**:
 
 ```bash
-pixi run snakemake -j1 -s workflows/compare_divref_gnomad.smk
+pixi run -e analysis snakemake -j1 -s workflows/compare_divref_gnomad.smk
 ```
 
 For each `gnomad_version` in `{hgdp_1kg_312, genomes_312, joint_41}` the workflow produces a TSV of all gnomAD variants on chr22 above the 0.5% threshold, runs the R comparator against the DivRef 1.1 single-variant track, and writes a log file.
@@ -104,7 +118,7 @@ This section compares the two DuckDBs directly, so the per-chromosome `.ht` file
 ```bash
 mkdir -p logs
 pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.log
-pixi run Rscript scripts/compare_haplotypes_venn.R &> logs/compare_haplotypes_venn.log
+pixi run -e analysis Rscript scripts/compare_haplotypes_venn.R &> logs/compare_haplotypes_venn.log
 ```
 
 The Python script defaults to comparing the original DivRef 1.1 DuckDB (`--old-duckdb`) against the whole-genome DuckDB (`--new-duckdb`) over the autosomes (`--contigs`), and writes `data/analysis/compute_haplotypes/algo_comparison.summary.tsv`; the R script reads the `shared` / `old_only` / `new_only` rows from there and renders the figure.
@@ -211,7 +225,7 @@ The "Mechanism 1 / Mechanism 2" classification in the prose is derived by inspec
 
 ### AC counts table
 
-**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn / decomposition counts above).
+**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.log` (same invocation as the Venn / decomposition counts above).
 
 | Blog row | Summary TSV row |
 |---|---|

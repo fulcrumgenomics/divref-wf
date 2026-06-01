@@ -150,7 +150,7 @@ Second, `popmax` may shift to a different population: when it shifts to a popula
 
 #### New-only haplotypes
 
-84,231 new-only haplotypes contain combinations of variants the original already emitted in some other haplotype, of which 3,969 are longer versions of old-algorithm haplotypes.
+84,231 new-only haplotypes contain combinations of variants the original already emitted in some other haplotype.
 1,160 are entirely composed of variants not present in any original haplotype, and 2,162 are a mix.
 Most (986) of those 1,160 are 2 variant haplotypes, and the longest contains 8.
 
