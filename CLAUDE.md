@@ -72,11 +72,11 @@ The tools implement a data pipeline:
 1. `extract_gnomad_afs` / `extract_gnomad_single_afs` → per-population allele frequency Hail table
 2. `extract_sample_metadata` → simplified sample→population mapping table
 3. `compute_haplotypes` → groups phased variants into haplotype windows using Hail
-4. `create_duckdb_index` → DuckDB index merging haplotype + gnomAD sites Hail tables, with reference-context sequences
+4. `init_duckdb_index` → create the DuckDB and write the population-legend + version metadata; then `append_contig_to_duckdb_index` (once per chromosome, each in a fresh JVM) → append that contig's merged haplotype + gnomAD-sites rows with reference-context sequences; then `finalize_duckdb_index` → build the `sequence_id` index
 5. `create_divref_fasta` → per-chromosome FASTA files streamed from the DuckDB index (final deliverable)
 6. `remap_divref` → maps haplotype coordinates back to reference genome (post-CALITAS step)
 
-Steps 4 and 5 were split out of a single `create_fasta_and_index` tool (PR #39). `create_duckdb_index` writes the index in chunks (PR #42, `--polars-chunk-size`) and `create_divref_fasta` streams FASTA output (PR #43).
+Steps 4 and 5 were split out of a single `create_fasta_and_index` tool (PR #39). The index builder (originally `create_duckdb_index`, with chunked writes via `--polars-chunk-size` from PR #42) was later split into per-chromosome `init_duckdb_index` / `append_contig_to_duckdb_index` / `finalize_duckdb_index` so each contig runs in a fresh JVM, bounding file-descriptor use (a single long-lived process exhausted the per-process limit on a whole-genome run); their shared helpers live in `divref/divref/duckdb_index.py`. `create_divref_fasta` streams FASTA output (PR #43).
 
 `extract_gnomad_single_afs` is an alternative to `extract_gnomad_afs` supporting both gnomAD v4.1 (JOINT) and v3.1.2 (HGDP+1KG) table schemas; it is used when the workflow's `gnomad_variant_annotation_source` config selects a gnomAD source different from the haplotype source (the haplotypes themselves always come from gnomAD 3.1.2 HGDP+1KG phased genotypes).
 
@@ -94,11 +94,11 @@ Steps 4 and 5 were split out of a single `create_fasta_and_index` tool (PR #39).
 
 ### Data Models (`remap_divref.py`)
 
-Pydantic `frozen=True` models: `Variant`, `ReferenceMapping`, `Haplotype` — used for type-safe coordinate remapping. `Haplotype` uses field aliases to match mixedCase column names in the DuckDB index produced by `create_duckdb_index`.
+Pydantic `frozen=True` models: `Variant`, `ReferenceMapping`, `Haplotype` — used for type-safe coordinate remapping. `Haplotype` uses field aliases to match mixedCase column names in the DuckDB index produced by `append_contig_to_duckdb_index`.
 
 ### Snakemake Workflows
 
-- `workflows/generate_divref.smk` — main workflow. Reads `workflows/config/config.yml` (validated against `config_schema.yml`). Per-chromosome rules feed into a single `create_divref_index` rule (one DuckDB) and `create_divref_fasta` rule (per-chromosome FASTAs).
+- `workflows/generate_divref.smk` — main workflow. Reads `workflows/config/config.yml` (validated against `config_schema.yml`). Per-chromosome rules feed into a single `create_divref_index` rule (one DuckDB, built by looping `init_duckdb_index` → per-contig `append_contig_to_duckdb_index` → `finalize_duckdb_index`) and a `create_divref_fasta` rule (per-chromosome FASTAs).
 - `workflows/create_test_data.smk` — generates the gnomAD Hail-table subsets committed under `divref/tests/data/` (used by `pytest`). Run when test inputs need refreshing, not on every test run.
 - `workflows/compare_divref_gnomad.smk` — analysis-only workflow comparing DivRef 1.1 against multiple gnomAD releases (requires the `analysis` pixi environment).
 

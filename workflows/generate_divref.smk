@@ -413,6 +413,13 @@ rule create_table_pairs_tsv:
 
 ####################################################################################################
 # Build the DivRef DuckDB index from all per-chromosome haplotype and gnomAD sites Hail tables.
+#
+# Built one contig at a time in a serial loop: `init-duckdb-index` creates the DuckDB and writes the
+# population-legend + version metadata, each `append-contig-to-duckdb-index` adds one contig's rows
+# in a fresh JVM (so file descriptors do not accumulate across contigs, which exhausted the
+# per-process limit when the whole genome was built in one long-lived process), and
+# `finalize-duckdb-index` creates the sequence_id index. Contigs run in `CHROMS` order so sequence
+# IDs are assigned deterministically; DuckDB is single-writer, so the loop must stay serial.
 ####################################################################################################
 rule create_divref_index:
     input:
@@ -431,19 +438,32 @@ rule create_divref_index:
         tmp_dir=TMP_DIR,
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
+        contigs=" ".join(CHROMS),
     shell:
         """
         (
-            divref create-duckdb-index \
+            divref init-duckdb-index \
                 --in-table-pairs-tsv {input.table_pairs_tsv} \
-                --reference-fasta {input.fasta} \
-                --window-size {params.window_size} \
                 --output-base {params.output_base} \
                 --version {params.version} \
-                --polars-chunk-size {params.polars_chunk_size} \
-                --tmp-dir {params.tmp_dir} \
-                --spark-driver-memory-gb {params.spark_driver_memory_gb} \
-                --spark-executor-memory-gb {params.spark_executor_memory_gb}
+                --window-size {params.window_size} \
+                --force
+
+            for contig in {params.contigs}; do
+                divref append-contig-to-duckdb-index \
+                    --in-table-pairs-tsv {input.table_pairs_tsv} \
+                    --contig "$contig" \
+                    --output-base {params.output_base} \
+                    --reference-fasta {input.fasta} \
+                    --window-size {params.window_size} \
+                    --version {params.version} \
+                    --polars-chunk-size {params.polars_chunk_size} \
+                    --tmp-dir {params.tmp_dir} \
+                    --spark-driver-memory-gb {params.spark_driver_memory_gb} \
+                    --spark-executor-memory-gb {params.spark_executor_memory_gb}
+            done
+
+            divref finalize-duckdb-index --output-base {params.output_base}
         ) &> {log}
         """
 

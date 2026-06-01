@@ -212,16 +212,16 @@ properties:
     minimum: 1
     description: |
       Memory in GB to allocate to the Spark driver for Hail-using divref tools (e.g.
-      `extract-gnomad-afs`, `compute-haplotypes`, `create-duckdb-index`).
-    default: 16
+      `extract-gnomad-afs`, `compute-haplotypes`, `append-contig-to-duckdb-index`).
+    default: 24
 
   spark_executor_memory_gb:
     type: integer
     minimum: 1
     description: |
       Memory in GB to allocate to the Spark executor for Hail-using divref tools. (e.g.
-      `extract-gnomad-afs`, `compute-haplotypes`, `create-duckdb-index`).
-    default: 16
+      `extract-gnomad-afs`, `compute-haplotypes`, `append-contig-to-duckdb-index`).
+    default: 24
 
 required:
   - cloud

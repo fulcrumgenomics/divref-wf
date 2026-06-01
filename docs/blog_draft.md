@@ -12,9 +12,16 @@ The [DivRef](https://zenodo.org/records/14802613) resource bundle developed by E
 
 The [DivRef generation workflow](https://github.com/e9genomics/human-diversity-reference) is a set of standalone Python scripts plus a Makefile, with some inputs hard-coded and others unrecorded.
 I wanted a bundle where I could trust the provenance of every haplotype and variant, and tune parameters for individual Fulcrum clients.
-I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workflow wrapping a Python toolkit, with a configuration schema, GCS or AWS Open Data ingestion, and per-chromosome parallelism so a full rebuild takes less than a day on a sufficiently large VM.
+I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workflow wrapping a Python toolkit, with a configuration schema, GCS or AWS Open Data ingestion, and per-chromosome parallelism so a full rebuild takes less than a day on a laptop.
 
-*Note: end-to-end benchmark numbers (wall time, peak memory, instance specs) are pending a full whole-genome rebuild on a suitably provisioned EC2 instance and will be added before publishing.*
+### Headline improvements
+
+1. Contains gnomAD 4.1 joint exome/genome variants
+2. Improved haplotype computation algorithm
+3. Addition of chrX haplotypes
+4. Configurable Snakemake workflow
+
+### Parameters
 
 | Parameter | Default | Why you'd change it |
 |---|---|---|
@@ -27,7 +34,21 @@ I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workf
 
 The actual config schema separates the HGDP+1KG-derived and gnomAD-derived parameters (see [`workflows/config/config_schema.yml`](../workflows/config/config_schema.yml) for the exact names).
 
-## DivRef 1.1 doesn't contain gnomAD 4.1 variants
+### Runtime
+
+On an Apple M3 Macbook with 36GB of memory, the workflow can be run end-to-end in ~17h with default parameters.
+Increasing the population set or decreasing the allele frequency filter values will increase the runtime.
+The Hail steps are best run serially with `snakemake -j1` as Hail by default will use all available cores, so there is no efficiency gain from parallelizing.
+
+| Step | Wall time (minutes) |
+|------|---------|
+| Download and slim down phased gnomAD 3.1.2 HGDP+1KG phased BCFs | 143 |
+| Extract gnomAD 3.1.2 HGDP+1KG variants and AFs from Hail tables | 103 |
+| Extract gnomAD 4.1 variants and AFs from Hail tables | 137 |
+| Compute haplotypes | 614 |
+| Generate database and create FASTA files | 13 |
+
+## gnomAD 4.1 variants
 
 The published bundle README states that DivRef's HGDP+1KG-derived haplotypes are "merged with the common variants in the gnomAD 4.1 release".
 To verify this, I compared the DivRef 1.1 gnomAD variant sites on chr22 from the DuckDB index against the variants from three different gnomAD sources, all filtered to a minimum 0.5% allele frequency in at least one of the 5 populations.
@@ -38,12 +59,12 @@ To verify this, I compared the DivRef 1.1 gnomAD variant sites on chr22 from the
 | 3.1.2 genomes (76K) | 511,006 | 506,983 | 0 | 4,023 |
 | 4.1 joint (76K genomes, 730K exomes) | 497,031 | 490,931 | 16,052 | 6,100 |
 
-The 3.1.2 HGDP+1KG row matches exactly: every DivRef single-variant entry traces back to the v3.1.2 HGDP+1KG subset.
-The 3.1.2 genomes row adds ~4K chr22 variants which are common in the broader 76K-genome cohort.
+It's clear that DivRef 1.1's gnomAD variant entries were not sourced from gnomAD 4.1, but from the 3.1.2 HGDP+1KG subset.
+The 3.1.2 genomes source would have added ~4K chr22 variants which are common in the broader 76K-genome cohort, and 4.1 joint exomes/genomes looks quite different.
 
 For v4.1 joint, I keep variants with genome filter `PASS` and exome filter `PASS` or only `AC0`.
 The `AC0` flag is gnomAD's "no sample had a high-quality genotype" filter.
-On the v4.1 exome track, `AC0` almost always means the position is outside the exome capture footprint rather than that exome data exists and is low quality (looking up the `AC0`-failing variants from a strict-intersection extract shows median exome `AN` = 34 of a possible ~1.46M for a fully called site).
+On the v4.1 exome track, `AC0`-failing variants have median exome `AN` = 34 of a possible ~1.46M for a fully called site, indicating that these are coming from regions that are on the margins or completely outside of the exome capture regions.
 Treating "exome `PASS` or `AC0`-only" as passing on the exome side retains good genome-supported variants that would otherwise be discarded for purely coverage reasons.
 
 16,052 chr22 variants in DivRef 1.1 are not in v4.1 joint above the 0.5% threshold:
@@ -105,32 +126,6 @@ If `min(hgdp_1kg_AF[v,p]) == 0` or missing, `fraction_phased[p]` is missing; eit
 
 `max_pop` is the population with the highest empirical haplotype AF, so haplotypes common in some ancestries and rare in others aren't penalized by being averaged.
 
-### Sex chromosome haplotypes
-
-The original DivRef workflow doesn't compute haplotypes on chrX or chrY.
-The new workflow extends haplotype computation to chrX, with two complications that don't arise on the autosomes.
-chrY still only contains single gnomAD variants and their sequence contexts.
-
-#### Three input BCFs
-
-The gnomAD HGDP+1KG v3.1.2 release ships chrX as three separate SHAPEIT5 phased BCFs covering PAR1, non-PAR, and PAR2.
-PAR1 and PAR2 use the SHAPEIT5 common-variant track; non-PAR uses the rare-variant track.
-The workflow concatenates the three in genomic order into a single chrX VCF before feeding it into the haplotype computation tool.
-
-#### Haploid males in non-PAR
-
-The SHAPEIT5 BCFs encode every chrX non-PAR genotype as pseudo-diploid.
-Males appear as `0|0` or `1|1` rather than as a single haploid call.
-gnomAD's per-variant chrX non-PAR `AN` counts males as haploid, so without a correction `hgdp_1kg_AN[v, p]` on chrX non-PAR would be inflated by the number of XY samples in pop `p` relative to gnomAD's `AN`, and `hgdp_1kg_AF[v, p]` would be correspondingly deflated.
-We apply the correction in two places on chrX non-PAR loci.
-First, we only look at the first allele for male samples, so each male contributes a single haploid allele to the per-population aggregation.
-This is lossless because both alleles are always the same.
-Second, the per-sample adjacency walk only collects carriers from the left strand for non-PAR males; the right strand would double-count the same haploid call.
-Autosomes, PAR1, PAR2, and chrY are unaffected.
-
-The ploidy correction relies on every sample having a determinable sex karyotype.
-gnomAD HGDP+1KG v3.1.2's PCA-based pop inference declines to assign a population to any sex-aneuploid sample (`X`, `XXY`, `XYY`, `ambiguous`), so those samples are dropped by the population filter and are never counted for any haplotypes on autosomes or chrX.
-
 ### Comparing against the original algorithm
 
 Comparing the two algorithms on chr22 (≥0.5% for at least one per-population AF, 25 bp window):
@@ -144,7 +139,7 @@ For the remaining 85 sub-fragments, the original algorithm emitted the short fra
 Of the 1,680 new-only haplotypes, 1,590 contain only variants the original already emitted in some other haplotype, 54 mix shared and novel variants, and 36 are entirely novel.
 Most (21) of those 36 are 2 variant haplotypes, one contains 8.
 
-### A closer look at the six original-only haplotypes the new algorithm doesn't emit
+#### A closer look at the six original-only haplotypes the new algorithm doesn't emit
 
 There were six haplotypes that weren't subsumed by anything new.
 Re-running haplotype computation with the threshold lowered to 0.002 lets us see what the new algorithm computed for each.
@@ -186,7 +181,7 @@ The new single-pass containment counting redistributes `hgdp_1kg_haplotype_AC[p]
 Containment AC includes chromosomes from longer parent blocks where the haplotype appears as a contiguous sub-fragment, not just chromosomes whose exact bin tuple is the haplotype.
 In cases 2, 3, and 6 the redistribution moves `max_pop` to a population with a larger sample size (and therefore larger `hgdp_1kg_AN[v, max_pop]`), which lowers `hgdp_1kg_haplotype_AF[max_pop]` for the same `AC` and pulls `est AF` below 0.005.
 
-### AC counts
+#### AC counts
 
 The new algorithm's `popmax_empirical_AC` tends to be larger than the original's for shared haplotypes.
 Among the 29,548 haplotypes found by both algorithms:
@@ -201,6 +196,32 @@ Both columns report `popmax_empirical_AC` — the AC at whichever population has
 Two things move that value between the algorithms.
 First, the new algorithm's containment counting credits a haplotype with every parent block where it appears as a contiguous sub-fragment, so within any single population the new AC is at least the per-bin tuple AC the original would have computed.
 Second, `popmax` may shift to a different population: when it shifts to a population with more carriers, `popmax_AC` rises (the `new > old` rows); when it shifts to a population that happens to have a smaller AN but a higher empirical AF, the same haplotype's `popmax_AC` can fall (the 45 `old > new` rows).
+
+### Sex chromosome haplotypes
+
+The original DivRef workflow doesn't compute haplotypes on chrX or chrY.
+The new workflow extends haplotype computation to chrX, adding 53,771 haplotypes using the same populations and allele frequency filters as DivRef 1.1.
+chrY still only contains single gnomAD variants and their sequence contexts.
+
+#### Three input BCFs
+
+The gnomAD HGDP+1KG v3.1.2 release ships chrX as three separate SHAPEIT5 phased BCFs covering PAR1, non-PAR, and PAR2.
+PAR1 and PAR2 use the SHAPEIT5 common-variant track; non-PAR uses the rare-variant track.
+The workflow concatenates the three in genomic order into a single chrX VCF before feeding it into the haplotype computation tool.
+
+#### Haploid males in non-PAR
+
+The SHAPEIT5 BCFs encode every chrX non-PAR genotype as pseudo-diploid.
+Males appear as `0|0` or `1|1` rather than as a single haploid call.
+gnomAD's per-variant chrX non-PAR `AN` counts males as haploid, so without a correction `hgdp_1kg_AN[v, p]` on chrX non-PAR would be inflated by the number of XY samples in pop `p` relative to gnomAD's `AN`, and `hgdp_1kg_AF[v, p]` would be correspondingly deflated.
+We apply the correction in two places on chrX non-PAR loci.
+First, we only look at the first allele for male samples, so each male contributes a single haploid allele to the per-population aggregation.
+This is lossless because both alleles are always the same.
+Second, the per-sample adjacency walk only collects carriers from the left strand for non-PAR males; the right strand would double-count the same haploid call.
+Autosomes, PAR1, PAR2, and chrY are unaffected.
+
+The ploidy correction relies on every sample having a determinable sex karyotype.
+gnomAD HGDP+1KG v3.1.2's PCA-based pop inference declines to assign a population to any sex-aneuploid sample (`X`, `XXY`, `XYY`, `ambiguous`), so those samples are dropped by the population filter and are never counted for any haplotypes on autosomes or chrX.
 
 ## Summary
 
