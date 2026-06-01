@@ -212,12 +212,14 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
     Looks up `(locus, alleles, freq, frequencies_by_pop)` for every `row_idx` in each row's
     `haplotype` array and produces three parallel-length arrays.
 
-    Implementation: collects the variants table into a driver-side dict keyed by `row_idx`,
-    broadcasts it as a Hail literal, and indexes per-haplotype. Driver memory is proportional
-    to the number of variants in `variants_ht` (i.e., variants that pass `variant_freq_threshold`
-    upstream); for typical chr1 inputs this is in the hundreds of thousands of small structs.
-    Hail-side alternatives (explode+group_by, per-element table indexing inside `.map()`) were
-    attempted but trigger Hail IR compiler bugs in 0.2.137 — revisit when upgrading.
+    Implementation: a distributed semi-join first restricts `variants_ht` to only the variants
+    referenced by some haplotype (most variants are isolated singletons that never enter a parent
+    block, so they are dead weight in the broadcast); those are collected into a driver-side dict
+    keyed by `row_idx`, broadcast as a Hail literal, and indexed per-haplotype. Driver memory is
+    therefore proportional to the number of haplotype-referenced variants, not to all variants in
+    `variants_ht` or those passing `variant_freq_threshold` upstream (measured ~6.5x fewer on
+    chr2). Hail-side alternatives (explode+group_by, per-element table indexing inside `.map()`)
+    were attempted but trigger Hail IR compiler bugs in 0.2.137 — revisit when upgrading.
 
     Args:
         hap_table: Hail table with at least these fields:
@@ -264,7 +266,21 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
         )
     )
     logger.info("attach_component_info: collected %d variant components for broadcast", len(pairs))
-    components_dict = hl.literal(dict(pairs))
+    # Keyed by int32 to match the `hl.int32(idx)` lookup below; the explicit dtype also keeps the
+    # literal well-typed when `pairs` is empty (no haplotype-referenced variants), where
+    # `hl.literal({})` would otherwise fail to infer the key/value types.
+    components_dict = hl.literal(
+        dict(pairs),
+        dtype=hl.tdict(
+            hl.tint32,
+            hl.tstruct(
+                locus=variants_ht.locus.dtype,
+                alleles=variants_ht.alleles.dtype,
+                freq=variants_ht.freq.dtype,
+                frequencies_by_pop=variants_ht.frequencies_by_pop.dtype,
+            ),
+        ),
+    )
     hap_table = hap_table.annotate(
         _components=hap_table.haplotype.map(lambda idx: components_dict[hl.int32(idx)])
     )
