@@ -97,7 +97,18 @@ def read_and_validate_pops_legends(table_pairs: list[TablePair]) -> tuple[list[s
 
 
 def compute_joint_legend(gnomad_pops: list[str], hgdp_pops: list[str]) -> list[str]:
-    """Joint legend: gnomAD pops in original order, then HGDP-only pops appended."""
+    """
+    Compute the joint population legend across both variation sources.
+
+    Args:
+        gnomad_pops: gnomAD-source population codes, in their original order.
+        hgdp_pops: HGDP-source population codes.
+
+    Returns:
+        The joint legend: every gnomAD population in its original order, followed by the HGDP
+        populations not already present (e.g. `["afr", "nfe"]` + `["afr", "oth"]` ->
+        `["afr", "nfe", "oth"]`).
+    """
     return list(gnomad_pops) + [p for p in hgdp_pops if p not in gnomad_pops]
 
 
@@ -110,7 +121,19 @@ def write_metadata_tables(
     joint_pops_legend: list[str],
     version: str,
 ) -> None:
-    """Write the window_size, three *_pops_legend, and VERSION metadata tables."""
+    """
+    Write the window_size, three *_pops_legend, and VERSION metadata tables.
+
+    Args:
+        conn: Open DuckDB connection to the index being initialized.
+        window_size: Flanking reference-context size stored in the `window_size` table.
+        hgdp_pops_legend: HGDP-source population codes stored as JSON in
+            `hgdp_haplotype_pops_legend`.
+        gnomad_pops_legend: gnomAD-source population codes stored as JSON in
+            `gnomad_variant_pops_legend`.
+        joint_pops_legend: Joint population codes stored as JSON in `joint_pops_legend`.
+        version: Version identifier stored in the `VERSION` table.
+    """
     conn.execute("CREATE TABLE window_size AS SELECT ? AS window_size", [window_size])
     conn.execute(
         "CREATE TABLE hgdp_haplotype_pops_legend AS SELECT ? AS pops_legend",

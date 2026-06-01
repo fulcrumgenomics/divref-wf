@@ -43,6 +43,11 @@ def init_duckdb_index(
         version: Version identifier embedded later in sequence IDs.
         window_size: Flanking reference-context size stored in the index.
         force: Overwrite an existing DuckDB; otherwise raise FileExistsError.
+
+    Raises:
+        FileExistsError: If the output DuckDB already exists and `force` is False.
+        ValueError: If `in_table_pairs_tsv` contains no table pairs, or if the contigs' gnomAD or
+            HGDP population legends disagree.
     """
     assert_path_is_readable(in_table_pairs_tsv)
 
