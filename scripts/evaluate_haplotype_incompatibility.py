@@ -99,6 +99,56 @@ def classify_haplotype(variants: list[Variant]) -> list[str]:
     return reasons
 
 
+def variants_overlap(v1: Variant, v2: Variant) -> bool:
+    """True iff two variants' reference spans overlap (order-independent)."""
+    earlier, later = (v1, v2) if v1[1] <= v2[1] else (v2, v1)
+    return later[1] < earlier[1] + len(earlier[2])
+
+
+def count_bypass_resolutions(variants: list[Variant]) -> int:
+    """Distinct maximal pairwise-compatible sub-haplotypes (>= 2 variants) for this haplotype.
+
+    Models the "explode the conflict" alternative to dropping: a resolution keeps a maximal set
+    of variants with no two overlapping (a maximal independent set in the overlap graph), and is
+    a valid haplotype only if it retains >= 2 variants. Returns the count of such resolutions.
+
+    Interpretation for an INCOMPATIBLE haplotype:
+      - 0  -> exploding recovers nothing (e.g. a length-2 conflict: both resolutions are
+              singletons, which are not haplotypes and are already in the gnomAD_variant track).
+      - 1  -> a single unambiguous resolution.
+      - >1 -> exploding would spawn this many speculative candidates from one (mis-phased) block;
+              larger values quantify the combinatorial blow-up at multi-conflict repeat loci.
+    """
+    n = len(variants)
+    if n < 2:
+        return 0
+    # Complement adjacency: i ~ j iff the two variants do NOT overlap (i.e. are compatible).
+    compatible: list[set[int]] = [set() for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if not variants_overlap(variants[i], variants[j]):
+                compatible[i].add(j)
+                compatible[j].add(i)
+
+    count = 0
+
+    def bron_kerbosch(r: set[int], p: set[int], x: set[int]) -> None:
+        # Maximal cliques in the complement graph == maximal independent sets in the overlap graph.
+        nonlocal count
+        if not p and not x:
+            if len(r) >= 2:
+                count += 1
+            return
+        pivot = max(p | x, key=lambda u: len(compatible[u] & p))
+        for v in list(p - compatible[pivot]):
+            bron_kerbosch(r | {v}, p & compatible[v], x & compatible[v])
+            p = p - {v}
+            x = x | {v}
+
+    bron_kerbosch(set(), set(range(n)), set())
+    return count
+
+
 def end_coordinate_shortfall(variants: list[Variant], window_size: int, stored_end: int) -> int:
     """bp by which the stored 0-based-exclusive `end` fails to cover every variant's reference
     span plus window_size of trailing context. > 0 means deleted reference is truncated.
@@ -137,6 +187,12 @@ class Summary:
     end_undershoot_max_bp: int = 0
     end_undershoot_hist: Counter = field(default_factory=Counter)
     start_undershoot_anomalies: int = 0
+    # Length distribution of incompatible haplotypes, and the "explode instead of drop" sizing.
+    incompatible_length_hist: Counter = field(default_factory=Counter)
+    bypass_resolutions_hist: Counter = field(default_factory=Counter)
+    bypass_resolutions_total: int = 0
+    bypass_resolutions_max: int = 0
+    recoverable_haplotypes: int = 0  # incompatible haplotypes with >= 1 bypass resolution
     examples: dict[str, list[tuple]] = field(default_factory=lambda: defaultdict(list))
 
 
@@ -183,6 +239,13 @@ def load_and_classify(
             distinct_reasons = set(reasons)
             if reasons:
                 summary.haplotypes_with_any_incompatibility += 1
+                summary.incompatible_length_hist[len(variants)] += 1
+                resolutions = count_bypass_resolutions(variants)
+                summary.bypass_resolutions_hist[resolutions] += 1
+                summary.bypass_resolutions_total += resolutions
+                summary.bypass_resolutions_max = max(summary.bypass_resolutions_max, resolutions)
+                if resolutions >= 1:
+                    summary.recoverable_haplotypes += 1
                 for reason in reasons:
                     summary.reason_pair_counts[reason] += 1
                 for reason in distinct_reasons:
@@ -226,6 +289,16 @@ def write_summary_tsv(summary: Summary, path: Path) -> None:
             (f"end_undershoot.{reason}", summary.end_undershoot_by_reason.get(reason, 0))
         )
 
+    # "Explode instead of drop" sizing.
+    n_len2 = summary.incompatible_length_hist.get(2, 0)
+    rows.append(("incompatible_length2", n_len2))
+    rows.append(("incompatible_length_ge3", summary.haplotypes_with_any_incompatibility - n_len2))
+    rows.append(("recoverable_by_explode", summary.recoverable_haplotypes))
+    rows.append(("bypass_resolutions_total", summary.bypass_resolutions_total))
+    rows.append(("bypass_resolutions_max", summary.bypass_resolutions_max))
+    for length in sorted(summary.incompatible_length_hist):
+        rows.append((f"incompatible_length.{length}", summary.incompatible_length_hist[length]))
+
     with path.open("w") as f:
         f.write("metric\tvalue\n")
         for name, value in rows:
@@ -264,6 +337,17 @@ def print_summary(summary: Summary) -> None:
     print(f"  by incompatibility reason:      {dict(summary.end_undershoot_by_reason)}")
     if summary.start_undershoot_anomalies:
         print(f"  !! start-coordinate anomalies (expected 0): {summary.start_undershoot_anomalies}")
+
+    n_len2 = summary.incompatible_length_hist.get(2, 0)
+    n_ge3 = summary.haplotypes_with_any_incompatibility - n_len2
+    print("\n=== Explode-vs-drop sizing (incompatible haplotypes) ===")
+    print(f"  length distribution: {dict(sorted(summary.incompatible_length_hist.items()))}")
+    print(f"  length-2 (explode recovers nothing):     {n_len2}")
+    print(f"  length>=3 (explode could yield bypasses): {n_ge3}")
+    print(f"  recoverable by explode (>=1 resolution):  {summary.recoverable_haplotypes}")
+    print(f"  total bypass candidates exploding spawns: {summary.bypass_resolutions_total}")
+    print(f"  max bypass candidates from one haplotype: {summary.bypass_resolutions_max}")
+    print(f"  bypass-count distribution: {dict(sorted(summary.bypass_resolutions_hist.items()))}")
 
     if summary.examples.get("other_overlap"):
         print("\n!! 'other_overlap' examples (unclassified — refine the taxonomy):")

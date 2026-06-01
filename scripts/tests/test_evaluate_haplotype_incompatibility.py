@@ -98,6 +98,49 @@ def test_classify_haplotype_multiple_reasons() -> None:
     assert set(ev.classify_haplotype(variants)) == {"snp_in_deletion", "same_position"}
 
 
+# --- explode-vs-drop sizing: overlap + bypass resolutions -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        ("chr1:300:AT:A", "chr1:301:T:A", True),       # snp inside deletion
+        ("chr1:600:AAC:A", "chr1:600:AACAC:A", True),  # same position
+        ("chr1:200:A:T", "chr1:210:C:G", False),       # clear gap
+        ("chr1:1:AA:T", "chr1:3:A:T", False),          # distance 0: touching, not overlapping
+    ],
+)
+def test_variants_overlap(a: str, b: str, expected: bool) -> None:
+    assert ev.variants_overlap(_v(a), _v(b)) is expected
+    assert ev.variants_overlap(_v(b), _v(a)) is expected  # order-independent
+
+
+def test_count_bypass_resolutions_length2_conflict_recovers_nothing() -> None:
+    # Exploding a length-2 conflict yields only singletons -> no >=2-variant resolution.
+    variants = ev.parse_variants_string("chr1:300:AT:A,chr1:301:T:A")
+    assert ev.count_bypass_resolutions(variants) == 0
+
+
+def test_count_bypass_resolutions_clean_is_one() -> None:
+    variants = ev.parse_variants_string("chr1:100:A:T,chr1:200:C:G")
+    assert ev.count_bypass_resolutions(variants) == 1
+
+
+def test_count_bypass_resolutions_single_internal_conflict_is_two() -> None:
+    # clean A, conflicting B/C pair, clean D -> resolutions {A,B,D} and {A,C,D}.
+    variants = ev.parse_variants_string("chr1:100:A:T,chr1:300:AT:A,chr1:301:T:A,chr1:400:G:C")
+    assert ev.count_bypass_resolutions(variants) == 2
+
+
+def test_count_bypass_resolutions_three_mutually_exclusive_alleles() -> None:
+    # Three deletions all overlapping each other (a repeat ladder): at most one kept, plus the
+    # clean flank -> three single-allele resolutions.
+    variants = ev.parse_variants_string(
+        "chr1:100:A:T,chr1:500:AAAAAAAA:A,chr1:502:AAAA:A,chr1:504:AA:A"
+    )
+    assert ev.count_bypass_resolutions(variants) == 3
+
+
 # --- Task 3b: coordinate-adequacy functions ---------------------------------------------------
 
 
@@ -173,6 +216,11 @@ def test_load_and_classify_counts(fixture_con: duckdb.DuckDBPyConnection) -> Non
     assert s.end_undershoot_max_bp == 2
     assert dict(s.end_undershoot_by_reason) == {"snp_in_deletion": 1}
     assert s.start_undershoot_anomalies == 0
+    # All five incompatible fixture haplotypes are length-2, so exploding recovers nothing.
+    assert dict(s.incompatible_length_hist) == {2: 5}
+    assert s.recoverable_haplotypes == 0
+    assert s.bypass_resolutions_total == 0
+    assert s.bypass_resolutions_max == 0
 
 
 def test_write_summary_tsv(tmp_path: Path, fixture_con: duckdb.DuckDBPyConnection) -> None:
