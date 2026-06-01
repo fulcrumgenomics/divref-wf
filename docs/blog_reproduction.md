@@ -1,7 +1,21 @@
-# Reproducing `docs/blog_draft.md`
+# Reproducing `docs/blog.md`
 
-This document lists every numeric claim, table cell, and figure in [`blog_draft.md`](blog_draft.md) and points to the command, output file, and log line that produces it.
+This document lists every numeric claim, table cell, and figure in [`blog.md`](blog.md) and points to the command, output file, and log line that produces it.
 The aim is that someone running the workflows on their own machine can verify each value against current data without re-reading the analysis scripts.
+
+## Environment
+
+All commands run through `pixi`, which manages two environments.
+
+The default environment (`pixi run ...`) provides Python, Snakemake, Hail, `bcftools`, `samtools`, and the `duckdb` Python package.
+It runs the `generate_divref` workflow and the Python comparison scripts.
+
+The `analysis` environment (`pixi run -e analysis ...`) adds R and is required for the R-based steps: the gnomAD-release comparison workflow (`compare_divref_gnomad.smk`) and the Venn figure (`compare_haplotypes_venn.R`).
+The R packages those scripts import (`duckdb`, `duckplyr`, `eulerr`) are not available as conda builds for all platforms, so install them once before running any analysis step:
+
+```bash
+pixi run -e analysis setup-r-packages
+```
 
 ## Prerequisite: standard chr22 workflow run
 
@@ -35,7 +49,7 @@ The 3-by-4 comparison table.
 **Command**:
 
 ```bash
-pixi run snakemake -j1 -s workflows/compare_divref_gnomad.smk
+pixi run -e analysis snakemake -j1 -s workflows/compare_divref_gnomad.smk
 ```
 
 For each `gnomad_version` in `{hgdp_1kg_312, genomes_312, joint_41}` the workflow produces a TSV of all gnomAD variants on chr22 above the 0.5% threshold, runs the R comparator against the DivRef 1.1 single-variant track, and writes a log file.
@@ -92,6 +106,9 @@ WHERE source = 'gnomAD_variant';
 
 ## Section: "Comparing against the original algorithm"
 
+**Prerequisite**: a whole-genome `generate_divref` run (autosomes chr1-22) that produced the new DuckDB index `data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb`, plus the original DivRef 1.1 DuckDB at `data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb`.
+This section compares the two DuckDBs directly, so the per-chromosome `.ht` files are not needed here (only the chr22 deep-dive below still uses the chr22 workflow outputs).
+
 ### Venn figure
 
 `data/analysis/compute_haplotypes/algo_comparison.venn.png`
@@ -100,16 +117,16 @@ WHERE source = 'gnomAD_variant';
 
 ```bash
 mkdir -p logs
-pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log
-pixi run Rscript scripts/compare_haplotypes_venn.R &> logs/compare_haplotypes_venn.chr22.log
+pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.log
+pixi run -e analysis Rscript scripts/compare_haplotypes_venn.R &> logs/compare_haplotypes_venn.log
 ```
 
-The Python script writes `data/analysis/compute_haplotypes/algo_comparison.summary.tsv`; the R script reads the `shared` / `old_only` / `new_only` rows from there and renders the figure.
+The Python script defaults to comparing the original DivRef 1.1 DuckDB (`--old-duckdb`) against the whole-genome DuckDB (`--new-duckdb`) over the autosomes (`--contigs`), and writes `data/analysis/compute_haplotypes/algo_comparison.summary.tsv`; the R script reads the `shared` / `old_only` / `new_only` rows from there and renders the figure.
 No counts are hardcoded in the R script.
 
 ### Sub-fragment counts and new-only decomposition
 
-**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn section above).
+**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.log` (same invocation as the Venn section above).
 
 | Blog claim | Summary TSV row |
 |---|---|
@@ -124,12 +141,15 @@ No counts are hardcoded in the R script.
 | new-only with all-novel variants | `new_only_all_novel` |
 | all-novel new-only of length 2 | `new_only_all_novel_length_2` |
 | max length among all-novel new-only | `new_only_all_novel_max_length` |
+| original-only that are NOT a sub-fragment of any new (residual) | `old_only_not_subfragment` |
+| chrX haplotypes the new algorithm adds (coverage note, not part of the autosome comparison) | `new_chrX_haplotypes` |
 
-The residual `old_only` - `old_only_subfragment_of_new` haplotypes are the deep-dive cases analysed by `inspect_threshold_edge_haplotypes.py`.
+The `old_only_not_subfragment` residual haplotypes are the deep-dive cases analysed by `inspect_threshold_edge_haplotypes.py` (restricted to chr22 below).
 
 ## Section: "A closer look at the six original-only haplotypes"
 
 The 6-row case table and the surrounding Mechanism prose.
+This is a chr22 zoom-in: `pixi run python scripts/compare_haplotypes.py --contigs chr22` restricts the comparison to chr22 and reproduces its residual count of six (the genome-wide `old_only_not_subfragment` is larger).
 
 The standard workflow filters out the six original-only haplotypes the blog inspects (their new-algorithm `estimated_gnomad_AF` falls below the 0.005 threshold) and deletes the per-chromosome intermediate Hail tables that the inspector script needs.
 Two steps reconstruct just what's needed.
@@ -205,7 +225,7 @@ The "Mechanism 1 / Mechanism 2" classification in the prose is derived by inspec
 
 ### AC counts table
 
-**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.chr22.log` (same invocation as the Venn / decomposition counts above).
+**Command**: `pixi run python scripts/compare_haplotypes.py &> logs/compare_haplotypes.log` (same invocation as the Venn / decomposition counts above).
 
 | Blog row | Summary TSV row |
 |---|---|
