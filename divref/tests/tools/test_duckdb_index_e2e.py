@@ -3,8 +3,9 @@ End-to-end equivalence test for the per-chromosome DuckDB index flow.
 
 Runs the full init -> append(chr1) -> append(chrX) -> finalize flow over the committed
 test fixtures and asserts the exported `sequences` table is identical, row for row, to a
-golden TSV produced by the previous monolithic `create_duckdb_index` tool. This proves the
-split per-chromosome tools reproduce the old tool's output exactly.
+committed golden TSV. The golden is the current pipeline's expected output (it includes the
+`haplotype_filter` column; all rows are `PASS` since the test subset has no overlapping
+haplotypes), so this is a regression lock on the per-chromosome index build.
 """
 
 from pathlib import Path

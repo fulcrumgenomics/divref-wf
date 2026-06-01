@@ -24,7 +24,7 @@ def to_hashable_items(d: dict[str, _V]) -> tuple[tuple[str, _V], ...]:
     return tuple(sorted(d.items()))
 
 
-def max_reference_end(variants: hl.Expression) -> hl.Expression:
+def _max_reference_end(variants: hl.Expression) -> hl.Expression:
     """
     Return one past the rightmost reference base any variant in the haplotype touches.
 
@@ -76,7 +76,7 @@ def get_haplo_sequence(
     min_pos = min_variant.locus.position
     # Shared with haplo_coordinates so the sequence span matches the stored `end` even when an
     # earlier deletion reaches past the last-by-position variant (an overlapping/flagged haplotype).
-    max_ref_end = max_reference_end(sorted_variants)
+    max_ref_end = _max_reference_end(sorted_variants)
     full_context = hl.get_sequence(
         min_variant.locus.contig,
         min_pos,
@@ -162,5 +162,5 @@ def haplo_coordinates(
     min_variant = sorted_variants[0]
     return hl.struct(
         start=min_variant.locus.position - 1 - window_size,
-        end=max_reference_end(sorted_variants) - 1 + window_size,
+        end=_max_reference_end(sorted_variants) - 1 + window_size,
     )

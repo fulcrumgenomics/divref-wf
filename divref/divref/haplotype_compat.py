@@ -156,6 +156,9 @@ def count_bypass_resolutions(variants: list[Variant]) -> int:
     Returns:
         The number of distinct maximal compatible resolutions of size >= 2.
     """
+    # Bron-Kerbosch maximal-clique enumeration is worst-case exponential, but DivRef haplotypes are
+    # short (a handful of variants, never more than a few dozen even at dense repeat loci), so the
+    # graph is tiny and enumeration is cheap. No size guard is needed for this bounded input.
     n = len(variants)
     if n < 2:
         return 0

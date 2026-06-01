@@ -524,6 +524,10 @@ def _add_compatibility_flag(df: polars.DataFrame) -> polars.DataFrame:
     Returns:
         The DataFrame with a `haplotype_filter` String column appended.
     """
+    # A plain Python loop with a cheap source/n_variants short-circuit, deliberately not a polars
+    # when/then + map_elements: the latter evaluates the classifier branch for every row, whereas
+    # only multi-variant HGDP rows can be incompatible. The bulk (single gnomAD_variant rows) thus
+    # skips parsing/classification entirely. Keep this structure rather than "vectorising" it.
     flags = [
         "PASS" if (source == "gnomAD_variant" or n_variants < 2) else compatibility_flag(variants)
         for variants, source, n_variants in zip(
