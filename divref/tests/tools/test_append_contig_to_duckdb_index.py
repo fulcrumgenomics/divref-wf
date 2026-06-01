@@ -429,6 +429,121 @@ def test_stream_empty_tsv_creates_sequences_table(tmp_path: Path) -> None:
         assert count[0] == 0
 
 
+def test_stream_tsv_flags_overlapping_haplotype(tmp_path: Path) -> None:
+    """
+    Streaming a TSV with an overlapping haplotype persists its incompatibility reason.
+
+    The committed e2e test data has no overlapping haplotypes, so this injects the case at the
+    TSV -> DuckDB boundary where the flag is applied: an overlapping HGDP haplotype (a SNP at a
+    deleted base) is flagged `snp_in_deletion`, while a clean haplotype and a `gnomAD_variant`
+    row stay `PASS`.
+    """
+    columns = [
+        "sequence",
+        "sequence_length",
+        "sequence_id",
+        "n_variants",
+        "contig",
+        "start",
+        "end",
+        "popmax_empirical_AF",
+        "popmax_empirical_AC",
+        "source",
+        "popmax_estimated_gnomad_AF",
+        "popmax_fraction_phased",
+        "max_pop",
+        "variants",
+        "gnomAD_AF_afr",
+        "empirical_AC_afr",
+        "empirical_AF_afr",
+        "fraction_phased_afr",
+        "estimated_gnomAD_haplotype_AF_afr",
+    ]
+    rows = [
+        # overlapping: a SNP at a base the deletion removes -> snp_in_deletion
+        [
+            "ACGT",
+            "4",
+            "DR-9.9-0",
+            "2",
+            "chr1",
+            "274",
+            "326",
+            "0.05",
+            "7",
+            "HGDP_haplotype",
+            "0.004",
+            "0.5",
+            "afr",
+            "chr1:300:AT:A,chr1:301:T:A",
+            "0.1,0.2",
+            "7",
+            "0.05",
+            "0.5",
+            "0.004",
+        ],
+        # clean two-variant haplotype -> PASS
+        [
+            "ACGT",
+            "4",
+            "DR-9.9-1",
+            "2",
+            "chr1",
+            "174",
+            "235",
+            "0.05",
+            "5",
+            "HGDP_haplotype",
+            "0.004",
+            "0.5",
+            "afr",
+            "chr1:200:A:T,chr1:210:C:G",
+            "0.1,0.2",
+            "5",
+            "0.05",
+            "0.5",
+            "0.004",
+        ],
+        # single gnomAD variant -> PASS
+        [
+            "A",
+            "1",
+            "DR-9.9-2",
+            "1",
+            "chr1",
+            "24",
+            "76",
+            "0.1",
+            "100",
+            "gnomAD_variant",
+            "0.1",
+            "1.0",
+            "afr",
+            "chr1:50:A:T",
+            "0.1",
+            "100",
+            "0.1",
+            "1.0",
+            "0.1",
+        ],
+    ]
+    tsv = tmp_path / "with_rows.sequences.tsv"
+    tsv.write_text("\t".join(columns) + "\n" + "\n".join("\t".join(r) for r in rows) + "\n")
+
+    db = tmp_path / "idx.duckdb"
+    with duckdb.connect(str(db)) as conn:
+        appended = _stream_tsv_into_sequences(
+            conn, tsv=tsv, joint_pops_legend=["afr"], chunk_size=100
+        )
+        assert appended == 3
+        flags = dict(conn.execute("SELECT sequence_id, haplotype_filter FROM sequences").fetchall())
+    assert flags == {
+        "DR-9.9-0": "snp_in_deletion",
+        "DR-9.9-1": "PASS",
+        "DR-9.9-2": "PASS",
+    }
+
+
 def test_add_compatibility_flag_values() -> None:
     """PASS for gnomAD/single/clean rows; the incompatibility reason for an overlapping pair."""
     df = polars.DataFrame({
