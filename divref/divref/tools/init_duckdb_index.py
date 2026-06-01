@@ -66,7 +66,9 @@ def init_duckdb_index(
         assert_directory_exists(table_pair.sites_table_path)
 
     # Light Hail init for the globals-only legend reads. Skip if a context already exists (e.g. a
-    # shared test-session context) so this stays idempotent within a process.
+    # shared test-session context) so this stays idempotent within a process. No `tmp_dir` is
+    # passed and 1g memory is hardcoded: this reads only `globals.pops` (no row scan, no
+    # checkpoints), unlike `append_contig_to_duckdb_index` which needs both.
     if Env._hc is None:
         os.environ["PYSPARK_SUBMIT_ARGS"] = "--driver-memory 1g --executor-memory 1g pyspark-shell"
         hl.init()
