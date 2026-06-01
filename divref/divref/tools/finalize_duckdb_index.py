@@ -37,6 +37,9 @@ def finalize_duckdb_index(
                 f"DuckDB index {out_duckdb_file} has no 'sequences' table; "
                 f"run append_contig_to_duckdb_index before finalizing."
             )
-        conn.execute("CREATE INDEX idx_sequence_id ON sequences(sequence_id)")
+        # IF NOT EXISTS keeps finalize idempotent: a re-triggered Snakemake rule or a manual retry
+        # over an already-finalized index is a no-op rather than a raw DuckDB "index already exists"
+        # catalog error.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sequence_id ON sequences(sequence_id)")
 
     logger.info(f"Created idx_sequence_id index on {out_duckdb_file}.")

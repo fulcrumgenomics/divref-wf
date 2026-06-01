@@ -75,6 +75,40 @@ def test_finalize_creates_index(
         assert idx is not None
 
 
+def test_finalize_is_idempotent(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """Running finalize twice is a no-op the second time rather than raising on the index."""
+    table_pairs_tsv = _table_pairs(datadir, tmp_path)
+    output_base = tmp_path / "idx"
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+    append_contig_to_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        contig="chr1",
+        output_base=output_base,
+        reference_fasta=_reference_fasta(datadir),
+        window_size=25,
+        version="9.9",
+    )
+
+    finalize_duckdb_index(output_base=output_base)
+    finalize_duckdb_index(output_base=output_base)
+
+    with duckdb.connect(str(_db_path(output_base))) as conn:
+        idx = conn.execute(
+            "SELECT index_name FROM duckdb_indexes() WHERE index_name = 'idx_sequence_id'"
+        ).fetchone()
+        assert idx is not None
+
+
 def test_finalize_without_sequences_raises(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
