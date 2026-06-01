@@ -6,8 +6,8 @@ import duckdb
 import pytest
 
 from divref.duckdb_index import compute_joint_legend
-from divref.duckdb_index import read_legend
-from divref.duckdb_index import read_window_size
+from divref.tools.append_contig_to_duckdb_index import read_legend
+from divref.tools.append_contig_to_duckdb_index import read_window_size
 from divref.tools.init_duckdb_index import init_duckdb_index
 
 
