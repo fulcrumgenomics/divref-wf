@@ -14,7 +14,7 @@ The [DivRef generation workflow](https://github.com/e9genomics/human-diversity-r
 I wanted a bundle where I could trust the provenance of every haplotype and variant, and tune parameters for individual Fulcrum clients.
 I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workflow wrapping a Python toolkit, with a configuration schema, GCS or AWS Open Data ingestion, and per-chromosome parallelism so a full rebuild takes less than a day on a sufficiently large VM.
 
-*Note: end-to-end benchmark numbers (wall time, peak memory, instance specs) are pending a full whole-genome rebuild on a suitably provisioned EC2 instance and will be added before publishing.*
+### Parameters
 
 | Parameter | Default | Why you'd change it |
 |---|---|---|
@@ -26,6 +26,20 @@ I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workf
 | `chromosomes` | chr1..chr22, chrX, chrY | Iterate on a subset during development |
 
 The actual config schema separates the HGDP+1KG-derived and gnomAD-derived parameters (see [`workflows/config/config_schema.yml`](../workflows/config/config_schema.yml) for the exact names).
+
+### Runtime
+
+On an Apple M3 Macbook with 36GB of memory, the workflow can be run end-to-end in ~17h with default parameters.
+Increasing the population set or decreasing the allele frequency filter values will increase the runtime.
+The Hail steps are best run serially with `snakemake -j1` as Hail by default will use all available cores, so there is no efficiency gain from parallelizing.
+
+| Step | Wall time (minutes) |
+|------|---------|
+| Download and slim down phased gnomAD 3.1.2 HGDP+1KG phased BCFs | 143 |
+| Extract gnomAD 3.1.2 HGDP+1KG variants and AFs from Hail tables | 103 |
+| Extract gnomAD 4.1 variants and AFs from Hail tables | 137 |
+| Compute haplotypes | 614 |
+| Generate database and create FASTA files | |
 
 ## DivRef 1.1 doesn't contain gnomAD 4.1 variants
 
