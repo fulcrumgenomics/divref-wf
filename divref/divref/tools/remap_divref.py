@@ -208,8 +208,9 @@ def _intervals_overlap(start1: int, end1: int, start2: int, end2: int) -> bool:
     return start1 < end2 and start2 < end1
 
 
-# Missing-AF tokens seen in the TSVs exported by Hail/`create_duckdb_index`: "null" and "NA" come
-# from Hail's missing representation; the empty string appears when a pop has no entry at all.
+# Missing-AF tokens seen in the TSVs exported by Hail/`append_contig_to_duckdb_index`:
+# "null" and "NA" come from Hail's missing representation; the empty string appears when a pop
+# has no entry at all.
 _MISSING_AF_TOKENS = frozenset({"null", "NA", ""})
 
 

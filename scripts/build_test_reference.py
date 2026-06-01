@@ -9,7 +9,7 @@ enough to commit (the `.fa.gz` is tracked via git-lfs).
 
 The real-sequence windows cover the test loci (chr1:100001-200000, chrX:50000000-50025000)
 plus a 5 kb margin, which is ample for the flanking reference context that
-`compute-haplotypes` / `create-duckdb-index` extract around each variant.
+`compute-haplotypes` / `append-contig-to-duckdb-index` extract around each variant.
 
 Requires the full GRCh38 reference (NOT committed) at
 `data/work/inputs/Homo_sapiens_assembly38.fasta` (+ `.fai`).
@@ -19,7 +19,7 @@ Regenerate with:
     pixi run bash -c "python scripts/build_test_reference.py | bgzip \
         > divref/tests/data/test_reference.chr1_chrX.fa.gz"
     pixi run samtools faidx divref/tests/data/test_reference.chr1_chrX.fa.gz
-    # Hail and create_duckdb_index look for the index at the with_suffix('.fai') path:
+    # Hail and append-contig-to-duckdb-index look for the index at the with_suffix('.fai') path:
     cp divref/tests/data/test_reference.chr1_chrX.fa.gz.fai \
        divref/tests/data/test_reference.chr1_chrX.fa.fai
     rm divref/tests/data/test_reference.chr1_chrX.fa.gz.fai
