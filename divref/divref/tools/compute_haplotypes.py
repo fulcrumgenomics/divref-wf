@@ -463,7 +463,7 @@ def _find_subsumed_haplotypes(
     return drop
 
 
-def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
+def _apply_containment_dedup(hap_table: hl.Table) -> tuple[hl.Table, int]:
     """
     Drop sub-fragment rows subsumed by a larger fragment with identical per-pop AC.
 
@@ -487,7 +487,8 @@ def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
         hap_table: Hail table with `haplotype` (array<int64>) and `per_pop_AC` (array<int64>).
 
     Returns:
-        `hap_table` with subsumed rows removed.
+        A `(hap_table, n_dropped)` tuple: the table with subsumed rows removed, and the number of
+        haplotypes dropped.
     """
     # Only haplotypes that SHARE a per_pop_AC vector with another row can participate in
     # containment (a drop requires `X.per_pop_AC == Y.per_pop_AC`). Rows whose per_pop_AC is
@@ -517,13 +518,13 @@ def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
     drop = _find_subsumed_haplotypes(by_ac)
     logger.info("containment_dedup: dropping %d subsumed haplotypes", len(drop))
     if not drop:
-        return hap_table
+        return hap_table, 0
 
     drop_strs = {",".join(str(x) for x in h) for h in drop}
     drop_lit = hl.literal(drop_strs, dtype=hl.tset(hl.tstr))
     hap_table = hap_table.annotate(_hap_str=hl.delimit(hap_table.haplotype.map(hl.str), ","))
     hap_table = hap_table.filter(~drop_lit.contains(hap_table._hap_str))
-    return hap_table.drop("_hap_str")
+    return hap_table.drop("_hap_str"), len(drop)
 
 
 def compute_haplotypes(
@@ -538,6 +539,7 @@ def compute_haplotypes(
     temp_dir: Path = Path("/tmp"),
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
+    min_partitions: int = 64,
 ) -> None:
     """
     Compute population haplotypes from VCF files with gnomAD frequency annotations.
@@ -582,6 +584,9 @@ def compute_haplotypes(
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
+        min_partitions: Minimum partitions for `import_vcf`. Higher values give finer map-side
+            granularity, reducing per-task memory in the downstream entries->blocks shuffle.
+            Default 64 (the prior hard-coded value).
     """
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
@@ -612,7 +617,7 @@ def compute_haplotypes(
     mt = hl.import_vcf(
         str(vcfs_path),
         reference_genome=defaults.REFERENCE_GENOME,
-        min_partitions=64,
+        min_partitions=min_partitions,
         force_bgz=True,
     )
     mt = mt.select_rows().select_cols()
@@ -710,13 +715,14 @@ def compute_haplotypes(
         (hap_table.min_variant_frequency > 0)
         & (hap_table.estimated_gnomad_AF >= haplotype_freq_threshold)
     )
-    hap_table = _apply_containment_dedup(hap_table)
+    hap_table, n_dropped = _apply_containment_dedup(hap_table)
     hap_table = hap_table.drop("frequencies_by_pop")
 
     count_after_filter: int = hap_table.count()
     logger.info(
         f"{count_after_filter} haplotypes remaining after filtering and "
-        f"containment dedup at window size {window_size}"
+        f"containment dedup at window size {window_size} "
+        f"({count_after_filter + n_dropped} total before dedup, {n_dropped} subsumed)"
     )
 
     logger.info("Writing final %s.ht ...", output_base)
