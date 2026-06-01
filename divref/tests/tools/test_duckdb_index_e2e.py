@@ -29,26 +29,50 @@ def _db_path(output_base: Path) -> Path:
     return Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
 
 
-def _assert_files_identical(actual: Path, expected: Path) -> None:
-    """Assert two text files are line-for-line identical, reporting the first divergence."""
-    actual_lines = actual.read_text().splitlines()
-    expected_lines = expected.read_text().splitlines()
+def _read_rows_sorted_by_sequence_number(tsv: Path) -> tuple[str, list[str]]:
+    """
+    Read a sequences TSV into its header and data rows sorted by numeric sequence number.
 
-    for line_number, (got, want) in enumerate(
-        zip(actual_lines, expected_lines, strict=False), start=1
-    ):
-        assert got == want, (
-            f"Mismatch at line {line_number}:\n  golden:   {want!r}\n  produced: {got!r}"
-        )
+    Rows are keyed on the integer suffix of `sequence_id` (`DR-{version}-{n}`) rather than on the
+    raw string, so the comparison does not depend on lexical-vs-numeric ordering of `sequence_id`
+    in either file (e.g. lexical order interleaves `-10` between `-1` and `-2`).
 
-    common = min(len(actual_lines), len(expected_lines))
-    if len(actual_lines) != len(expected_lines):
-        longer = actual_lines if len(actual_lines) > len(expected_lines) else expected_lines
-        which = "produced" if len(actual_lines) > len(expected_lines) else "golden"
+    Args:
+        tsv: Path to a sequences TSV with a header row.
+
+    Returns:
+        A tuple of (header line, data rows sorted by sequence number).
+    """
+    lines = tsv.read_text().splitlines()
+    header = lines[0]
+    sequence_id_col = header.split("\t").index("sequence_id")
+
+    def sequence_number(row: str) -> int:
+        return int(row.split("\t")[sequence_id_col].rsplit("-", 1)[1])
+
+    return header, sorted(lines[1:], key=sequence_number)
+
+
+def _assert_sequences_equivalent(actual: Path, expected: Path) -> None:
+    """Assert two sequences TSVs hold identical rows, comparing in numeric sequence-id order."""
+    actual_header, actual_rows = _read_rows_sorted_by_sequence_number(actual)
+    expected_header, expected_rows = _read_rows_sorted_by_sequence_number(expected)
+
+    assert actual_header == expected_header, (
+        f"Header mismatch:\n  golden:   {expected_header!r}\n  produced: {actual_header!r}"
+    )
+
+    for got, want in zip(actual_rows, expected_rows, strict=False):
+        assert got == want, f"Row mismatch:\n  golden:   {want!r}\n  produced: {got!r}"
+
+    if len(actual_rows) != len(expected_rows):
+        common = min(len(actual_rows), len(expected_rows))
+        longer = actual_rows if len(actual_rows) > len(expected_rows) else expected_rows
+        which = "produced" if len(actual_rows) > len(expected_rows) else "golden"
         raise AssertionError(
-            f"Line count differs: produced {len(actual_lines)} lines, "
-            f"golden has {len(expected_lines)} lines. "
-            f"First extra line (line {common + 1}, from {which}):\n  {longer[common]!r}"
+            f"Row count differs: produced {len(actual_rows)} rows, "
+            f"golden has {len(expected_rows)} rows. "
+            f"First extra row (from {which}):\n  {longer[common]!r}"
         )
 
 
@@ -110,4 +134,4 @@ def test_new_flow_matches_golden(
         )
 
     golden_tsv = datadir / "duckdb_index_golden" / "sequences.chr1_chrX.tsv"
-    _assert_files_identical(produced_tsv, golden_tsv)
+    _assert_sequences_equivalent(produced_tsv, golden_tsv)
