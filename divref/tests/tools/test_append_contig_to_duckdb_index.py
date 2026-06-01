@@ -7,6 +7,7 @@ import duckdb
 import hail as hl
 import pytest
 
+from divref.tools.append_contig_to_duckdb_index import _stream_tsv_into_sequences
 from divref.tools.append_contig_to_duckdb_index import append_contig_to_duckdb_index
 from divref.tools.append_contig_to_duckdb_index import export_sequences_table_to_tsv
 from divref.tools.append_contig_to_duckdb_index import iter_dataframe_chunks
@@ -371,3 +372,49 @@ def test_export_sequences_table_to_tsv_per_pop_columns(
     assert df["popmax_empirical_AF"][0] == pytest.approx(0.42)
     assert df["popmax_fraction_phased"][0] == pytest.approx(1.40)
     assert df["popmax_estimated_gnomad_AF"][0] == pytest.approx(0.07)
+
+
+def test_stream_empty_tsv_creates_sequences_table(tmp_path: Path) -> None:
+    """
+    A contig that yields zero rows still leaves a valid (empty) sequences table behind.
+
+    Guards the finalize step: it must always find a `sequences` table, even if the first appended
+    contig produced no rows. No Hail needed — this exercises the polars/DuckDB streaming path
+    directly with a header-only TSV.
+    """
+    joint_pops_legend = ["afr"]
+    columns = [
+        "sequence_id",
+        "sequence_length",
+        "n_variants",
+        "start",
+        "end",
+        "popmax_empirical_AF",
+        "popmax_empirical_AC",
+        "popmax_estimated_gnomad_AF",
+        "popmax_fraction_phased",
+        "gnomAD_AF_afr",
+        "empirical_AC_afr",
+        "empirical_AF_afr",
+        "fraction_phased_afr",
+        "estimated_gnomAD_haplotype_AF_afr",
+    ]
+    header_only_tsv = tmp_path / "empty.sequences.tsv"
+    header_only_tsv.write_text("\t".join(columns) + "\n")
+
+    db = tmp_path / "idx.duckdb"
+    with duckdb.connect(str(db)) as conn:
+        appended = _stream_tsv_into_sequences(
+            conn,
+            tsv=header_only_tsv,
+            joint_pops_legend=joint_pops_legend,
+            chunk_size=100,
+        )
+        assert appended == 0
+        exists = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
+        ).fetchone()
+        assert exists is not None
+        count = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
+        assert count is not None
+        assert count[0] == 0

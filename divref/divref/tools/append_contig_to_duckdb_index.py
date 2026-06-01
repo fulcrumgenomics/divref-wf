@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
@@ -35,14 +36,16 @@ def at_joint(source_pops: list[str], joint_pops: list[str]) -> list[int]:
 def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     """Read a stored *_pops_legend table back into a list of pop codes."""
     row = conn.execute(f"SELECT pops_legend FROM {table}").fetchone()  # noqa: S608
-    assert row is not None
+    if row is None:
+        raise ValueError(f"Metadata table {table} is empty; run init_duckdb_index first.")
     return list(json.loads(row[0]))
 
 
 def read_window_size(conn: duckdb.DuckDBPyConnection) -> int:
     """Read the stored window_size metadata value."""
     row = conn.execute("SELECT window_size FROM window_size").fetchone()
-    assert row is not None
+    if row is None:
+        raise ValueError("Metadata table window_size is empty; run init_duckdb_index first.")
     return int(row[0])
 
 
@@ -54,7 +57,8 @@ def sequences_row_count(conn: duckdb.DuckDBPyConnection) -> int:
     if exists is None:
         return 0
     row = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
-    assert row is not None
+    if row is None:
+        raise ValueError("COUNT(*) on sequences returned no row.")
     return int(row[0])
 
 
@@ -135,7 +139,7 @@ def build_gnomad_variant_table_entries(
             side.
 
     Returns:
-        Tuple of (checkpointed Hail table, population legend list).
+        Hail table of gnomAD single-variant entries annotated to match the HGDP_haplotype schema.
     """
     va = hl.read_table(str(sites_table_path))
     count_orig: int = va.count()
@@ -340,30 +344,44 @@ def export_sequences_table_to_tsv(
     ).export(str(out_file))
 
 
-def iter_dataframe_chunks(
-    *,
-    tsv: Path,
-    joint_pops_legend: list[str],
-    chunk_size: int,
-) -> Iterator[polars.DataFrame]:
+def _scan_sequences_tsv(tsv: Path, joint_pops_legend: list[str]) -> polars.LazyFrame:
     """
-    Yield polars DataFrames of up to `chunk_size` rows from a sequences TSV.
+    Build the typed polars LazyFrame for a sequences TSV.
 
     The `sequence_id` and `gnomAD_AF_*` columns are explicitly typed as strings so that
     schema inference cannot misread comma-delimited per-variant AFs as floats.
+
+    Every numeric column is pinned explicitly as well. Each contig is appended in its own process
+    with independent polars inference, and the `sequences` table's schema is fixed by whichever
+    contig is appended first (`CREATE TABLE ... AS SELECT`). A per-pop column that is all-`NA` for
+    one contig (e.g. an HGDP-only pop on a sites-only contig like chrX) would otherwise infer a
+    different dtype than the same column on a contig where it is populated, and the later
+    `INSERT INTO` would fail or coerce. Pinning the integer and float columns makes the schema
+    contig-order-independent.
 
     Args:
         tsv: Path to the sequences TSV (bgz-compressed).
         joint_pops_legend: Ordered list of population codes used to name `gnomAD_AF_{pop}`
             columns; must match what `export_sequences_table_to_tsv` wrote.
-        chunk_size: Maximum rows per yielded DataFrame.
 
-    Yields:
-        Polars DataFrame batches read from `tsv`.
+    Returns:
+        A LazyFrame over `tsv` with the full sequences schema applied.
     """
     schema_overrides: dict[str, type[polars.DataType]] = {
         "sequence_id": polars.String,
+        "sequence_length": polars.Int64,
+        "n_variants": polars.Int64,
+        "start": polars.Int64,
+        "end": polars.Int64,
+        "popmax_empirical_AF": polars.Float64,
+        "popmax_empirical_AC": polars.Int64,
+        "popmax_estimated_gnomad_AF": polars.Float64,
+        "popmax_fraction_phased": polars.Float64,
         **{f"gnomAD_AF_{pop}": polars.String for pop in joint_pops_legend},
+        **{f"empirical_AC_{pop}": polars.Int64 for pop in joint_pops_legend},
+        **{f"empirical_AF_{pop}": polars.Float64 for pop in joint_pops_legend},
+        **{f"fraction_phased_{pop}": polars.Float64 for pop in joint_pops_legend},
+        **{f"estimated_gnomAD_haplotype_AF_{pop}": polars.Float64 for pop in joint_pops_legend},
     }
     # Hail's TSV export emits "NA" for missing scalar fields; "null" is included for
     # robustness against other writers.
@@ -382,11 +400,34 @@ def iter_dataframe_chunks(
         polars.col(f"gnomAD_AF_{pop}").fill_null("NA").cast(polars.String)
         for pop in joint_pops_legend
     ])
+    return lf
+
+
+def iter_dataframe_chunks(
+    *,
+    tsv: Path,
+    joint_pops_legend: list[str],
+    chunk_size: int,
+) -> Iterator[polars.DataFrame]:
+    """
+    Yield non-empty polars DataFrames of up to `chunk_size` rows from a sequences TSV.
+
+    Args:
+        tsv: Path to the sequences TSV (bgz-compressed).
+        joint_pops_legend: Ordered list of population codes used to name `gnomAD_AF_{pop}`
+            columns; must match what `export_sequences_table_to_tsv` wrote.
+        chunk_size: Maximum rows per yielded DataFrame.
+
+    Yields:
+        Polars DataFrame batches read from `tsv`.
+    """
+    lf = _scan_sequences_tsv(tsv, joint_pops_legend)
     for df in lf.collect_batches(chunk_size=chunk_size):
         if df.height > 0:
             yield df
 
 
+@dataclass(frozen=True, kw_only=True)
 class _RemapArrays:
     """
     The four pop-legend remap arrays used to build a contig's sequences table.
@@ -398,18 +439,10 @@ class _RemapArrays:
         gnomad_at_joint: For each joint pop index, the gnomAD-source index or -1 if absent.
     """
 
-    def __init__(
-        self,
-        *,
-        hgdp_to_joint: list[int],
-        gnomad_to_joint: list[int],
-        hgdp_at_joint: list[int],
-        gnomad_at_joint: list[int],
-    ) -> None:
-        self.hgdp_to_joint = hgdp_to_joint
-        self.gnomad_to_joint = gnomad_to_joint
-        self.hgdp_at_joint = hgdp_at_joint
-        self.gnomad_at_joint = gnomad_at_joint
+    hgdp_to_joint: list[int]
+    gnomad_to_joint: list[int]
+    hgdp_at_joint: list[int]
+    gnomad_at_joint: list[int]
 
 
 def _resolve_legends_and_remaps(
@@ -472,8 +505,10 @@ def _stream_tsv_into_sequences(
     """
     Stream a per-contig sequences TSV into the DuckDB `sequences` table.
 
-    Reads the TSV in batches of `chunk_size` rows. The first batch (when `sequences` has no rows
-    yet) creates the table; every later batch appends to it.
+    Creates the `sequences` table from the typed schema if it does not exist yet, then appends each
+    batch of `chunk_size` rows. Creating the table up front (from a zero-row typed frame rather than
+    the first non-empty batch) means a contig that yields no rows still leaves a valid `sequences`
+    table behind, so `finalize_duckdb_index` never depends on some contig having had data.
 
     Args:
         conn: Open connection to the DuckDB index.
@@ -484,16 +519,20 @@ def _stream_tsv_into_sequences(
     Returns:
         The number of rows appended for this contig.
     """
+    table_exists = conn.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
+    ).fetchone()
+    if table_exists is None:
+        empty_df = _scan_sequences_tsv(tsv, joint_pops_legend).limit(0).collect()  # noqa: F841
+        conn.execute("CREATE TABLE sequences AS SELECT * FROM empty_df")
+
     appended_rows: int = 0
     for df in iter_dataframe_chunks(
         tsv=tsv,
         joint_pops_legend=joint_pops_legend,
         chunk_size=chunk_size,
     ):
-        if sequences_row_count(conn) == 0:
-            conn.execute("CREATE TABLE sequences AS SELECT * FROM df")
-        else:
-            conn.execute("INSERT INTO sequences SELECT * FROM df")
+        conn.execute("INSERT INTO sequences SELECT * FROM df")
         appended_rows += df.height
     return appended_rows
 
