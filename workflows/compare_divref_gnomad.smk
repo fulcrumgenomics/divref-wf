@@ -10,7 +10,7 @@ from pathlib import Path
 ####################################################################################################
 
 OUTPUT_DIR: Path = Path("data/analysis")
-COMPARISON_NAME: str = "compare_divref_gnomad_0_005"
+COMPARISON_NAME: str = "compare_divref_gnomad"
 CONTIG: str = "chr22"
 FREQUENCY_THRESHOLD: float = 0.005
 DIVREF_DUCKDB_URL: str = (
@@ -82,6 +82,9 @@ rule extract_gnomad_single_afs:
         contig=CONTIG,
         freq_threshold=FREQUENCY_THRESHOLD,
         gnomad_version=lambda wildcards: wildcards.gnomad_version.upper(),
+        gcs_credentials_path="~/.config/gcloud/application_default_credentials.json",
+        spark_driver_memory_gb=16,
+        spark_executor_memory_gb=16,
     shell:
         """
         (
@@ -89,7 +92,10 @@ rule extract_gnomad_single_afs:
                 --contig {params.contig} \
                 --freq-threshold {params.freq_threshold} \
                 --gnomad-version {params.gnomad_version} \
-                --out-sites-tsv {output.tsv}
+                --out-sites-tsv {output.tsv} \
+                --gcs-credentials-path '{params.gcs_credentials_path}' \
+                --spark-driver-memory-gb {params.spark_driver_memory_gb} \
+                --spark-executor-memory-gb {params.spark_executor_memory_gb}
         ) &> {log}
         """
 
