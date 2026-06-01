@@ -576,6 +576,71 @@ def test_attach_component_info_array_lengths_match_haplotype(
     assert len(rows[0].frequencies_by_pop) == 4
 
 
+def test_multi_member_locus_groups_excludes_singletons(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Singleton locus groups are excluded; groups with >=2 members are kept.
+
+    A singleton locus group has one variant, which can never form a >=2-carrier parent block, so
+    it never reaches a haplotype -- filtering to multi-member groups before the entries explosion
+    is exact.
+    """
+    from divref.tools.compute_haplotypes import _multi_member_locus_groups
+
+    rows = hl.Table.parallelize(
+        [
+            {"row_idx": 0, "locus_group": 0},
+            {"row_idx": 1, "locus_group": 0},  # group 0 has 2 members -> kept
+            {"row_idx": 2, "locus_group": 1},  # group 1 singleton -> dropped
+            {"row_idx": 3, "locus_group": 2},
+            {"row_idx": 4, "locus_group": 2},
+            {"row_idx": 5, "locus_group": 2},  # group 2 has 3 members -> kept
+        ],
+        schema=hl.tstruct(row_idx=hl.tint64, locus_group=hl.tint32),
+    ).key_by("row_idx")
+
+    multi = _multi_member_locus_groups(rows)
+    kept = {r.row_idx for r in rows.filter(hl.is_defined(multi[rows.locus_group])).collect()}
+    assert kept == {0, 1, 3, 4, 5}
+
+
+def test_attach_component_info_ignores_unreferenced_variants(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    Variants absent from every haplotype don't affect the output.
+
+    The broadcast is restricted to haplotype-referenced variants; the result must be identical
+    to passing only those variants. Also guards against the restriction wrongly dropping a
+    referenced variant (which would change the looked-up components).
+    """
+    hap_table = _make_hap_table([([0, 2], [1, 0])])
+    with_extras = _make_variants_ht([
+        (0, 100, "A", "T", [0.1, 0.2], {0: 100, 1: 200}),
+        (1, 110, "C", "G", [0.3, 0.4], {0: 102, 1: 198}),  # unreferenced
+        (2, 120, "G", "A", [0.5, 0.6], {0: 99, 1: 201}),
+        (3, 130, "T", "C", [0.7, 0.8], {0: 95, 1: 205}),  # unreferenced
+    ])
+    referenced_only = _make_variants_ht([
+        (0, 100, "A", "T", [0.1, 0.2], {0: 100, 1: 200}),
+        (2, 120, "G", "A", [0.5, 0.6], {0: 99, 1: 201}),
+    ])
+
+    def summarize(variants_ht: hl.Table) -> list[object]:
+        row = _attach_component_info(hap_table, variants_ht).collect()[0]
+        return [
+            [v.locus.position for v in row.variants],
+            [[s.AF for s in r] for r in row.gnomad_freqs],
+            [{p: s.AN for p, s in fbp.items()} for fbp in row.frequencies_by_pop],
+        ]
+
+    # Identical output whether or not the unreferenced variants are present.
+    assert summarize(with_extras) == summarize(referenced_only)
+    # And it picked up exactly the referenced variants, in haplotype order.
+    assert summarize(with_extras)[0] == [100, 120]
+
+
 @dataclass
 class MetricsRow:
     """Helper to construct one row for testing `_compute_metrics`."""
@@ -796,7 +861,9 @@ def test_apply_containment_dedup_canonical_three_rows(
         ([1, 2], [1, 0]),  # sub of A only — should drop (same AC as longer [0,1,2])
         ([99, 0], [1, 0]),  # sub of B only — should drop (same AC as longer [99,0,1])
     ])
-    result = sorted(_apply_containment_dedup(hap_table).collect(), key=lambda r: list(r.haplotype))
+    table, n_dropped = _apply_containment_dedup(hap_table)
+    result = sorted(table.collect(), key=lambda r: list(r.haplotype))
+    assert n_dropped == 2
     haps = [tuple(r.haplotype) for r in result]
     assert haps == [(0, 1), (0, 1, 2), (99, 0, 1)]
     by_hap: dict[tuple[int, ...], list[int]] = {
@@ -822,7 +889,9 @@ def test_apply_containment_dedup_identical_full_block(
         ([0, 1], [2]),
         ([1, 2], [2]),
     ])
-    result = _apply_containment_dedup(hap_table).collect()
+    table, n_dropped = _apply_containment_dedup(hap_table)
+    result = table.collect()
+    assert n_dropped == 2
     assert len(result) == 1
     assert list(result[0].haplotype) == [0, 1, 2]
 
@@ -847,7 +916,9 @@ def test_apply_containment_dedup_mixed_ac(hail_context: None) -> None:  # noqa: 
         ([1, 2, 3], [1]),  # in A only as proper sub. Same AC as [0,1,2,3] → drop.
         ([2, 3], [1]),  # in A only. Same AC as [0,1,2,3] → drop. (Also as longer [1,2,3].)
     ])
-    result = sorted(_apply_containment_dedup(hap_table).collect(), key=lambda r: len(r.haplotype))
+    table, n_dropped = _apply_containment_dedup(hap_table)
+    result = sorted(table.collect(), key=lambda r: len(r.haplotype))
+    assert n_dropped == 4
     haps = [tuple(r.haplotype) for r in result]
     assert haps == [(0, 1, 2), (0, 1, 2, 3)]
 
@@ -861,8 +932,46 @@ def test_apply_containment_dedup_no_op_when_unique_acs(
         ([0, 1], [2, 0]),
         ([1, 2], [3, 0]),
     ])
-    result = _apply_containment_dedup(hap_table).collect()
+    table, n_dropped = _apply_containment_dedup(hap_table)
+    result = table.collect()
+    assert n_dropped == 0
     assert len(result) == 3
+
+
+def test_compute_haplotypes_passes_min_partitions(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """`min_partitions` is forwarded to `import_vcf(min_partitions=...)`."""
+    captured: dict[str, object] = {}
+
+    class _StopEarlyError(Exception):
+        pass
+
+    def fake_import_vcf(*_args: object, **kwargs: object) -> object:
+        captured["min_partitions"] = kwargs.get("min_partitions")
+        raise _StopEarlyError
+
+    # Real read_table + the freq filter are lazy, so execution reaches the mocked import_vcf without
+    # running Hail; hl.init is mocked so the tool's unconditional init does not re-init the session.
+    with (
+        patch("divref.tools.compute_haplotypes.hl.init"),
+        patch("divref.tools.compute_haplotypes.hl.import_vcf", side_effect=fake_import_vcf),
+        pytest.raises(_StopEarlyError),
+    ):
+        compute_haplotypes(
+            vcfs_path=datadir / "chr1_100001_200000.vcf.gz",
+            gnomad_va_file=datadir / "chr1_100001_200000.gnomad_afs.ht",
+            gnomad_sa_file=datadir / "hgdp_1kg_sample_metadata.extract.ht",
+            window_size=5000,
+            variant_freq_threshold=0.0,
+            haplotype_freq_threshold=0.0,
+            output_base=tmp_path / "out",
+            min_partitions=137,
+        )
+
+    assert captured["min_partitions"] == 137
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001

@@ -181,6 +181,15 @@ properties:
       time. Recommended maximum 1,000,000 for typical laptop.
     default: 100000
 
+  haplotype_min_partitions:
+    type: integer
+    minimum: 1
+    description: |
+      Minimum partitions for `import_vcf` in `divref compute-haplotypes`. Higher values give finer
+      per-task granularity in the entries->blocks shuffle, lowering per-task heap on dense
+      chromosomes at the cost of more task-scheduling overhead.
+    default: 64
+
   work_dir:
     type: string
     description: Path to the working directory for intermediate files.

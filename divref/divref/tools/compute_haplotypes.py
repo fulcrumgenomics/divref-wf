@@ -51,6 +51,27 @@ def _compute_locus_groups(
     return group_of, current_group + 1
 
 
+def _multi_member_locus_groups(rows_with_groups: hl.Table) -> hl.Table:
+    """
+    Return the `locus_group` ids that have at least two member variants.
+
+    A singleton locus group (one variant) can never form a parent block of ≥2 carriers, so its
+    variant never reaches a haplotype. Filtering to these multi-member groups before the
+    per-sample entries explosion is exact (identical downstream result) and shrinks that step —
+    the dominant early-stage cost on large chromosomes, where most variants are isolated
+    singletons. Returns the small group-id table (one row per surviving group) so callers can
+    filter by `locus_group` membership directly, without a row-level re-key/join.
+
+    Args:
+        rows_with_groups: table with a `locus_group` field.
+
+    Returns:
+        Table keyed by `locus_group`, one row per group with ≥2 members.
+    """
+    sizes = rows_with_groups.group_by(rows_with_groups.locus_group).aggregate(n=hl.agg.count())
+    return sizes.filter(sizes.n > 1)
+
+
 def _form_parent_blocks(
     blocks_ht: hl.Table,
     window_size: int,
@@ -191,12 +212,14 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
     Looks up `(locus, alleles, freq, frequencies_by_pop)` for every `row_idx` in each row's
     `haplotype` array and produces three parallel-length arrays.
 
-    Implementation: collects the variants table into a driver-side dict keyed by `row_idx`,
-    broadcasts it as a Hail literal, and indexes per-haplotype. Driver memory is proportional
-    to the number of variants in `variants_ht` (i.e., variants that pass `variant_freq_threshold`
-    upstream); for typical chr1 inputs this is in the hundreds of thousands of small structs.
-    Hail-side alternatives (explode+group_by, per-element table indexing inside `.map()`) were
-    attempted but trigger Hail IR compiler bugs in 0.2.137 — revisit when upgrading.
+    Implementation: a distributed semi-join first restricts `variants_ht` to only the variants
+    referenced by some haplotype (most variants are isolated singletons that never enter a parent
+    block, so they are dead weight in the broadcast); those are collected into a driver-side dict
+    keyed by `row_idx`, broadcast as a Hail literal, and indexed per-haplotype. Driver memory is
+    therefore proportional to the number of haplotype-referenced variants, not to all variants in
+    `variants_ht` or those passing `variant_freq_threshold` upstream (measured ~6.5x fewer on
+    chr2). Hail-side alternatives (explode+group_by, per-element table indexing inside `.map()`)
+    were attempted but trigger Hail IR compiler bugs in 0.2.137 — revisit when upgrading.
 
     Args:
         hap_table: Hail table with at least these fields:
@@ -212,6 +235,23 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
             - `frequencies_by_pop` (array<dict<int, struct(AF, AC, AN)>>): the per-variant
               call-stats grouping. Used downstream for per-population min-AN computation.
     """
+    # Restrict the broadcast to variants that actually appear in a haplotype. Most variants are
+    # isolated singletons (median locus-group size 1) that never enter a parent block, so they
+    # are dead weight in the broadcast (measured ~6.5x fewer on chr2). The output is identical:
+    # every row_idx the per-haplotype lookup below uses is, by construction, referenced here and
+    # so retained. Done as a distributed semi-join -- no driver collect, no extra literal.
+    referenced = hap_table.key_by()
+    referenced = (
+        referenced.select(row_idx=referenced.haplotype)
+        .explode("row_idx")
+        .key_by("row_idx")
+        .distinct()
+    )
+    variants_ht = variants_ht.key_by("row_idx").semi_join(referenced)
+
+    # INSTRUMENTATION: bracket the driver-side collect so we can attribute memory peaks.
+    # `len(pairs)` reads the already-materialized Python list (no extra Hail evaluation).
+    logger.info("attach_component_info: collecting variant components to driver ...")
     pairs = variants_ht.aggregate(
         hl.agg.collect(
             hl.tuple([
@@ -225,7 +265,22 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
             ])
         )
     )
-    components_dict = hl.literal(dict(pairs))
+    logger.info("attach_component_info: collected %d variant components for broadcast", len(pairs))
+    # Keyed by int32 to match the `hl.int32(idx)` lookup below; the explicit dtype also keeps the
+    # literal well-typed when `pairs` is empty (no haplotype-referenced variants), where
+    # `hl.literal({})` would otherwise fail to infer the key/value types.
+    components_dict = hl.literal(
+        dict(pairs),
+        dtype=hl.tdict(
+            hl.tint32,
+            hl.tstruct(
+                locus=variants_ht.locus.dtype,
+                alleles=variants_ht.alleles.dtype,
+                freq=variants_ht.freq.dtype,
+                frequencies_by_pop=variants_ht.frequencies_by_pop.dtype,
+            ),
+        ),
+    )
     hap_table = hap_table.annotate(
         _components=hap_table.haplotype.map(lambda idx: components_dict[hl.int32(idx)])
     )
@@ -408,7 +463,7 @@ def _find_subsumed_haplotypes(
     return drop
 
 
-def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
+def _apply_containment_dedup(hap_table: hl.Table) -> tuple[hl.Table, int]:
     """
     Drop sub-fragment rows subsumed by a larger fragment with identical per-pop AC.
 
@@ -416,37 +471,60 @@ def _apply_containment_dedup(hap_table: hl.Table) -> hl.Table:
       - `X.haplotype` is a strictly shorter adjacency-contiguous sub-array of `Y.haplotype`, AND
       - `X.per_pop_AC == Y.per_pop_AC` (element-wise across all populations).
 
-    Implementation: collects `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC
-    tuple, scans each group for proper sub-array containment, and filters the Hail table by
-    the resulting set of stringified haplotype keys. Driver memory is proportional to the
-    number of unique haplotypes; within each AC group, candidates are sorted by length
-    descending and the inner scan exits as soon as the running candidate is no longer strictly
-    longer than the target (proper containment requires `len(h_long) > len(h_short)`). This
-    keeps the worst case at O(G²) but prunes most pairs in practice when groups span a wide
-    length range.
+    Implementation: restricts to rows whose `per_pop_AC` vector is shared by at least one
+    other row (a drop requires an AC-equal pair, so rows with a unique AC are irrelevant),
+    collects only those `(haplotype, per_pop_AC)` to the driver, groups by per-pop AC tuple,
+    scans each group for proper sub-array containment, and filters the full Hail table by the
+    resulting set of stringified haplotype keys. Driver memory is proportional to the number
+    of haplotypes in multi-member AC groups, not the total; the per-AC group counts and the
+    membership filter run distributed in Hail. Within each AC group, candidates are sorted by
+    length descending and the inner scan exits as soon as the running candidate is no longer
+    strictly longer than the target (proper containment requires `len(h_long) > len(h_short)`).
+    This keeps the worst case at O(G²) but prunes most pairs in practice when groups span a
+    wide length range.
 
     Args:
         hap_table: Hail table with `haplotype` (array<int64>) and `per_pop_AC` (array<int64>).
 
     Returns:
-        `hap_table` with subsumed rows removed.
+        A `(hap_table, n_dropped)` tuple: the table with subsumed rows removed, and the number of
+        haplotypes dropped.
     """
-    rows = hap_table.aggregate(
-        hl.agg.collect(hl.struct(haplotype=hap_table.haplotype, per_pop_AC=hap_table.per_pop_AC))
+    # Only haplotypes that SHARE a per_pop_AC vector with another row can participate in
+    # containment (a drop requires `X.per_pop_AC == Y.per_pop_AC`). Rows whose per_pop_AC is
+    # unique can neither be subsumed nor subsume anything, so they are irrelevant to the dedup
+    # and need not be pulled to the driver. Restricting the collect to multi-member per_pop_AC
+    # groups keeps this — the memory-dominant step on large chromosomes, where the collect
+    # materializes every haplotype on the driver — proportional to the ambiguous subset only.
+    # The per-AC group counts and the semi-join filter run distributed in Hail.
+    ac_counts = hap_table.group_by(_ac=hap_table.per_pop_AC).aggregate(n=hl.agg.count())
+    ambiguous = hap_table.filter(ac_counts[hap_table.per_pop_AC].n > 1)
+
+    # INSTRUMENTATION: bracket the driver-side collect; `len(rows)`/`len(by_ac)` read
+    # already-materialized Python objects (no extra Hail evaluation).
+    logger.info("containment_dedup: collecting multi-AC haplotypes to driver ...")
+    rows = ambiguous.aggregate(
+        hl.agg.collect(hl.struct(haplotype=ambiguous.haplotype, per_pop_AC=ambiguous.per_pop_AC))
     )
     by_ac: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
     for r in rows:
         by_ac.setdefault(tuple(r.per_pop_AC), []).append(tuple(r.haplotype))
+    logger.info(
+        "containment_dedup: collected %d haplotypes across %d multi-member AC groups",
+        len(rows),
+        len(by_ac),
+    )
 
     drop = _find_subsumed_haplotypes(by_ac)
+    logger.info("containment_dedup: dropping %d subsumed haplotypes", len(drop))
     if not drop:
-        return hap_table
+        return hap_table, 0
 
     drop_strs = {",".join(str(x) for x in h) for h in drop}
     drop_lit = hl.literal(drop_strs, dtype=hl.tset(hl.tstr))
     hap_table = hap_table.annotate(_hap_str=hl.delimit(hap_table.haplotype.map(hl.str), ","))
     hap_table = hap_table.filter(~drop_lit.contains(hap_table._hap_str))
-    return hap_table.drop("_hap_str")
+    return hap_table.drop("_hap_str"), len(drop)
 
 
 def compute_haplotypes(
@@ -461,6 +539,7 @@ def compute_haplotypes(
     temp_dir: Path = Path("/tmp"),
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
+    min_partitions: int = 64,
 ) -> None:
     """
     Compute population haplotypes from VCF files with gnomAD frequency annotations.
@@ -505,6 +584,9 @@ def compute_haplotypes(
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
+        min_partitions: Minimum partitions for `import_vcf`. Higher values give finer map-side
+            granularity, reducing per-task memory in the downstream entries->blocks shuffle.
+            Default 64 (the prior hard-coded value).
     """
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
@@ -535,7 +617,7 @@ def compute_haplotypes(
     mt = hl.import_vcf(
         str(vcfs_path),
         reference_genome=defaults.REFERENCE_GENOME,
-        min_partitions=64,
+        min_partitions=min_partitions,
         force_bgz=True,
     )
     mt = mt.select_rows().select_cols()
@@ -579,6 +661,14 @@ def compute_haplotypes(
     group_of, _n_groups = _compute_locus_groups(variants_ht, window_size)
     group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))
     mt = mt.annotate_rows(locus_group=group_lit[mt.row_idx])
+
+    # Drop variants alone in their locus group before the per-sample entries explosion below
+    # (the dominant early-stage cost): a singleton group can never form a parent block of ≥2
+    # carriers, so its variant never reaches a haplotype. Exact, and shrinks the explosion since
+    # most variants are isolated singletons. Filter by `locus_group` membership against the small
+    # multi-member-group table -- no row-level re-key shuffle.
+    multi_member_groups = _multi_member_locus_groups(mt.rows())
+    mt = mt.filter_rows(hl.is_defined(multi_member_groups[mt.locus_group]))
 
     # Skip the right strand for non-PAR males so each male carrier is counted once (via the
     # left strand). Without this, the pseudo-`1|1` encoding would double-count male
@@ -625,13 +715,14 @@ def compute_haplotypes(
         (hap_table.min_variant_frequency > 0)
         & (hap_table.estimated_gnomad_AF >= haplotype_freq_threshold)
     )
-    hap_table = _apply_containment_dedup(hap_table)
+    hap_table, n_dropped = _apply_containment_dedup(hap_table)
     hap_table = hap_table.drop("frequencies_by_pop")
 
     count_after_filter: int = hap_table.count()
     logger.info(
         f"{count_after_filter} haplotypes remaining after filtering and "
-        f"containment dedup at window size {window_size}"
+        f"containment dedup at window size {window_size} "
+        f"({count_after_filter + n_dropped} total before dedup, {n_dropped} subsumed)"
     )
 
     logger.info("Writing final %s.ht ...", output_base)

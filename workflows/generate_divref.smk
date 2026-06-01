@@ -259,6 +259,7 @@ rule compute_haplotypes:
         output_base=f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{{chrom}}",
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
+        min_partitions=config["haplotype_min_partitions"],
     shell:
         """
         (
@@ -271,7 +272,8 @@ rule compute_haplotypes:
                 --haplotype-freq-threshold {params.haplotype_freq_threshold} \
                 --output-base {params.output_base} \
                 --spark-driver-memory-gb {params.spark_driver_memory_gb} \
-                --spark-executor-memory-gb {params.spark_executor_memory_gb}
+                --spark-executor-memory-gb {params.spark_executor_memory_gb} \
+                --min-partitions {params.min_partitions}
 
             # remove intermediate files
             rm -r {params.output_base}.variants.ht \
