@@ -5,23 +5,27 @@ from typing import List
 
 import defopt
 
+from divref.tools.append_contig_to_duckdb_index import append_contig_to_duckdb_index
 from divref.tools.compute_haplotypes import compute_haplotypes
 from divref.tools.create_divref_fasta import create_divref_fasta
-from divref.tools.create_duckdb_index import create_duckdb_index
 from divref.tools.extract_gnomad_afs import extract_gnomad_afs
 from divref.tools.extract_gnomad_single_afs import extract_gnomad_single_afs
 from divref.tools.extract_sample_metadata import extract_sample_metadata
+from divref.tools.finalize_duckdb_index import finalize_duckdb_index
 from divref.tools.gnomad_hail_table_test_data import gnomad_hail_table_test_data
+from divref.tools.init_duckdb_index import init_duckdb_index
 from divref.tools.remap_divref import remap_divref
 
 _tools: List[Callable[..., None]] = [
+    append_contig_to_duckdb_index,
     compute_haplotypes,
-    create_duckdb_index,
     create_divref_fasta,
     extract_gnomad_afs,
     extract_gnomad_single_afs,
     extract_sample_metadata,
+    finalize_duckdb_index,
     gnomad_hail_table_test_data,
+    init_duckdb_index,
     remap_divref,
 ]
 
