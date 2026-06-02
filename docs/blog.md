@@ -229,16 +229,16 @@ This yields one well-defined sequence for every haplotype, though for an incompa
 
 | `haplotype_filter` | Haplotypes | What it means | How the builder resolves it |
 |---|---:|---|---|
-| `insertion_in_deletion` | 4,798 | an insertion anchored on a base that a deletion removes | the deleted bases are removed and the inserted bases placed at the junction, dropping the insertion's anchor base the deletion already removed |
+| `insertion_in_deletion` | 4,792 | an insertion anchored on a base that a deletion removes | the deleted bases are removed and the inserted bases placed at the junction, dropping the insertion's anchor base the deletion already removed |
 | `same_position_insertion` | 943 | two insertions at the same position | both insertions are concatenated after the shared anchor base, ordered by alternate allele |
 | `same_position_deletion` | 845 | two deletions at the same position | the longer deletion wins, since its span subsumes the shorter |
 | `same_position_reciprocal_insertion_deletion` | 700 | a deletion and an insertion at the same position that inserts exactly the deleted bases | the two cancel, so the sequence equals the reference |
-| `overlapping_deletions` | 528 | two deletions whose reference spans overlap | the union of the deleted spans is removed |
-| `snp_in_deletion` | 503 | a SNP at a base that a deletion removes | the deletion wins, since the SNP's base is inside the deleted span and contributes nothing |
+| `overlapping_deletions` | 526 | two deletions whose reference spans overlap | the union of the deleted spans is removed |
+| `snp_in_deletion` | 490 | a SNP at a base that a deletion removes | the deletion wins, since the SNP's base is inside the deleted span and contributes nothing |
 | `same_position_insertion_deletion` | 299 | a deletion and an insertion at the same position that don't cancel | the inserted bases are placed and the deleted bases removed, a net combined indel |
 | `same_position_snp` | 12 | two SNPs at the same position | the first SNP wins and the second is dropped |
 
-A further 20 haplotypes have multiple flags.
+A further 41 haplotypes have multiple flags.
 Conflicts in these haplotypes are resolved from left to right.
 
 #### Capturing the full deleted reference
