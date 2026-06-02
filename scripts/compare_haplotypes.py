@@ -24,6 +24,8 @@ from pathlib import Path
 
 import duckdb
 
+from divref.haplotype_compat import compatibility_flag
+
 DEFAULT_OLD_DUCKDB = "data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb"
 DEFAULT_NEW_DUCKDB = "data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
 DEFAULT_CONTIGS = [f"chr{i}" for i in range(1, 23)]
@@ -44,6 +46,11 @@ def parse_variants_string(s: str) -> VariantTuple:
     return tuple(out)
 
 
+def key_to_variants_string(key: VariantTuple) -> str:
+    """Reconstruct the `chr:pos:ref:alt,...` string for a haplotype key (stored order)."""
+    return ",".join(f"{contig}:{pos}:{ref}:{alt}" for contig, pos, (ref, alt) in key)
+
+
 def is_contiguous_sub(short: VariantTuple, long_: VariantTuple) -> bool:
     """True iff `short` is a strict contiguous sub-array of `long_`."""
     n, m = len(short), len(long_)
@@ -55,40 +62,85 @@ def is_contiguous_sub(short: VariantTuple, long_: VariantTuple) -> bool:
     return False
 
 
-def build_map(duckdb_path: str, contigs: list[str], side: str) -> dict[VariantTuple, int]:
-    """Read HGDP_haplotype rows for `contigs` into a {key: popmax_empirical_AC} map.
+def build_map(
+    duckdb_path: str, contigs: list[str], side: str
+) -> dict[VariantTuple, tuple[int, str]]:
+    """Read HGDP_haplotype rows for `contigs` into a {key: (popmax_empirical_AC, sequence)} map.
 
-    On a repeated variant tuple, keeps the larger `popmax_empirical_AC` and logs a line to
-    stderr naming the tuple and both AC values, so a silent merge is never missed. Both
+    On a repeated variant tuple, keeps the row with the larger `popmax_empirical_AC` and logs a
+    line to stderr naming the tuple and both AC values, so a silent merge is never missed. Both
     index builders already deduplicate haplotypes, so any collision flags a regression.
     """
     placeholders = ",".join(["?"] * len(contigs))
     con = duckdb.connect(str(Path(duckdb_path).resolve()), read_only=True)
     query_rows = con.execute(
-        "SELECT variants, popmax_empirical_AC FROM sequences "
+        "SELECT variants, popmax_empirical_AC, sequence FROM sequences "
         f"WHERE source = 'HGDP_haplotype' AND contig IN ({placeholders})",  # noqa: S608
         contigs,
     ).fetchall()
     con.close()
 
-    result: dict[VariantTuple, int] = {}
+    result: dict[VariantTuple, tuple[int, str]] = {}
     collisions = 0
-    for variants_str, ac in query_rows:
+    for variants_str, ac, sequence in query_rows:
         key = parse_variants_string(variants_str)
         if key in result:
             collisions += 1
             print(
-                f"DUPLICATE TUPLE [{side}]: {variants_str} popmax_AC {result[key]} vs {ac}",
+                f"DUPLICATE TUPLE [{side}]: {variants_str} popmax_AC {result[key][0]} vs {ac}",
                 file=sys.stderr,
             )
-            result[key] = max(result[key], ac)
+            if ac > result[key][0]:
+                result[key] = (ac, sequence)
         else:
-            result[key] = ac
+            result[key] = (ac, sequence)
     print(
         f"{side}: {len(query_rows)} rows -> {len(result)} unique haplotypes "
         f"({collisions} duplicate tuples)"
     )
     return result
+
+
+def compare_shared_sequences(
+    shared: set[VariantTuple],
+    old_map: dict[VariantTuple, tuple[int, str]],
+    new_map: dict[VariantTuple, tuple[int, str]],
+) -> tuple[int, int, int, int, list[str]]:
+    """Compare old vs new stored sequences for shared haplotypes, split by compatibility.
+
+    Identical component variants must give the identical sequence, unless the haplotype is
+    incompatible: the new cursor composer resolves overlaps differently from the original's
+    concatenation (e.g. it no longer re-adds a base a deletion removes), so a flagged haplotype
+    may legitimately differ. A compatible (PASS) shared haplotype that differs is a regression.
+
+    Args:
+        shared: Haplotype keys present in both maps.
+        old_map: Original-pipeline `{key: (popmax_empirical_AC, sequence)}`.
+        new_map: New-pipeline `{key: (popmax_empirical_AC, sequence)}`.
+
+    Returns:
+        `(pass_match, pass_mismatch, flagged_match, flagged_differ, pass_mismatch_examples)`; a
+        non-empty `pass_mismatch_examples` (capped at 10) signals a regression to investigate.
+    """
+    pass_match = 0
+    pass_mismatch = 0
+    flagged_match = 0
+    flagged_differ = 0
+    pass_mismatch_examples: list[str] = []
+    for k in shared:
+        sequences_match = old_map[k][1] == new_map[k][1]
+        if compatibility_flag(key_to_variants_string(k)) == "PASS":
+            if sequences_match:
+                pass_match += 1
+            else:
+                pass_mismatch += 1
+                if len(pass_mismatch_examples) < 10:
+                    pass_mismatch_examples.append(key_to_variants_string(k))
+        elif sequences_match:
+            flagged_match += 1
+        else:
+            flagged_differ += 1
+    return pass_match, pass_mismatch, flagged_match, flagged_differ, pass_mismatch_examples
 
 
 def count_contig_haplotypes(duckdb_path: str, contig: str) -> int:
@@ -225,8 +277,8 @@ def main() -> None:
     shared_new_higher_ac = 0
     shared_old_higher_ac = 0
     for k in shared:
-        old_ac = old_map[k]
-        new_ac = new_map[k]
+        old_ac = old_map[k][0]
+        new_ac = new_map[k][0]
         if old_ac == new_ac:
             shared_same_ac += 1
         elif new_ac > old_ac:
@@ -239,6 +291,28 @@ def main() -> None:
     print(f"Shared with same AC:        {shared_same_ac}")
     print(f"Shared where new > old AC:  {shared_new_higher_ac}")
     print(f"Shared where old > new AC:  {shared_old_higher_ac}")
+
+    # --- Sequence equality for shared haplotypes ----------------------------------
+    # A compatible (PASS) shared haplotype that differs is a regression, printed loudly. Flagged
+    # differences are expected (the new cursor composer resolves overlaps differently) and counted.
+    (
+        pass_seq_match,
+        pass_seq_mismatch,
+        flagged_seq_match,
+        flagged_seq_differ,
+        pass_mismatch_examples,
+    ) = compare_shared_sequences(shared, old_map, new_map)
+
+    print()
+    print("=== Sequence equality for shared haplotypes ===")
+    print(f"Compatible (PASS) shared, sequence matches:   {pass_seq_match}")
+    print(f"Compatible (PASS) shared, sequence MISMATCH:  {pass_seq_mismatch}")
+    print(f"Flagged shared, sequence matches:             {flagged_seq_match}")
+    print(f"Flagged shared, sequence differs (composer):  {flagged_seq_differ}")
+    if pass_mismatch_examples:
+        print("  !! PASS sequence mismatches (unexpected -- investigate):")
+        for variants_str in pass_mismatch_examples:
+            print(f"     {variants_str}")
 
     # --- chrX coverage note (separate from the autosome algorithm comparison) -----
     # Every chrX haplotype is new-only by construction: the original workflow computed no
@@ -266,6 +340,10 @@ def main() -> None:
         ("shared_same_ac", shared_same_ac),
         ("shared_new_higher_ac", shared_new_higher_ac),
         ("shared_old_higher_ac", shared_old_higher_ac),
+        ("shared_pass_seq_match", pass_seq_match),
+        ("shared_pass_seq_mismatch", pass_seq_mismatch),
+        ("shared_flagged_seq_match", flagged_seq_match),
+        ("shared_flagged_seq_differ", flagged_seq_differ),
         ("new_chrX_haplotypes", new_chrx_haplotypes),
     ]
     with SUMMARY_TSV.open("w") as f:
