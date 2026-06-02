@@ -39,6 +39,10 @@ from divref.haplotype_compat import start_coordinate_shortfall
 DEFAULT_DUCKDB = "data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
 DEFAULT_OUT_DIR = Path("data/analysis/haplotype_incompatibility")
 
+# One HGDP_haplotype query row: (contig, n_variants, variants, popmax_empirical_AC, start, end).
+QueryRow = tuple[str, int, str, int, int, int]
+
+
 @dataclass
 class Summary:
     """Aggregated evaluation results across all scanned haplotypes."""
@@ -72,7 +76,26 @@ def load_and_classify(
     examples_per: int = 20,
     contigs: list[str] | None = None,
 ) -> Summary:
-    """Scan HGDP_haplotype rows and aggregate both evaluation dimensions."""
+    """
+    Scan the HGDP_haplotype rows of a DivRef index and aggregate both evaluation dimensions.
+
+    Reads every `sequences` row with `source = 'HGDP_haplotype'` and `n_variants >= 2`, classifies
+    each haplotype's adjacent-variant incompatibilities (Dimension A) and its end-coordinate
+    undershoot (Dimension B), and accumulates per-reason counts, the length / bypass-resolution
+    distributions, and up to `examples_per` sampled rows per bucket.
+
+    Args:
+        con: Open DuckDB connection to a DivRef index (read-only is sufficient).
+        examples_per: Maximum number of sampled example rows retained per bucket.
+        contigs: Restrict the scan to these contigs; None scans all contigs.
+
+    Returns:
+        A populated `Summary`.
+
+    Raises:
+        duckdb.Error: If the `window_size` or `sequences` query fails (e.g. a missing table).
+        ValueError: If a row's `variants` string is malformed (from `parse_variants_string`).
+    """
     summary = Summary(window_size=_read_window_size(con))
 
     query = (
@@ -85,7 +108,7 @@ def load_and_classify(
         query += f" AND contig IN ({placeholders})"  # noqa: S608
         params = contigs
 
-    def _add_example(bucket: str, row: tuple, shortfall: int = 0) -> None:
+    def _add_example(bucket: str, row: QueryRow, shortfall: int = 0) -> None:
         if len(summary.examples[bucket]) < examples_per:
             contig, n_variants, variants_str, ac, start, end = row
             summary.examples[bucket].append(
@@ -138,7 +161,19 @@ def load_and_classify(
 
 
 def write_summary_tsv(summary: Summary, path: Path) -> None:
-    """Write the machine-readable `metric<TAB>value` summary."""
+    """
+    Write the machine-readable `metric<TAB>value` summary TSV.
+
+    Args:
+        summary: The aggregated results to serialise.
+        path: Output path for the summary TSV; its parent directory must already exist.
+
+    Returns:
+        None.
+
+    Raises:
+        OSError: If `path` cannot be opened for writing.
+    """
     rows: list[tuple[str, int]] = [
         ("window_size", summary.window_size),
         ("total_haplotypes", summary.total_haplotypes),
@@ -173,7 +208,23 @@ def write_summary_tsv(summary: Summary, path: Path) -> None:
 
 
 def write_examples_tsv(summary: Summary, path: Path) -> None:
-    """Write sampled example rows per bucket for manual review."""
+    """
+    Write the sampled per-bucket example rows as a TSV for manual review.
+
+    Emits one row per retained example with a `dimension` column (`A` for incompatibility-reason
+    buckets, `B` for the coordinate buckets) plus the example's contig, variant, and coordinate
+    fields.
+
+    Args:
+        summary: The aggregated results whose `examples` are written.
+        path: Output path for the examples TSV; its parent directory must already exist.
+
+    Returns:
+        None.
+
+    Raises:
+        OSError: If `path` cannot be opened for writing.
+    """
     with path.open("w") as f:
         f.write("dimension\tbucket\tcontig\tn_variants\tpopmax_empirical_AC\tstart\tend\t")
         f.write("shortfall_bp\tvariants\n")
@@ -188,7 +239,15 @@ def write_examples_tsv(summary: Summary, path: Path) -> None:
 
 
 def print_summary(summary: Summary) -> None:
-    """Print a human-readable summary, surfacing catch-all / anomaly buckets loudly."""
+    """
+    Print a human-readable summary to stdout, surfacing catch-all / anomaly buckets loudly.
+
+    Args:
+        summary: The aggregated results to print.
+
+    Returns:
+        None.
+    """
     print(f"window_size: {summary.window_size}")
     print(f"total HGDP_haplotype rows (n_variants >= 2): {summary.total_haplotypes}")
     print(f"haplotypes with any incompatibility:         {summary.haplotypes_with_any_incompatibility}")
@@ -227,7 +286,20 @@ def print_summary(summary: Summary) -> None:
 
 
 def main() -> None:
-    """Run the evaluation against a DivRef DuckDB index and write TSV + stdout summaries."""
+    """
+    CLI entry point: evaluate a DivRef DuckDB index and write the summary + examples TSVs.
+
+    Parses `--duckdb`, `--out-dir`, `--examples-per-reason`, and `--contigs`, opens the index
+    read-only, runs `load_and_classify`, writes both TSVs into the output directory, and prints
+    the summary to stdout.
+
+    Returns:
+        None.
+
+    Raises:
+        SystemExit: Exits with status 1 if the index cannot be opened read-only (e.g. it is
+            locked by another process).
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
