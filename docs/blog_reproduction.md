@@ -286,5 +286,3 @@ WHERE source = 'HGDP_haplotype'
 ```
 
 The "How the sequence builder resolves each case" subsection is descriptive: the cursor composition lives in `get_haplo_sequence` (`divref/divref/haplotype.py`) and its per-case resolutions are covered by `divref/tests/test_haplotype.py`, so there is nothing numeric to reproduce.
-
-As an independent cross-check, `pixi run python scripts/evaluate_haplotype_incompatibility.py` re-derives the same per-reason distribution from each row's `variants` rather than reading the persisted column.

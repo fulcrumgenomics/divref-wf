@@ -6,14 +6,10 @@ from divref.haplotype_compat import Variant
 from divref.haplotype_compat import classify_haplotype
 from divref.haplotype_compat import classify_pair
 from divref.haplotype_compat import compatibility_flag
-from divref.haplotype_compat import count_bypass_resolutions
-from divref.haplotype_compat import end_coordinate_shortfall
 from divref.haplotype_compat import end_extends_past_rightmost_variant
 from divref.haplotype_compat import parse_variants_string
-from divref.haplotype_compat import start_coordinate_shortfall
 from divref.haplotype_compat import variant_distance
 from divref.haplotype_compat import variant_kind
-from divref.haplotype_compat import variants_overlap
 
 
 def _v(token: str) -> Variant:
@@ -156,61 +152,3 @@ def test_compatibility_flag(variants_str: str, expected: str) -> None:
 def test_end_extends_past_rightmost_variant(variants_str: str, expected: bool) -> None:
     """True only when an earlier, longer-reference variant reaches past the rightmost variant."""
     assert end_extends_past_rightmost_variant(parse_variants_string(variants_str)) is expected
-
-
-@pytest.mark.parametrize(
-    ("a", "b", "expected"),
-    [
-        ("chr1:300:AT:A", "chr1:301:T:A", True),
-        ("chr1:600:AAC:A", "chr1:600:AACAC:A", True),
-        ("chr1:200:A:T", "chr1:210:C:G", False),
-        ("chr1:1:AA:T", "chr1:3:A:T", False),
-    ],
-)
-def test_variants_overlap(a: str, b: str, expected: bool) -> None:
-    """Overlap detection is order-independent and excludes distance-0 touching pairs."""
-    assert variants_overlap(_v(a), _v(b)) is expected
-    assert variants_overlap(_v(b), _v(a)) is expected
-
-
-def test_count_bypass_resolutions_length2_conflict_recovers_nothing() -> None:
-    """A length-2 conflict has no >= 2-variant resolution."""
-    assert count_bypass_resolutions(parse_variants_string("chr1:300:AT:A,chr1:301:T:A")) == 0
-
-
-def test_count_bypass_resolutions_clean_is_one() -> None:
-    """A clean haplotype is its own single resolution."""
-    assert count_bypass_resolutions(parse_variants_string("chr1:100:A:T,chr1:200:C:G")) == 1
-
-
-def test_count_bypass_resolutions_single_internal_conflict_is_two() -> None:
-    """A single conflicting pair between clean flanks splits two ways."""
-    variants = parse_variants_string("chr1:100:A:T,chr1:300:AT:A,chr1:301:T:A,chr1:400:G:C")
-    assert count_bypass_resolutions(variants) == 2
-
-
-def test_count_bypass_resolutions_three_mutually_exclusive_alleles() -> None:
-    """Three mutually overlapping deletions plus a clean flank give three resolutions."""
-    variants = parse_variants_string(
-        "chr1:100:A:T,chr1:500:AAAAAAAA:A,chr1:502:AAAA:A,chr1:504:AA:A"
-    )
-    assert count_bypass_resolutions(variants) == 3
-
-
-def test_end_coordinate_shortfall_undershoots_on_early_deletion() -> None:
-    """An early deletion reaching past the last variant makes the stored end too short."""
-    variants = parse_variants_string("chr1:100:AAAAA:A,chr1:102:C:T")
-    assert end_coordinate_shortfall(variants, window_size=25, stored_end=127) == 2
-
-
-def test_end_coordinate_shortfall_zero_when_last_variant_reaches_furthest() -> None:
-    """No shortfall when the last-by-position variant reaches furthest right."""
-    variants = parse_variants_string("chr10:112867606:AT:A,chr10:112867607:T:A")
-    stored_end = 112867607 + 25
-    assert end_coordinate_shortfall(variants, window_size=25, stored_end=stored_end) == 0
-
-
-def test_start_coordinate_shortfall_zero_for_correct_left_edge() -> None:
-    """The left edge is structurally correct, so the start shortfall is zero."""
-    variants = parse_variants_string("chr1:100:AAAAA:A,chr1:102:C:T")
-    assert start_coordinate_shortfall(variants, window_size=25, stored_start=74) == 0

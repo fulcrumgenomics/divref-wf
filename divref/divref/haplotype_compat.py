@@ -6,8 +6,7 @@ spans, so they cannot co-occur on a single chromosome (e.g. a SNP at a base a de
 or two overlapping repeat-contraction deletions). These come from upstream phasing errors at
 tandem repeats. This module provides pure functions to detect and classify such cases.
 
-Shared by `append_contig_to_duckdb_index` (to compute the per-row `haplotype_filter` flag) and by
-`scripts/evaluate_haplotype_incompatibility.py` (to audit a built index).
+Used by `append_contig_to_duckdb_index` to compute the per-row `haplotype_filter` flag.
 """
 
 # A component variant: (contig, pos, ref, alt). pos is 1-based.
@@ -223,104 +222,3 @@ def compatibility_flag(variants_str: str) -> str:
     if end_extends_past_rightmost_variant(variants):
         flags.add(END_EXTENDS_FLAG)
     return ";".join(sorted(flags)) if flags else "PASS"
-
-
-def variants_overlap(v1: Variant, v2: Variant) -> bool:
-    """
-    Return whether two variants' reference spans overlap (order-independent).
-
-    Args:
-        v1: A variant.
-        v2: Another variant.
-
-    Returns:
-        True iff the later variant starts within the earlier variant's reference span.
-    """
-    earlier, later = (v1, v2) if v1[1] <= v2[1] else (v2, v1)
-    return later[1] < earlier[1] + len(earlier[2])
-
-
-def count_bypass_resolutions(variants: list[Variant]) -> int:
-    """
-    Count distinct maximal pairwise-compatible sub-haplotypes (>= 2 variants).
-
-    Models the "explode the conflict" alternative to dropping: a resolution keeps a maximal set
-    of variants with no two overlapping (a maximal independent set in the overlap graph), valid
-    only if it retains >= 2 variants. For an incompatible haplotype, 0 means exploding recovers
-    nothing (e.g. a length-2 conflict yields only singletons), and larger values quantify the
-    combinatorial blow-up at multi-conflict repeat loci.
-
-    Args:
-        variants: Component variants of the haplotype.
-
-    Returns:
-        The number of distinct maximal compatible resolutions of size >= 2.
-    """
-    # Bron-Kerbosch maximal-clique enumeration is worst-case exponential, but DivRef haplotypes are
-    # short (a handful of variants, never more than a few dozen even at dense repeat loci), so the
-    # graph is tiny and enumeration is cheap. No size guard is needed for this bounded input.
-    n = len(variants)
-    if n < 2:
-        return 0
-    # Complement adjacency: i ~ j iff the two variants do NOT overlap (i.e. are compatible).
-    compatible: list[set[int]] = [set() for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            if not variants_overlap(variants[i], variants[j]):
-                compatible[i].add(j)
-                compatible[j].add(i)
-
-    count = 0
-
-    def bron_kerbosch(r: set[int], p: set[int], x: set[int]) -> None:
-        # Maximal cliques in the complement graph == maximal independent sets in the overlap graph.
-        nonlocal count
-        if not p and not x:
-            if len(r) >= 2:
-                count += 1
-            return
-        pivot = max(p | x, key=lambda u: len(compatible[u] & p))
-        for v in list(p - compatible[pivot]):
-            bron_kerbosch(r | {v}, p & compatible[v], x & compatible[v])
-            p = p - {v}
-            x = x | {v}
-
-    bron_kerbosch(set(), set(range(n)), set())
-    return count
-
-
-def end_coordinate_shortfall(variants: list[Variant], window_size: int, stored_end: int) -> int:
-    """
-    Compute bp by which a stored 0-based-exclusive `end` fails to cover all variants' references.
-
-    Args:
-        variants: Component variants of the haplotype.
-        window_size: Flanking reference-context size.
-        stored_end: The 0-based-exclusive `end` recorded for the haplotype.
-
-    Returns:
-        `max_v(pos - 1 + len(ref)) + window_size - stored_end`; > 0 means deleted reference is
-        truncated out of the window.
-    """
-    rightmost_ref_end = max(v[1] - 1 + len(v[2]) for v in variants)  # 0-based exclusive
-    return rightmost_ref_end + window_size - stored_end
-
-
-def start_coordinate_shortfall(variants: list[Variant], window_size: int, stored_start: int) -> int:
-    """
-    Compute bp by which a stored 0-based-inclusive `start` is too far right (should be 0).
-
-    Reference alleles only extend rightward, so the leftmost touched base is the min-position
-    variant and `start` is structurally correct. This is a defensive check.
-
-    Args:
-        variants: Component variants of the haplotype.
-        window_size: Flanking reference-context size.
-        stored_start: The 0-based-inclusive `start` recorded for the haplotype.
-
-    Returns:
-        `stored_start - (min_v(pos - 1) - window_size)`; should always be 0.
-    """
-    leftmost_ref_start = min(v[1] - 1 for v in variants)  # 0-based inclusive
-    required_start = leftmost_ref_start - window_size
-    return stored_start - required_start
