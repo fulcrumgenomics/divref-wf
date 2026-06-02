@@ -34,7 +34,8 @@ def fixture_con() -> duckdb.DuckDBPyConnection:
         # contig, n_variants, variants, AC, start, end, source
         ("chr1", 2, "chr1:200:A:T,chr1:210:C:G", 5, 174, 235, "HGDP_haplotype"),  # clean
         ("chr1", 2, "chr1:300:AT:A,chr1:301:T:A", 7, 274, 326, "HGDP_haplotype"),  # snp_in_del
-        ("chr1", 2, "chr1:400:TGG:T,chr1:402:G:GTTTT", 4, 374, 427, "HGDP_haplotype"),  # indel
+        # insertion anchored at a deleted base -> insertion_in_deletion (contested anchor)
+        ("chr1", 2, "chr1:400:TGG:T,chr1:402:G:GTTTT", 4, 374, 427, "HGDP_haplotype"),
         ("chr1", 2, "chr1:500:AAAG:A,chr1:501:AAG:A", 9, 474, 528, "HGDP_haplotype"),  # ovl del
         ("chr1", 2, "chr1:600:AAC:A,chr1:600:AACAC:A", 3, 574, 629, "HGDP_haplotype"),  # same_pos
         ("chr1", 2, "chr1:100:AAAAA:A,chr1:102:C:T", 6, 74, 127, "HGDP_haplotype"),  # undershoot
@@ -51,17 +52,18 @@ def test_load_and_classify_counts(fixture_con: duckdb.DuckDBPyConnection) -> Non
     assert s.window_size == 25
     assert s.total_haplotypes == 7  # only HGDP_haplotype rows with n_variants >= 2
     assert s.haplotypes_with_any_incompatibility == 5
+    # The one same-position row is a deletion+deletion pair (chr1:600 AAC:A / AACAC:A).
     assert dict(s.reason_haplotype_counts) == {
         "snp_in_deletion": 2,
-        "indel_in_deletion": 1,
         "overlapping_deletions": 1,
-        "same_position": 1,
+        "same_position_deletion": 1,
+        "insertion_in_deletion": 1,
     }
     assert dict(s.reason_pair_counts) == {
         "snp_in_deletion": 2,
-        "indel_in_deletion": 1,
         "overlapping_deletions": 1,
-        "same_position": 1,
+        "same_position_deletion": 1,
+        "insertion_in_deletion": 1,
     }
     assert s.end_undershoot_count == 1
     assert s.end_undershoot_max_bp == 2

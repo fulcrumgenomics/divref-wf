@@ -14,14 +14,34 @@ Shared by `append_contig_to_duckdb_index` (to compute the per-row `haplotype_fil
 Variant = tuple[str, int, str, str]
 
 # Reason labels in precedence order (first match wins in classify_pair) and stable output order.
+# A SNP co-located with an indel is NOT listed: the SNP substitutes the shared base and the indel
+# acts on/after it, so the overlap composes to a well-defined haplotype (see classify_pair). An
+# insertion anchored inside a deletion IS a conflict (`insertion_in_deletion`): its anchor base is
+# one the deletion removes, so the two make conflicting claims about that base.
 REASONS: tuple[str, ...] = (
-    "same_position",
+    "same_position_snp",
+    "same_position_deletion",
+    "same_position_insertion",
+    "same_position_reciprocal_insertion_deletion",
+    "same_position_insertion_deletion",
+    "same_position_other",
     "snp_in_deletion",
     "overlapping_deletions",
-    "indel_in_deletion",
+    "insertion_in_deletion",
     "insertion_anchor_conflict",
     "other_overlap",
 )
+
+
+def variant_kind(ref: str, alt: str) -> str:
+    """Classify a variant as `snp`, `deletion`, `insertion`, or `mnv` from its alleles."""
+    if len(ref) == 1 and len(alt) == 1:
+        return "snp"
+    if len(ref) > len(alt):
+        return "deletion"
+    if len(alt) > len(ref):
+        return "insertion"
+    return "mnv"
 
 
 def parse_variants_string(s: str) -> list[Variant]:
@@ -56,34 +76,79 @@ def variant_distance(v1: Variant, v2: Variant) -> int:
     return v2[1] - v1[1] - len(v1[2])
 
 
+def _same_position_reason(v1: Variant, v2: Variant, k1: str, k2: str) -> str:
+    """
+    Name a genuine same-position conflict by its variant-type pair.
+
+    Args:
+        v1: The first variant at the shared position.
+        v2: The second variant at the shared position.
+        k1: `variant_kind` of `v1`.
+        k2: `variant_kind` of `v2`.
+
+    Returns:
+        A `same_position_*` reason label. A deletion+insertion pair is `reciprocal` when the
+        insertion inserts exactly the bases the deletion removes (applying both nets back to the
+        reference); otherwise it is a distinct allele pair. Pairs involving an MNV fall to `other`.
+    """
+    kinds = {k1, k2}
+    if kinds == {"snp"}:
+        return "same_position_snp"
+    if kinds == {"deletion"}:
+        return "same_position_deletion"
+    if kinds == {"insertion"}:
+        return "same_position_insertion"
+    if kinds == {"deletion", "insertion"}:
+        ins, dele = (v1, v2) if k1 == "insertion" else (v2, v1)
+        inserted = ins[3][len(ins[2]) :]  # insertion alt minus its anchor prefix
+        deleted = dele[2][len(dele[3]) :]  # deletion ref minus its anchor prefix
+        if inserted == deleted:
+            return "same_position_reciprocal_insertion_deletion"
+        return "same_position_insertion_deletion"
+    return "same_position_other"
+
+
 def classify_pair(v1: Variant, v2: Variant) -> str | None:
     """
     Classify an adjacent variant pair into an incompatibility reason.
+
+    Returns `None` when the pair is compatible: either it does not overlap (`variant_distance >= 0`)
+    or it is a SNP co-located with an indel, which composes to a well-defined haplotype (the SNP
+    substitutes the shared base and the indel acts on/after it, so the junction survives). A reason
+    is returned for every other overlap, including an insertion anchored inside a deletion, whose
+    anchor base the deletion removes (a contested base, resolvable only via a tie-break).
 
     Args:
         v1: The earlier variant by position.
         v2: The later variant by position.
 
     Returns:
-        A reason label from `REASONS`, or `None` if the pair is compatible (distance >= 0).
+        A reason label from `REASONS`, or `None` if the pair is compatible/composable.
     """
     if variant_distance(v1, v2) >= 0:
         return None
-    pos1, ref1, alt1 = v1[1], v1[2], v1[3]
-    pos2, ref2, alt2 = v2[1], v2[2], v2[3]
-    v1_del = len(ref1) > len(alt1)
-    v2_del = len(ref2) > len(alt2)
-    v2_snp = len(ref2) == 1 and len(alt2) == 1
-    v1_ins = len(alt1) > len(ref1)
+    pos1, pos2 = v1[1], v2[1]
+    k1 = variant_kind(v1[2], v1[3])
+    k2 = variant_kind(v2[2], v2[3])
     if pos1 == pos2:
-        return "same_position"
-    if v1_del and v2_snp and pos1 < pos2 < pos1 + len(ref1):
-        return "snp_in_deletion"
-    if v1_del and v2_del:
-        return "overlapping_deletions"
-    if v1_del and pos1 < pos2 < pos1 + len(ref1):
-        return "indel_in_deletion"
-    if v1_ins:
+        # A SNP changes the shared first base while a co-located indel acts on/after it, so the
+        # two compose to a well-defined haplotype. Any other same-position pair is two alleles at
+        # one site and cannot co-occur on one chromosome.
+        if "snp" in (k1, k2) and ("insertion" in (k1, k2) or "deletion" in (k1, k2)):
+            return None
+        return _same_position_reason(v1, v2, k1, k2)
+    # pos1 < pos2 and the spans overlap: v2 starts inside v1's reference allele.
+    if k1 == "deletion":
+        if k2 == "snp":
+            return "snp_in_deletion"  # SNP changes a base the deletion removes
+        if k2 == "deletion":
+            return "overlapping_deletions"
+        if k2 == "insertion":
+            # The insertion's anchor base is one the deletion removes: conflicting claims, and the
+            # insert junction is interior to the deleted span (composed only via a tie-break).
+            return "insertion_in_deletion"
+        return "other_overlap"  # MNV inside a deletion (not observed in practice)
+    if k1 == "insertion":
         return "insertion_anchor_conflict"
     return "other_overlap"
 

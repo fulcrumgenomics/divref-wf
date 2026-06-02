@@ -11,6 +11,7 @@ from divref.haplotype_compat import end_coordinate_shortfall
 from divref.haplotype_compat import parse_variants_string
 from divref.haplotype_compat import start_coordinate_shortfall
 from divref.haplotype_compat import variant_distance
+from divref.haplotype_compat import variant_kind
 from divref.haplotype_compat import variants_overlap
 
 
@@ -47,18 +48,47 @@ def test_variant_distance(a: str, b: str, expected: int) -> None:
 @pytest.mark.parametrize(
     ("a", "b", "expected"),
     [
-        ("chr1:300:AT:A", "chr1:301:T:A", "snp_in_deletion"),
-        ("chr1:400:TGG:T", "chr1:402:G:GTTTT", "indel_in_deletion"),
+        # Genuine conflicts (cannot co-occur on one chromosome).
+        ("chr1:300:AT:A", "chr1:301:T:A", "snp_in_deletion"),  # SNP on a deleted base
         ("chr1:500:AAAG:A", "chr1:501:AAG:A", "overlapping_deletions"),
-        ("chr1:600:AAC:A", "chr1:600:AACAC:A", "same_position"),
         ("chr1:700:AT:ATGG", "chr1:701:C:G", "insertion_anchor_conflict"),
-        ("chr1:200:A:T", "chr1:210:C:G", None),  # distance >= 0: compatible
-        ("chr1:1:AA:T", "chr1:3:A:T", None),  # distance == 0: deletion closes gap, keep
+        ("chr1:600:AAC:A", "chr1:600:AACAC:A", "same_position_deletion"),  # deletion + deletion
+        ("chr1:100:C:CA", "chr1:100:C:CGG", "same_position_insertion"),  # insertion + insertion
+        ("chr1:100:C:A", "chr1:100:C:G", "same_position_snp"),  # snp + snp
+        # deletion + insertion at one site: reciprocal (insert == delete) vs distinct alleles.
+        (
+            "chr1:100:CAA:C",
+            "chr1:100:C:CAA",
+            "same_position_reciprocal_insertion_deletion",
+        ),  # deletes "AA", inserts "AA" -> nets to reference
+        ("chr1:100:CA:C", "chr1:100:C:CGG", "same_position_insertion_deletion"),  # "A" != "GG"
+        # Insertion anchored at a deleted base: contested anchor -> conflict.
+        ("chr1:400:TGG:T", "chr1:402:G:GTTTT", "insertion_in_deletion"),
+        # Composable overlaps -> None.
+        ("chr1:100:C:A", "chr1:100:C:CAA", None),  # snp + insertion at one site
+        ("chr1:100:C:A", "chr1:100:CA:C", None),  # snp + deletion at one site
+        # Non-overlapping.
+        ("chr1:200:A:T", "chr1:210:C:G", None),  # distance >= 0
+        ("chr1:1:AA:T", "chr1:3:A:T", None),  # distance == 0: deletion closes gap
     ],
 )
 def test_classify_pair(a: str, b: str, expected: str | None) -> None:
-    """Each overlap shape maps to its reason; compatible pairs return None."""
+    """Genuine conflicts map to a reason; compatible/composable pairs return None."""
     assert classify_pair(_v(a), _v(b)) == expected
+
+
+@pytest.mark.parametrize(
+    ("ref", "alt", "expected"),
+    [
+        ("C", "T", "snp"),
+        ("AT", "A", "deletion"),
+        ("A", "ATG", "insertion"),
+        ("AT", "GC", "mnv"),
+    ],
+)
+def test_variant_kind(ref: str, alt: str, expected: str) -> None:
+    """Allele lengths classify a variant as snp / deletion / insertion / mnv."""
+    assert variant_kind(ref, alt) == expected
 
 
 def test_classify_haplotype_clean() -> None:
@@ -82,7 +112,7 @@ def test_classify_haplotype_catches_nonadjacent_overlap() -> None:
 def test_classify_haplotype_multiple_reasons() -> None:
     """Distinct overlap shapes in one haplotype are all reported."""
     variants = parse_variants_string("chr1:300:AT:A,chr1:301:T:A,chr1:600:AAC:A,chr1:600:AACAC:A")
-    assert set(classify_haplotype(variants)) == {"snp_in_deletion", "same_position"}
+    assert set(classify_haplotype(variants)) == {"snp_in_deletion", "same_position_deletion"}
 
 
 @pytest.mark.parametrize(
@@ -90,10 +120,12 @@ def test_classify_haplotype_multiple_reasons() -> None:
     [
         ("chr1:100:A:T,chr1:200:C:G", "PASS"),  # clean
         ("chr1:50:A:T", "PASS"),  # single variant
+        ("chr1:400:TGG:T,chr1:402:G:GTTTT", "insertion_in_deletion"),  # insertion at a deleted base
+        ("chr1:100:C:A,chr1:100:C:CAA", "PASS"),  # composable snp + insertion at one site
         ("chr1:300:AT:A,chr1:301:T:A", "snp_in_deletion"),
         (
             "chr1:300:AT:A,chr1:301:T:A,chr1:600:AAC:A,chr1:600:AACAC:A",
-            "same_position;snp_in_deletion",
+            "same_position_deletion;snp_in_deletion",
         ),
     ],
 )

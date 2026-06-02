@@ -51,9 +51,21 @@ def get_haplo_sequence(
     """
     Construct a haplotype sequence string with flanking genomic context.
 
-    Builds a sequence by combining alternate alleles from each variant with
-    intervening reference sequence, bounded by context_size flanking bases on
-    each side.
+    Composes the variants onto the reference left to right with a running reference cursor, rather
+    than concatenating alternate alleles: each variant contributes the reference between the cursor
+    and its position, then its alternate allele, and advances the cursor past its reference allele.
+    A variant that starts inside already-consumed reference (its position is before the cursor,
+    i.e. it overlaps an earlier variant) contributes only the portion of its alternate allele past
+    the cursor. This resolves every overlap to a defined sequence -- e.g. a deletion plus an
+    insertion anchored on a deleted base inserts the new bases without re-adding the deleted anchor.
+    Most overlaps are incompatibilities flagged elsewhere (a SNP on a deleted base, an insertion in
+    a deletion, two deletions, two alleles at one position); the cursor still resolves them to a
+    defined (if not meaningful) sequence via that tie-break. A SNP co-located with an indel is the
+    one genuinely compatible overlap.
+
+    The window spans `context_size` reference bases before the first variant through `context_size`
+    bases after the rightmost reference end across all variants (see `_max_reference_end`), matching
+    `haplo_coordinates`.
 
     Args:
         context_size: Number of reference bases to include flanking each end.
@@ -71,50 +83,46 @@ def get_haplo_sequence(
         raise ValueError(
             "get_haplo_sequence requires at least one variant; received an empty sequence"
         )
-    sorted_variants = hl.sorted(variants, key=lambda x: x.locus.position)
-    min_variant = sorted_variants[0]
-    min_pos = min_variant.locus.position
-    # Shared with haplo_coordinates so the sequence span matches the stored `end` even when an
-    # earlier deletion reaches past the last-by-position variant (an overlapping/flagged haplotype).
+    sorted_variants = hl.sorted(variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0])))
+    min_pos = sorted_variants[0].locus.position
     max_ref_end = _max_reference_end(sorted_variants)
     full_context = hl.get_sequence(
-        min_variant.locus.contig,
+        sorted_variants[0].locus.contig,
         min_pos,
         before=context_size,
         after=(max_ref_end - min_pos + context_size - 1),
         reference_genome=reference_genome,
     )
+    # A reference position `p` maps to full_context index `p - translation`.
+    translation = min_pos - context_size
 
-    # (min_pos - index_translation) equals context_size, mapping locus positions to string indices
-    index_translation = min_pos - context_size
-
-    def get_chunk_until_next_variant(i: hl.Expression) -> hl.Expression:
+    def compose(acc: hl.Expression, v: hl.Expression) -> hl.Expression:
         """
-        Return the alternate allele plus intervening reference bases up to the next variant.
+        Fold one variant into the (seq, cursor) accumulator using the reference cursor.
 
         Args:
-            i: Hail integer expression indexing into sorted_variants.
+            acc: Struct with `seq` (sequence so far) and `cursor` (next unconsumed reference pos).
+            v: The variant struct to apply.
 
         Returns:
-            Hail string expression for the alternate allele concatenated with the
-            reference bases between this variant and the next (or the trailing context).
+            The updated `(seq, cursor)` struct.
         """
-        v = sorted_variants[i]
-        variant_size = hl.len(v.alleles[0])
-        reference_buffer_size = hl.if_else(
-            i == hl.len(sorted_variants) - 1,
-            # Trailing context reaches max_ref_end (+ context_size), so an earlier deletion that
-            # extends past this last-by-position variant still has its full span represented.
-            max_ref_end - (v.locus.position + variant_size) + context_size,
-            sorted_variants[i + 1].locus.position - (v.locus.position + variant_size),
+        cursor = acc.cursor
+        v_pos = v.locus.position
+        v_ref_len = hl.len(v.alleles[0])
+        ref_gap = full_context[cursor - translation : hl.max(cursor, v_pos) - translation]
+        overlap = hl.max(0, cursor - v_pos)
+        alt_contribution = v.alleles[1][hl.min(overlap, hl.len(v.alleles[1])) :]
+        return hl.struct(
+            seq=acc.seq + ref_gap + alt_contribution,
+            cursor=hl.max(cursor, v_pos + v_ref_len),
         )
-        start = v.locus.position - index_translation + variant_size
-        return v.alleles[1] + full_context[start : start + reference_buffer_size]
 
-    return full_context[:context_size] + hl.delimit(
-        hl.range(hl.len(sorted_variants)).map(get_chunk_until_next_variant),
-        "",
-    )
+    composed = hl.fold(compose, hl.struct(seq="", cursor=min_pos), sorted_variants)
+    trailing = full_context[
+        composed.cursor - translation : composed.cursor - translation + context_size
+    ]
+    return full_context[:context_size] + composed.seq + trailing
 
 
 def variant_distance(v1: hl.Expression, v2: hl.Expression) -> hl.Expression:
