@@ -232,3 +232,59 @@ The "Mechanism 1 / Mechanism 2" classification in the prose is derived by inspec
 | Same popmax AC | `shared_same_ac` |
 | New > old | `shared_new_higher_ac` |
 | Old > new | `shared_old_higher_ac` |
+
+## Section: "Flagging incompatible haplotypes"
+
+**Prerequisite**: the whole-genome `generate_divref` DuckDB index `data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb` (autosomes + chrX), the same index the algorithm comparison above uses.
+
+The build writes each `HGDP_haplotype` row's `haplotype_filter` directly (`append_contig_to_duckdb_index`, via `compatibility_flag` in `divref/divref/haplotype_compat.py`), so every count reads straight from that persisted column with one query; no separate analysis run is needed.
+
+### Flagged total
+
+The "8,648 of 2,089,184 haplotypes (0.41%)" claim:
+
+```bash
+pixi run duckdb -readonly data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb -c "
+SELECT
+  COUNT(*) FILTER (WHERE n_variants >= 2) AS total_haplotypes,
+  COUNT(*) FILTER (WHERE n_variants >= 2 AND haplotype_filter <> 'PASS') AS flagged
+FROM sequences WHERE source = 'HGDP_haplotype';
+"
+```
+
+### Flag table
+
+The table counts haplotypes per incompatibility reason, excluding the `end_extends_past_rightmost_variant` coordinate flag (reported separately below).
+That token always sorts first in the `;`-joined value, so stripping it and re-trimming leaves the incompatibility reason; a haplotype with more than one distinct reason lands in the `(multiple flags)` bucket, which is the blog's "A further 20 haplotypes have multiple flags" line.
+
+```bash
+pixi run duckdb -readonly data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb -c "
+WITH flagged AS (
+  SELECT trim(BOTH ';' FROM
+           replace(haplotype_filter, 'end_extends_past_rightmost_variant', '')) AS reasons
+  FROM sequences
+  WHERE source = 'HGDP_haplotype' AND haplotype_filter <> 'PASS'
+)
+SELECT CASE WHEN reasons LIKE '%;%' THEN '(multiple flags)' ELSE reasons END AS reason,
+       COUNT(*) AS haplotypes
+FROM flagged GROUP BY 1 ORDER BY 2 DESC;
+"
+```
+
+Each non-`(multiple flags)` row maps one-to-one to a blog flag-table row (`reason` is the `haplotype_filter` value, `haplotypes` is the count); the `(multiple flags)` row is the "A further 20" line.
+
+### "Capturing the full deleted reference"
+
+The end-coordinate fix is recorded as the `end_extends_past_rightmost_variant` flag, so the "301 haplotypes" claim is a direct count:
+
+```bash
+pixi run duckdb -readonly data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb -c "
+SELECT COUNT(*) FROM sequences
+WHERE source = 'HGDP_haplotype'
+  AND haplotype_filter LIKE '%end_extends_past_rightmost_variant%';
+"
+```
+
+The "How the sequence builder resolves each case" subsection is descriptive: the cursor composition lives in `get_haplo_sequence` (`divref/divref/haplotype.py`) and its per-case resolutions are covered by `divref/tests/test_haplotype.py`, so there is nothing numeric to reproduce.
+
+As an independent cross-check, `pixi run python scripts/evaluate_haplotype_incompatibility.py` re-derives the same per-reason distribution from each row's `variants` rather than reading the persisted column.
