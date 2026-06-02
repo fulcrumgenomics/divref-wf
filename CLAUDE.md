@@ -72,7 +72,7 @@ The tools implement a data pipeline:
 1. `extract_gnomad_afs` / `extract_gnomad_single_afs` → per-population allele frequency Hail table
 2. `extract_sample_metadata` → simplified sample→population mapping table
 3. `compute_haplotypes` → groups phased variants into haplotype windows using Hail
-4. `init_duckdb_index` → create the DuckDB and write the population-legend + version metadata; then `append_contig_to_duckdb_index` (once per chromosome, each in a fresh JVM) → append that contig's merged haplotype + gnomAD-sites rows with reference-context sequences; then `finalize_duckdb_index` → build the `sequence_id` index
+4. `init_duckdb_index` → create the DuckDB and write the population-legend + version metadata; then `append_contig_to_duckdb_index` (once per chromosome, each in a fresh JVM) → append that contig's merged haplotype + gnomAD-sites rows with reference-context sequences; then `finalize_duckdb_index` → build the `sequence_id` index. The append step also computes the `haplotype_filter` column (VCF-style: `PASS`, else the `;`-joined incompatibility reason from `divref/divref/haplotype_compat.py`) flagging haplotypes whose component variants overlap (a phasing artifact, not dropped), and `haplo_coordinates` sets `end` from the rightmost reference end over all variants so a deletion's span is never truncated. `haplotype_filter` flows through `remap_divref` into the final CALITAS TSV.
 5. `create_divref_fasta` → per-chromosome FASTA files streamed from the DuckDB index (final deliverable)
 6. `remap_divref` → maps haplotype coordinates back to reference genome (post-CALITAS step)
 

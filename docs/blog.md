@@ -18,8 +18,9 @@ I [re-implemented](https://github.com/fg-labs/divref-wf) it as a Snakemake workf
 
 1. Contains gnomAD 4.1 joint exome/genome variants
 2. Improved haplotype computation algorithm
-3. Addition of chrX haplotypes
-4. Configurable Snakemake workflow
+3. Flagging haplotypes with incompatible variant combinations
+4. Addition of chrX haplotypes
+5. Configurable Snakemake workflow
 
 ### Parameters
 
@@ -168,8 +169,7 @@ For the 3,969 haplotypes that only had a longer haplotype from the new algorithm
 #### A closer look at chr22's six original-only haplotypes the new algorithm doesn't emit
 
 Genome-wide, 175 original-only haplotypes aren't a contiguous sub-fragment of any new haplotype.
-Restricting to chr22, six of these residual haplotypes weren't subsumed by anything new.
-Re-running haplotype computation with the threshold lowered to 0.002 lets us see what the new algorithm computed for each.
+Re-running haplotype computation for chr22 with the threshold lowered to 0.002 lets us see what the new algorithm computed for the six cases on this chromosome.
 We'll label the variants in each haplotype `(v1, v2, ...)`.
 
 | # | variants | gap pattern | description |
@@ -207,6 +207,49 @@ The new algorithm computes `min(hgdp_1kg_AF[v, max_pop])` on the sub-haplotype's
 The new single-pass containment counting redistributes `hgdp_1kg_haplotype_AC[p]` across populations differently from the original's per-bin tuple aggregation.
 Containment AC includes chromosomes from longer parent blocks where the haplotype appears as a contiguous sub-fragment, not just chromosomes whose exact bin tuple is the haplotype.
 In cases 2, 3, and 6 the redistribution moves `max_pop` to a population with a larger sample size (and therefore larger `hgdp_1kg_AN[v, max_pop]`), which lowers `hgdp_1kg_haplotype_AF[max_pop]` for the same `AC` and pulls `est AF` below 0.005.
+
+### Flagging incompatible haplotypes
+
+Phased genotypes are not perfect.
+At tandem repeats in particular, the SHAPEIT5 phasing behind the HGDP+1KG release sometimes places two variants on the same haplotype whose reference alleles overlap, so they could never occur together on a real chromosome.
+For example, around `chr1:6732420` there's a CTTT microsatellite where 12 sample-haplotypes are phased to carry both a 28 bp and a 24 bp contraction of the same repeat.
+The two deletions remove overlapping bases, so no single chromosome can have both.
+The haplotype computation algorithm faithfully reproduces whatever the phased input says, so these impossible combinations surface as haplotypes.
+
+Every row in the index carries a `haplotype_filter` column that is `PASS` for single gnomAD variants and for haplotypes whose component variants are mutually compatible, and otherwise names the reason the haplotype is incompatible.
+The flag is carried through the CALITAS remapping step into the final output, so a downstream user can keep or exclude these records as the application requires.
+Trying to repair the phasing would manufacture speculative haplotypes from data we already know is wrong, so flagging keeps full provenance and leaves the decision to the user.
+
+Across the autosomes and chrX, 8,648 of 2,089,184 haplotypes (0.41%) are flagged.
+
+Flagging keeps these haplotypes in the bundle, so each one still needs a sequence.
+The builder composes the component variants left to right with a running reference cursor: each variant contributes the reference bases between the cursor and its position, then its own inserted or substituted bases, and advances the cursor past its reference allele.
+When two variants overlap, the later one contributes only the part of its alternate allele beyond the cursor, so the shared reference is never emitted or counted twice.
+This yields one well-defined sequence for every haplotype, though for an incompatible one it is a single arbitrary resolution of a combination that cannot occur on a real chromosome.
+
+| `haplotype_filter` | Haplotypes | What it means | How the builder resolves it |
+|---|---:|---|---|
+| `insertion_in_deletion` | 4,792 | an insertion anchored on a base that a deletion removes | the deleted bases are removed and the inserted bases placed at the junction, dropping the insertion's anchor base the deletion already removed |
+| `same_position_insertion` | 943 | two insertions at the same position | both insertions are concatenated after the shared anchor base, ordered by alternate allele |
+| `same_position_deletion` | 845 | two deletions at the same position | the longer deletion wins, since its span subsumes the shorter |
+| `same_position_reciprocal_insertion_deletion` | 700 | a deletion and an insertion at the same position that inserts exactly the deleted bases | the two cancel, so the sequence equals the reference |
+| `overlapping_deletions` | 526 | two deletions whose reference spans overlap | the union of the deleted spans is removed |
+| `snp_in_deletion` | 490 | a SNP at a base that a deletion removes | the deletion wins, since the SNP's base is inside the deleted span and contributes nothing |
+| `same_position_insertion_deletion` | 299 | a deletion and an insertion at the same position that don't cancel | the inserted bases are placed and the deleted bases removed, a net combined indel |
+| `same_position_snp` | 12 | two SNPs at the same position | the first SNP wins and the second is dropped |
+
+A further 41 haplotypes have multiple flags.
+Conflicts in these haplotypes are resolved from left to right.
+
+#### Capturing the full deleted reference
+
+Investigating these haplotypes exposed a related coordinate calculation issue in the original DivRef generation scripts.
+The FASTA window around a haplotype runs from `window_size` bases before the first variant to `window_size` bases after the end of the last variant, where the end was taken from the variant with the largest position.
+When an earlier variant is a long deletion whose reference allele reaches past that last variant, the window stopped short and truncated the tail of the deletion out of both the recorded `end` coordinate and the sequence.
+The window now ends at the largest reference end across all of a haplotype's variants, so it always spans the full deleted reference.
+
+This changes the coordinates and sequence for 301 haplotypes, all of which have one or more haplotype incompatibility flags of the `*_in_deletion` variety.
+Most of the `*_in_deletion`-flagged haplotypes were unaffected, because the overlapped variant sits at the terminal base of the deletion.
 
 ### Sex chromosome haplotypes
 

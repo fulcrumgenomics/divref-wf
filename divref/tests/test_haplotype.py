@@ -93,6 +93,50 @@ def test_get_haplo_sequence_edge_cases(hail_context: None) -> None:  # noqa: ARG
         assert hl.eval(get_haplo_sequence(context_size=2, variants=two_deletions)) == "23A6G91"
 
 
+def test_get_haplo_sequence_deletion_consumes_interior_variant(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    A variant inside a deletion is consumed, and trailing context reaches the max reference end.
+
+    A deletion at 4 (ref len 5, spans 4-8, alt `D`) plus a SNP at 6 inside it: the SNP's single alt
+    base falls entirely within the consumed deletion, so it contributes nothing; the cursor reaches
+    the deletion's end (9) and the trailing context runs to 9 + context. Result `23` + `D` + ref
+    `9A`. (This pair stays flagged `snp_in_deletion`; the sequence is merely well-defined.)
+    """
+    reference = "0123456789A"
+    variants = [_make_variant(4, "AAAAA", "D"), _make_variant(6, "C", "T")]
+    with patch("hail.get_sequence", side_effect=_create_reference_mock(reference)):
+        assert hl.eval(get_haplo_sequence(context_size=2, variants=variants)) == "23D9A"
+
+
+@pytest.mark.parametrize(
+    ("specs", "expected", "note"),
+    [
+        # Composable overlaps: the alt is composed onto the reference, not concatenated.
+        ([(4, "AAA", "D"), (6, "G", "GTT")], "23DTT78", "insertion composes inside a deletion"),
+        ([(4, "X", "Y"), (4, "X", "XZZ")], "23YZZ56", "snp + insertion at one site"),
+        ([(4, "X", "Y"), (4, "XBC", "X")], "23Y78", "snp + deletion at one site"),
+        # Genuinely-incompatible overlaps still resolve to a defined (flagged) sequence.
+        ([(4, "AAA", "A"), (4, "AAAA", "A")], "23A89", "two deletions: the longer one wins"),
+        ([(4, "A", "ABB"), (4, "A", "ACC")], "23ABBCC56", "two insertions: both are applied"),
+        ([(4, "A", "T"), (4, "A", "G")], "23T56", "two snps: the first one wins"),
+        ([(4, "A", "ATT"), (4, "AB", "A")], "23ATT67", "insertion + deletion: insert then skip"),
+    ],
+)
+def test_get_haplo_sequence_overlap_composition(
+    specs: list[tuple[int, str, str]],
+    expected: str,
+    note: str,
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """Overlapping variants are composed onto the reference with a cursor, not concatenated."""
+    reference = "0123456789A"
+    variants = [_make_variant(pos, ref, alt) for pos, ref, alt in specs]
+    with patch("hail.get_sequence", side_effect=_create_reference_mock(reference)):
+        assert hl.eval(get_haplo_sequence(context_size=2, variants=variants)) == expected, note
+
+
 def test_get_haplo_sequence_single(
     datadir: Path,
     hail_reference_genome: hl.ReferenceGenome,
@@ -218,6 +262,24 @@ def test_haplo_coordinates_multi_variant(hail_context: None) -> None:  # noqa: A
     coords = hl.eval(haplo_coordinates(10, variants))
     assert coords.start == 89  # 100 - 1 - 10
     assert coords.end == 211  # 200 -1 + 2 + 10
+
+
+def test_haplo_coordinates_early_deletion_extends_past_last_variant(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """
+    `end` uses the rightmost reference end over all variants, not the last-by-position one.
+
+    A deletion at 100 spans 100-104 (ref len 5); the SNP at 102 is last by position but reaches
+    only to 102, so `end` must use the deletion's reach (ref end 105).
+    """
+    variants = hl.array([
+        _make_variant(100, "AAAAA", "A"),
+        _make_variant(102, "C", "T"),
+    ])
+    coords = hl.eval(haplo_coordinates(10, variants))
+    assert coords.start == 89  # 100 - 1 - 10
+    assert coords.end == 114  # max_ref_end (100 + 5) - 1 + 10
 
 
 def test_haplo_coordinates_matches_sequence_length(hail_context: None) -> None:  # noqa: ARG001

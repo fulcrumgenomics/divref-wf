@@ -44,6 +44,27 @@ def parse_variants_string(s: str) -> VariantTuple:
     return tuple(out)
 
 
+def key_to_variants_string(key: VariantTuple) -> str:
+    """Reconstruct the `chr:pos:ref:alt,...` string for a haplotype key (stored order)."""
+    return ",".join(f"{contig}:{pos}:{ref}:{alt}" for contig, pos, (ref, alt) in key)
+
+
+def has_overlapping_pair(key: VariantTuple) -> bool:
+    """Return whether two component variants' reference spans overlap.
+
+    Sorts by (position, reference length) and checks each adjacent pair's distance
+    (`pos2 - pos1 - len(ref1)`); a negative value means the reference spans overlap. Both builders
+    construct overlapping variants by composition (the new cursor builder differently from the
+    original concatenation), so only non-overlapping haplotypes are guaranteed an identical
+    sequence -- a co-located SNP+indel is compatible (PASS) yet built differently by each.
+    """
+    ordered = sorted(key, key=lambda v: (v[1], len(v[2][0])))
+    return any(
+        later[1] - earlier[1] - len(earlier[2][0]) < 0
+        for earlier, later in zip(ordered, ordered[1:], strict=False)
+    )
+
+
 def is_contiguous_sub(short: VariantTuple, long_: VariantTuple) -> bool:
     """True iff `short` is a strict contiguous sub-array of `long_`."""
     n, m = len(short), len(long_)
@@ -55,40 +76,92 @@ def is_contiguous_sub(short: VariantTuple, long_: VariantTuple) -> bool:
     return False
 
 
-def build_map(duckdb_path: str, contigs: list[str], side: str) -> dict[VariantTuple, int]:
-    """Read HGDP_haplotype rows for `contigs` into a {key: popmax_empirical_AC} map.
+def build_map(
+    duckdb_path: str, contigs: list[str], side: str
+) -> dict[VariantTuple, tuple[int, str]]:
+    """Read HGDP_haplotype rows for `contigs` into a {key: (popmax_empirical_AC, sequence)} map.
 
-    On a repeated variant tuple, keeps the larger `popmax_empirical_AC` and logs a line to
-    stderr naming the tuple and both AC values, so a silent merge is never missed. Both
+    On a repeated variant tuple, keeps the row with the larger `popmax_empirical_AC` and logs a
+    line to stderr naming the tuple and both AC values, so a silent merge is never missed. Both
     index builders already deduplicate haplotypes, so any collision flags a regression.
     """
     placeholders = ",".join(["?"] * len(contigs))
     con = duckdb.connect(str(Path(duckdb_path).resolve()), read_only=True)
     query_rows = con.execute(
-        "SELECT variants, popmax_empirical_AC FROM sequences "
+        "SELECT variants, popmax_empirical_AC, sequence FROM sequences "
         f"WHERE source = 'HGDP_haplotype' AND contig IN ({placeholders})",  # noqa: S608
         contigs,
     ).fetchall()
     con.close()
 
-    result: dict[VariantTuple, int] = {}
+    result: dict[VariantTuple, tuple[int, str]] = {}
     collisions = 0
-    for variants_str, ac in query_rows:
+    for variants_str, ac, sequence in query_rows:
         key = parse_variants_string(variants_str)
         if key in result:
             collisions += 1
             print(
-                f"DUPLICATE TUPLE [{side}]: {variants_str} popmax_AC {result[key]} vs {ac}",
+                f"DUPLICATE TUPLE [{side}]: {variants_str} popmax_AC {result[key][0]} vs {ac}",
                 file=sys.stderr,
             )
-            result[key] = max(result[key], ac)
+            if ac > result[key][0]:
+                result[key] = (ac, sequence)
         else:
-            result[key] = ac
+            result[key] = (ac, sequence)
     print(
         f"{side}: {len(query_rows)} rows -> {len(result)} unique haplotypes "
         f"({collisions} duplicate tuples)"
     )
     return result
+
+
+def compare_shared_sequences(
+    shared: set[VariantTuple],
+    old_map: dict[VariantTuple, tuple[int, str]],
+    new_map: dict[VariantTuple, tuple[int, str]],
+) -> tuple[int, int, int, int, list[str]]:
+    """Compare old vs new stored sequences for shared haplotypes, split by whether they overlap.
+
+    A shared haplotype whose component variants do not overlap must build to the identical sequence
+    under both algorithms; a mismatch there is a regression. A haplotype with an overlapping pair
+    (a composable SNP co-located with an indel, or a flagged incompatibility) is composed by the
+    new cursor builder differently from the original concatenation, so it may legitimately differ.
+
+    Args:
+        shared: Haplotype keys present in both maps.
+        old_map: Original-pipeline `{key: (popmax_empirical_AC, sequence)}`.
+        new_map: New-pipeline `{key: (popmax_empirical_AC, sequence)}`.
+
+    Returns:
+        `(independent_match, independent_mismatch, overlapping_match, overlapping_differ,
+        independent_mismatch_examples)`; a non-empty examples list (capped at 10) is a regression
+        to investigate, since non-overlapping variants must build the same sequence.
+    """
+    independent_match = 0
+    independent_mismatch = 0
+    overlapping_match = 0
+    overlapping_differ = 0
+    independent_mismatch_examples: list[str] = []
+    for k in shared:
+        sequences_match = old_map[k][1] == new_map[k][1]
+        if has_overlapping_pair(k):
+            if sequences_match:
+                overlapping_match += 1
+            else:
+                overlapping_differ += 1
+        elif sequences_match:
+            independent_match += 1
+        else:
+            independent_mismatch += 1
+            if len(independent_mismatch_examples) < 10:
+                independent_mismatch_examples.append(key_to_variants_string(k))
+    return (
+        independent_match,
+        independent_mismatch,
+        overlapping_match,
+        overlapping_differ,
+        independent_mismatch_examples,
+    )
 
 
 def count_contig_haplotypes(duckdb_path: str, contig: str) -> int:
@@ -225,8 +298,8 @@ def main() -> None:
     shared_new_higher_ac = 0
     shared_old_higher_ac = 0
     for k in shared:
-        old_ac = old_map[k]
-        new_ac = new_map[k]
+        old_ac = old_map[k][0]
+        new_ac = new_map[k][0]
         if old_ac == new_ac:
             shared_same_ac += 1
         elif new_ac > old_ac:
@@ -239,6 +312,29 @@ def main() -> None:
     print(f"Shared with same AC:        {shared_same_ac}")
     print(f"Shared where new > old AC:  {shared_new_higher_ac}")
     print(f"Shared where old > new AC:  {shared_old_higher_ac}")
+
+    # --- Sequence equality for shared haplotypes ----------------------------------
+    # A non-overlapping shared haplotype that differs is a regression, printed loudly. Overlapping
+    # ones (composable co-located variants or flagged incompatibilities) are composed differently
+    # by the new cursor builder than by the original concatenation, so differences are expected.
+    (
+        independent_seq_match,
+        independent_seq_mismatch,
+        overlapping_seq_match,
+        overlapping_seq_differ,
+        independent_mismatch_examples,
+    ) = compare_shared_sequences(shared, old_map, new_map)
+
+    print()
+    print("=== Sequence equality for shared haplotypes ===")
+    print(f"Non-overlapping shared, sequence matches:  {independent_seq_match}")
+    print(f"Non-overlapping shared, sequence MISMATCH: {independent_seq_mismatch}")
+    print(f"Overlapping shared, sequence matches:      {overlapping_seq_match}")
+    print(f"Overlapping shared, sequence differs:      {overlapping_seq_differ}")
+    if independent_mismatch_examples:
+        print("  !! non-overlapping sequence mismatches (unexpected -- investigate):")
+        for variants_str in independent_mismatch_examples:
+            print(f"     {variants_str}")
 
     # --- chrX coverage note (separate from the autosome algorithm comparison) -----
     # Every chrX haplotype is new-only by construction: the original workflow computed no
@@ -266,6 +362,10 @@ def main() -> None:
         ("shared_same_ac", shared_same_ac),
         ("shared_new_higher_ac", shared_new_higher_ac),
         ("shared_old_higher_ac", shared_old_higher_ac),
+        ("shared_independent_seq_match", independent_seq_match),
+        ("shared_independent_seq_mismatch", independent_seq_mismatch),
+        ("shared_overlapping_seq_match", overlapping_seq_match),
+        ("shared_overlapping_seq_differ", overlapping_seq_differ),
         ("new_chrX_haplotypes", new_chrx_haplotypes),
     ]
     with SUMMARY_TSV.open("w") as f:
