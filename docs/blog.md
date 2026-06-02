@@ -212,7 +212,7 @@ In cases 2, 3, and 6 the redistribution moves `max_pop` to a population with a l
 
 Phased genotypes are not perfect.
 At tandem repeats in particular, the SHAPEIT5 phasing behind the HGDP+1KG release sometimes places two variants on the same haplotype whose reference alleles overlap, so they could never occur together on a real chromosome.
-For example, around chr1:6732420 there's a CTTT microsatellite where 12 sample-haplotypes are phased to carry both a 28 bp and a 24 bp contraction of the same repeat.
+For example, around `chr1:6732420` there's a CTTT microsatellite where 12 sample-haplotypes are phased to carry both a 28 bp and a 24 bp contraction of the same repeat.
 The two deletions remove overlapping bases, so no single chromosome can have both.
 The haplotype computation algorithm faithfully reproduces whatever the phased input says, so these impossible combinations surface as haplotypes.
 
@@ -237,7 +237,9 @@ Investigating these haplotypes exposed a related coordinate calculation issue in
 The FASTA window around a haplotype runs from `window_size` bases before the first variant to `window_size` bases after the end of the last variant, where the end was taken from the variant with the largest position.
 When an earlier variant is a long deletion whose reference allele reaches past that last variant, the window stopped short and truncated the tail of the deletion out of both the recorded `end` coordinate and the sequence.
 The window now ends at the largest reference end across all of a haplotype's variants, so it always spans the full deleted reference.
+
 This changes the coordinates and sequence for 301 haplotypes, all of which have one or more haplotype incompatibility flags of the `*_in_deletion` variety.
+Most of the `*_in_deletion`-flagged haplotypes were unaffected, because the overlapped variant sits at the terminal base of the deletion.
 
 ### Sex chromosome haplotypes
 
