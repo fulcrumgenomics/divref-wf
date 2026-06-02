@@ -337,7 +337,6 @@ rule download_reference_genome:
     shell:
         """
         (
-            set -euo pipefail
             uri="{params.fasta_uri}"
             # Download to a generic path; gzip is detected via magic bytes after fetch.
             dl="{output.fasta}.download"
@@ -450,8 +449,9 @@ rule create_divref_index:
         (
             # Hail's FASTAReader stages a ~3GB copy of the reference genome per JVM, and Spark a
             # blockmgr scratch dir; both default to $TMPDIR and leak there when a per-contig JVM
-            # exits non-cleanly (a crash or kill mid-run). Confine them to a per-run temp dir and
-            # delete it on exit (success or failure); also clear any dir a previously killed run
+            # exits non-cleanly (a crash or kill mid-run). Confine them (via $TMPDIR), along with
+            # Hail's own tmp_dir and the per-contig TSV (via --tmp-dir below), to a per-run temp dir
+            # and delete it on exit (success or failure); also clear any dir a previously killed run
             # left behind (safe: this index build is serial and single-writer).
             rm -rf {params.tmp_dir}/divref_index_tmp.* 2>/dev/null || true
             run_tmp=$(mktemp -d {params.tmp_dir}/divref_index_tmp.XXXXXX)
@@ -474,7 +474,7 @@ rule create_divref_index:
                     --window-size {params.window_size} \
                     --version {params.version} \
                     --polars-chunk-size {params.polars_chunk_size} \
-                    --tmp-dir {params.tmp_dir} \
+                    --tmp-dir "$run_tmp" \
                     --spark-driver-memory-gb {params.spark_driver_memory_gb} \
                     --spark-executor-memory-gb {params.spark_executor_memory_gb}
             done
