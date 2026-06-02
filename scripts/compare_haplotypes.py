@@ -24,8 +24,6 @@ from pathlib import Path
 
 import duckdb
 
-from divref.haplotype_compat import compatibility_flag
-
 DEFAULT_OLD_DUCKDB = "data/analysis/input/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb"
 DEFAULT_NEW_DUCKDB = "data/work/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb"
 DEFAULT_CONTIGS = [f"chr{i}" for i in range(1, 23)]
@@ -49,6 +47,22 @@ def parse_variants_string(s: str) -> VariantTuple:
 def key_to_variants_string(key: VariantTuple) -> str:
     """Reconstruct the `chr:pos:ref:alt,...` string for a haplotype key (stored order)."""
     return ",".join(f"{contig}:{pos}:{ref}:{alt}" for contig, pos, (ref, alt) in key)
+
+
+def has_overlapping_pair(key: VariantTuple) -> bool:
+    """Return whether two component variants' reference spans overlap.
+
+    Sorts by (position, reference length) and checks each adjacent pair's distance
+    (`pos2 - pos1 - len(ref1)`); a negative value means the reference spans overlap. Both builders
+    construct overlapping variants by composition (the new cursor builder differently from the
+    original concatenation), so only non-overlapping haplotypes are guaranteed an identical
+    sequence -- a co-located SNP+indel is compatible (PASS) yet built differently by each.
+    """
+    ordered = sorted(key, key=lambda v: (v[1], len(v[2][0])))
+    return any(
+        later[1] - earlier[1] - len(earlier[2][0]) < 0
+        for earlier, later in zip(ordered, ordered[1:], strict=False)
+    )
 
 
 def is_contiguous_sub(short: VariantTuple, long_: VariantTuple) -> bool:
@@ -106,12 +120,12 @@ def compare_shared_sequences(
     old_map: dict[VariantTuple, tuple[int, str]],
     new_map: dict[VariantTuple, tuple[int, str]],
 ) -> tuple[int, int, int, int, list[str]]:
-    """Compare old vs new stored sequences for shared haplotypes, split by compatibility.
+    """Compare old vs new stored sequences for shared haplotypes, split by whether they overlap.
 
-    Identical component variants must give the identical sequence, unless the haplotype is
-    incompatible: the new cursor composer resolves overlaps differently from the original's
-    concatenation (e.g. it no longer re-adds a base a deletion removes), so a flagged haplotype
-    may legitimately differ. A compatible (PASS) shared haplotype that differs is a regression.
+    A shared haplotype whose component variants do not overlap must build to the identical sequence
+    under both algorithms; a mismatch there is a regression. A haplotype with an overlapping pair
+    (a composable SNP co-located with an indel, or a flagged incompatibility) is composed by the
+    new cursor builder differently from the original concatenation, so it may legitimately differ.
 
     Args:
         shared: Haplotype keys present in both maps.
@@ -119,28 +133,35 @@ def compare_shared_sequences(
         new_map: New-pipeline `{key: (popmax_empirical_AC, sequence)}`.
 
     Returns:
-        `(pass_match, pass_mismatch, flagged_match, flagged_differ, pass_mismatch_examples)`; a
-        non-empty `pass_mismatch_examples` (capped at 10) signals a regression to investigate.
+        `(independent_match, independent_mismatch, overlapping_match, overlapping_differ,
+        independent_mismatch_examples)`; a non-empty examples list (capped at 10) is a regression
+        to investigate, since non-overlapping variants must build the same sequence.
     """
-    pass_match = 0
-    pass_mismatch = 0
-    flagged_match = 0
-    flagged_differ = 0
-    pass_mismatch_examples: list[str] = []
+    independent_match = 0
+    independent_mismatch = 0
+    overlapping_match = 0
+    overlapping_differ = 0
+    independent_mismatch_examples: list[str] = []
     for k in shared:
         sequences_match = old_map[k][1] == new_map[k][1]
-        if compatibility_flag(key_to_variants_string(k)) == "PASS":
+        if has_overlapping_pair(k):
             if sequences_match:
-                pass_match += 1
+                overlapping_match += 1
             else:
-                pass_mismatch += 1
-                if len(pass_mismatch_examples) < 10:
-                    pass_mismatch_examples.append(key_to_variants_string(k))
+                overlapping_differ += 1
         elif sequences_match:
-            flagged_match += 1
+            independent_match += 1
         else:
-            flagged_differ += 1
-    return pass_match, pass_mismatch, flagged_match, flagged_differ, pass_mismatch_examples
+            independent_mismatch += 1
+            if len(independent_mismatch_examples) < 10:
+                independent_mismatch_examples.append(key_to_variants_string(k))
+    return (
+        independent_match,
+        independent_mismatch,
+        overlapping_match,
+        overlapping_differ,
+        independent_mismatch_examples,
+    )
 
 
 def count_contig_haplotypes(duckdb_path: str, contig: str) -> int:
@@ -293,25 +314,26 @@ def main() -> None:
     print(f"Shared where old > new AC:  {shared_old_higher_ac}")
 
     # --- Sequence equality for shared haplotypes ----------------------------------
-    # A compatible (PASS) shared haplotype that differs is a regression, printed loudly. Flagged
-    # differences are expected (the new cursor composer resolves overlaps differently) and counted.
+    # A non-overlapping shared haplotype that differs is a regression, printed loudly. Overlapping
+    # ones (composable co-located variants or flagged incompatibilities) are composed differently
+    # by the new cursor builder than by the original concatenation, so differences are expected.
     (
-        pass_seq_match,
-        pass_seq_mismatch,
-        flagged_seq_match,
-        flagged_seq_differ,
-        pass_mismatch_examples,
+        independent_seq_match,
+        independent_seq_mismatch,
+        overlapping_seq_match,
+        overlapping_seq_differ,
+        independent_mismatch_examples,
     ) = compare_shared_sequences(shared, old_map, new_map)
 
     print()
     print("=== Sequence equality for shared haplotypes ===")
-    print(f"Compatible (PASS) shared, sequence matches:   {pass_seq_match}")
-    print(f"Compatible (PASS) shared, sequence MISMATCH:  {pass_seq_mismatch}")
-    print(f"Flagged shared, sequence matches:             {flagged_seq_match}")
-    print(f"Flagged shared, sequence differs (composer):  {flagged_seq_differ}")
-    if pass_mismatch_examples:
-        print("  !! PASS sequence mismatches (unexpected -- investigate):")
-        for variants_str in pass_mismatch_examples:
+    print(f"Non-overlapping shared, sequence matches:  {independent_seq_match}")
+    print(f"Non-overlapping shared, sequence MISMATCH: {independent_seq_mismatch}")
+    print(f"Overlapping shared, sequence matches:      {overlapping_seq_match}")
+    print(f"Overlapping shared, sequence differs:      {overlapping_seq_differ}")
+    if independent_mismatch_examples:
+        print("  !! non-overlapping sequence mismatches (unexpected -- investigate):")
+        for variants_str in independent_mismatch_examples:
             print(f"     {variants_str}")
 
     # --- chrX coverage note (separate from the autosome algorithm comparison) -----
@@ -340,10 +362,10 @@ def main() -> None:
         ("shared_same_ac", shared_same_ac),
         ("shared_new_higher_ac", shared_new_higher_ac),
         ("shared_old_higher_ac", shared_old_higher_ac),
-        ("shared_pass_seq_match", pass_seq_match),
-        ("shared_pass_seq_mismatch", pass_seq_mismatch),
-        ("shared_flagged_seq_match", flagged_seq_match),
-        ("shared_flagged_seq_differ", flagged_seq_differ),
+        ("shared_independent_seq_match", independent_seq_match),
+        ("shared_independent_seq_mismatch", independent_seq_mismatch),
+        ("shared_overlapping_seq_match", overlapping_seq_match),
+        ("shared_overlapping_seq_differ", overlapping_seq_differ),
         ("new_chrX_haplotypes", new_chrx_haplotypes),
     ]
     with SUMMARY_TSV.open("w") as f:
