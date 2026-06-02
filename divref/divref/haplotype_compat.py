@@ -40,7 +40,17 @@ END_EXTENDS_FLAG = "end_extends_past_rightmost_variant"
 
 
 def variant_kind(ref: str, alt: str) -> str:
-    """Classify a variant as `snp`, `deletion`, `insertion`, or `mnv` from its alleles."""
+    """
+    Classify a variant as `snp`, `deletion`, `insertion`, or `mnv` from its alleles.
+
+    Args:
+        ref: The reference allele.
+        alt: The alternate allele.
+
+    Returns:
+        `"snp"` (both length 1), `"deletion"` (ref longer than alt), `"insertion"` (alt longer
+        than ref), or `"mnv"` (equal length greater than 1).
+    """
     if len(ref) == 1 and len(alt) == 1:
         return "snp"
     if len(ref) > len(alt):
@@ -161,23 +171,28 @@ def classify_pair(v1: Variant, v2: Variant) -> str | None:
 
 def classify_haplotype(variants: list[Variant]) -> list[str]:
     """
-    Return the incompatibility reasons from every overlapping consecutive pair.
+    Return the incompatibility reasons from every overlapping variant pair.
 
-    Adjacent pairs are sufficient: positions are non-decreasing and each reference allele is
-    >= 1 bp, so if no consecutive pair overlaps then no pair overlaps at all. A long deletion
-    swallowing a non-adjacent downstream variant is still flagged at its own adjacent boundary.
+    Checks all pairs, not just adjacent ones: a long deletion can overlap a non-adjacent
+    downstream variant, and a same-position run can hide an incompatible pair (e.g. two SNPs)
+    behind composable neighbours (a co-located SNP+indel), so adjacency is not sufficient. Pairs
+    that do not overlap return no reason (`classify_pair` yields `None`), so distant pairs are
+    harmless; haplotypes are short, so the O(n^2) scan is cheap.
 
     Args:
-        variants: Position-sorted component variants (e.g. from `parse_variants_string`).
+        variants: Position-sorted component variants (e.g. from `parse_variants_string`), so that
+            for `i < j` variant `i` is the earlier one `classify_pair` expects.
 
     Returns:
-        One reason per incompatible adjacent pair (may repeat reasons or be empty).
+        One reason per incompatible pair (may repeat reasons or be empty).
     """
     reasons: list[str] = []
-    for v1, v2 in zip(variants, variants[1:], strict=False):
-        reason = classify_pair(v1, v2)
-        if reason is not None:
-            reasons.append(reason)
+    n = len(variants)
+    for i in range(n):
+        for j in range(i + 1, n):
+            reason = classify_pair(variants[i], variants[j])
+            if reason is not None:
+                reasons.append(reason)
     return reasons
 
 

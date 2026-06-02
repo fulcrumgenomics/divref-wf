@@ -100,10 +100,26 @@ def test_classify_haplotype_single_reason() -> None:
     assert classify_haplotype(variants) == ["snp_in_deletion"]
 
 
-def test_classify_haplotype_catches_nonadjacent_overlap() -> None:
-    """A long deletion swallowing a non-adjacent variant is still flagged (adjacency suffices)."""
-    variants = parse_variants_string("chr1:100:AAAAAAAAAAAAAAAAAAAA:A,chr1:105:C:T,chr1:110:G:A")
-    assert classify_haplotype(variants)
+def test_classify_haplotype_reports_nonadjacent_overlap_reason() -> None:
+    """
+    A long deletion overlapping a non-adjacent insertion reports it (all pairs, not just adjacent).
+
+    The deletion at 100 (20 bp) overlaps the SNP at 105 (adjacent -> snp_in_deletion) and the
+    insertion at 110 (non-adjacent); the adjacent-only scan would miss insertion_in_deletion.
+    """
+    variants = parse_variants_string("chr1:100:AAAAAAAAAAAAAAAAAAAA:A,chr1:105:C:T,chr1:110:G:GAA")
+    assert set(classify_haplotype(variants)) == {"snp_in_deletion", "insertion_in_deletion"}
+
+
+def test_classify_haplotype_same_position_pair_behind_composable_neighbour() -> None:
+    """
+    A same-position incompatibility hidden between composable neighbours is still caught.
+
+    SNP + insertion + SNP at one position: the adjacent (snp, insertion) and (insertion, snp) pairs
+    are composable, but the non-adjacent SNP+SNP pair cannot co-occur. Adjacency alone would PASS.
+    """
+    variants = parse_variants_string("chr1:100:C:T,chr1:100:C:CA,chr1:100:C:G")
+    assert classify_haplotype(variants) == ["same_position_snp"]
 
 
 def test_classify_haplotype_multiple_reasons() -> None:
