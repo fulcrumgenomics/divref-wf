@@ -32,6 +32,13 @@ REASONS: tuple[str, ...] = (
     "other_overlap",
 )
 
+# An extra `haplotype_filter` flag that is NOT a classify_pair reason: set when the haplotype's
+# reference end is determined by an earlier, longer-reference variant rather than the rightmost
+# one, so the window `end` differs from a rightmost-variant-only calculation (see
+# `end_extends_past_rightmost_variant`). compatibility_flag appends it to the reason set; it always
+# co-occurs with an overlap reason, since only an overlap lets an earlier variant reach furthest.
+END_EXTENDS_FLAG = "end_extends_past_rightmost_variant"
+
 
 def variant_kind(ref: str, alt: str) -> str:
     """Classify a variant as `snp`, `deletion`, `insertion`, or `mnv` from its alleles."""
@@ -175,6 +182,29 @@ def classify_haplotype(variants: list[Variant]) -> list[str]:
     return reasons
 
 
+def end_extends_past_rightmost_variant(variants: list[Variant]) -> bool:
+    """
+    Whether the haplotype's reference end is set by a variant other than the rightmost one.
+
+    The rightmost variant is the one with the largest position, ties broken by the longest
+    reference allele -- the variant a naive `end` runs to. An earlier long deletion can reach
+    further right than that, making the true end (the maximum reference end over all variants)
+    larger. This is True exactly for the haplotypes whose `end` a rightmost-variant-only window
+    would truncate; it implies an overlap, so it never occurs on an otherwise-compatible haplotype.
+
+    Args:
+        variants: Component variants of the haplotype.
+
+    Returns:
+        True iff some variant's reference reaches past the rightmost (largest-position, then
+        longest-reference) variant's reference end.
+    """
+    rightmost = max(variants, key=lambda v: (v[1], len(v[2])))
+    rightmost_ref_end = rightmost[1] - 1 + len(rightmost[2])
+    max_ref_end = max(v[1] - 1 + len(v[2]) for v in variants)
+    return max_ref_end > rightmost_ref_end
+
+
 def compatibility_flag(variants_str: str) -> str:
     """
     Compute the VCF-style `haplotype_filter` value for a haplotype's `variants` string.
@@ -183,11 +213,16 @@ def compatibility_flag(variants_str: str) -> str:
         variants_str: Comma-separated `chr:pos:ref:alt` component variants.
 
     Returns:
-        `"PASS"` if no adjacent component variants overlap (including single-variant rows), else
-        the `;`-joined sorted distinct incompatibility reasons.
+        `"PASS"` if the haplotype has no flags, else the `;`-joined sorted flags: the distinct
+        incompatibility reasons plus `end_extends_past_rightmost_variant` when an earlier variant's
+        reference reaches past the rightmost one (so the `end` differs from a rightmost-only
+        window). Single-variant rows are always `"PASS"`.
     """
-    reasons = classify_haplotype(parse_variants_string(variants_str))
-    return ";".join(sorted(set(reasons))) if reasons else "PASS"
+    variants = parse_variants_string(variants_str)
+    flags = set(classify_haplotype(variants))
+    if end_extends_past_rightmost_variant(variants):
+        flags.add(END_EXTENDS_FLAG)
+    return ";".join(sorted(flags)) if flags else "PASS"
 
 
 def variants_overlap(v1: Variant, v2: Variant) -> bool:

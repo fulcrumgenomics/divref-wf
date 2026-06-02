@@ -8,6 +8,7 @@ from divref.haplotype_compat import classify_pair
 from divref.haplotype_compat import compatibility_flag
 from divref.haplotype_compat import count_bypass_resolutions
 from divref.haplotype_compat import end_coordinate_shortfall
+from divref.haplotype_compat import end_extends_past_rightmost_variant
 from divref.haplotype_compat import parse_variants_string
 from divref.haplotype_compat import start_coordinate_shortfall
 from divref.haplotype_compat import variant_distance
@@ -127,11 +128,34 @@ def test_classify_haplotype_multiple_reasons() -> None:
             "chr1:300:AT:A,chr1:301:T:A,chr1:600:AAC:A,chr1:600:AACAC:A",
             "same_position_deletion;snp_in_deletion",
         ),
+        # An early deletion reaches past the last variant: the end-extension flag joins the reason.
+        (
+            "chr1:100:AAAAA:A,chr1:102:C:T",
+            "end_extends_past_rightmost_variant;snp_in_deletion",
+        ),
     ],
 )
 def test_compatibility_flag(variants_str: str, expected: str) -> None:
-    """PASS for compatible/single rows; sorted ';'-joined reasons otherwise."""
+    """PASS for compatible/single rows; sorted ';'-joined flags otherwise."""
     assert compatibility_flag(variants_str) == expected
+
+
+@pytest.mark.parametrize(
+    ("variants_str", "expected"),
+    [
+        # An early deletion (100, ref AAAAA -> end 104) reaches past the rightmost variant (102).
+        ("chr1:100:AAAAA:A,chr1:102:C:T", True),
+        # The rightmost-by-position variant reaches furthest: no extension.
+        ("chr1:100:A:T,chr1:200:GG:G", False),
+        # Two same-position deletions: the longer one is the rightmost (ties by ref length), so the
+        # end already comes from it -- not an extension past the rightmost variant.
+        ("chr1:600:AAC:A,chr1:600:AACAC:A", False),
+        ("chr1:100:A:T,chr1:200:C:G", False),  # clean
+    ],
+)
+def test_end_extends_past_rightmost_variant(variants_str: str, expected: bool) -> None:
+    """True only when an earlier, longer-reference variant reaches past the rightmost variant."""
+    assert end_extends_past_rightmost_variant(parse_variants_string(variants_str)) is expected
 
 
 @pytest.mark.parametrize(
