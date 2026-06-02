@@ -220,16 +220,26 @@ Every row in the index carries a `haplotype_filter` column that is `PASS` for si
 The flag is carried through the CALITAS remapping step into the final output, so a downstream user can keep or exclude these records as the application requires.
 Trying to repair the phasing would manufacture speculative haplotypes from data we already know is wrong, so flagging keeps full provenance and leaves the decision to the user.
 
-Across the autosomes and chrX, 8,834 of 2,089,184 haplotypes (0.42%) are flagged:
+Across the autosomes and chrX, 8,648 of 2,089,184 haplotypes (0.41%) are flagged.
 
-| `haplotype_filter` | Haplotypes | What it means |
-|---|---:|---|
-| `indel_in_deletion` | 4,798 | an insertion or indel positioned inside a deletion |
-| `same_position` | 2,998 | two different alleles called at the same position |
-| `overlapping_deletions` | 528 | two deletions whose reference spans overlap |
-| `snp_in_deletion` | 502 | a SNP at a base that a deletion removes |
+Flagging keeps these haplotypes in the bundle, so each one still needs a sequence.
+The builder composes the component variants left to right with a running reference cursor: each variant contributes the reference bases between the cursor and its position, then its own inserted or substituted bases, and advances the cursor past its reference allele.
+When two variants overlap, the later one contributes only the part of its alternate allele beyond the cursor, so the shared reference is never emitted or counted twice.
+This yields one well-defined sequence for every haplotype, though for an incompatible one it is a single arbitrary resolution of a combination that cannot occur on a real chromosome.
 
-A further 8 haplotypes have multiple flags.
+| `haplotype_filter` | Haplotypes | What it means | How the builder resolves it |
+|---|---:|---|---|
+| `insertion_in_deletion` | 4,798 | an insertion anchored on a base that a deletion removes | the deleted bases are removed and the inserted bases placed at the junction, dropping the insertion's anchor base the deletion already removed |
+| `same_position_insertion` | 943 | two insertions at the same position | both insertions are concatenated after the shared anchor base, ordered by alternate allele |
+| `same_position_deletion` | 845 | two deletions at the same position | the longer deletion wins, since its span subsumes the shorter |
+| `same_position_reciprocal_insertion_deletion` | 700 | a deletion and an insertion at the same position that inserts exactly the deleted bases | the two cancel, so the sequence equals the reference |
+| `overlapping_deletions` | 528 | two deletions whose reference spans overlap | the union of the deleted spans is removed |
+| `snp_in_deletion` | 503 | a SNP at a base that a deletion removes | the deletion wins, since the SNP's base is inside the deleted span and contributes nothing |
+| `same_position_insertion_deletion` | 299 | a deletion and an insertion at the same position that don't cancel | the inserted bases are placed and the deleted bases removed, a net combined indel |
+| `same_position_snp` | 12 | two SNPs at the same position | the first SNP wins and the second is dropped |
+
+A further 20 haplotypes have multiple flags.
+Conflicts in these haplotypes are resolved from left to right.
 
 #### Capturing the full deleted reference
 
