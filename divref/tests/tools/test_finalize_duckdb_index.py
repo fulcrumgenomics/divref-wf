@@ -1,5 +1,6 @@
 """Tests for the finalize_duckdb_index tool."""
 
+import logging
 from pathlib import Path
 
 import duckdb
@@ -8,6 +9,21 @@ import pytest
 from divref.tools.append_contig_to_duckdb_index import append_contig_to_duckdb_index
 from divref.tools.finalize_duckdb_index import finalize_duckdb_index
 from divref.tools.init_duckdb_index import init_duckdb_index
+
+
+def test_finalize_warns_on_empty_sequences(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Finalizing an index whose `sequences` table has no rows logs a warning (pure DuckDB)."""
+    output_base = tmp_path / "idx"
+    with duckdb.connect(str(Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb"))) as conn:
+        conn.execute("CREATE TABLE sequences (sequence_id VARCHAR)")
+
+    with caplog.at_level(logging.WARNING):
+        finalize_duckdb_index(output_base=output_base)
+
+    assert "empty 'sequences' table" in caplog.text
 
 
 def _write_table_pairs_tsv(path: Path, rows: list[tuple[str, str, str]]) -> Path:

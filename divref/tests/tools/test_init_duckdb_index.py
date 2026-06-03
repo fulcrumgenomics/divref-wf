@@ -6,9 +6,16 @@ import duckdb
 import pytest
 
 from divref.duckdb_index import compute_joint_legend
+from divref.duckdb_index import read_and_validate_pops_legends
 from divref.tools.append_contig_to_duckdb_index import read_legend
 from divref.tools.append_contig_to_duckdb_index import read_window_size
 from divref.tools.init_duckdb_index import init_duckdb_index
+
+
+def test_read_and_validate_pops_legends_empty_raises() -> None:
+    """An empty table-pair list is rejected with a clear error rather than an IndexError."""
+    with pytest.raises(ValueError, match="at least one table pair"):
+        read_and_validate_pops_legends([])
 
 
 def _write_table_pairs_tsv(path: Path, rows: list[tuple[str, str, str]]) -> Path:

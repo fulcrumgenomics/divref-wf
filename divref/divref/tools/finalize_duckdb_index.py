@@ -37,6 +37,12 @@ def finalize_duckdb_index(
                 f"DuckDB index {out_duckdb_file} has no 'sequences' table; "
                 f"run append_contig_to_duckdb_index before finalizing."
             )
+        row_count_row = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
+        if row_count_row is not None and row_count_row[0] == 0:
+            logger.warning(
+                f"DuckDB index {out_duckdb_file} has an empty 'sequences' table; "
+                f"finalizing an index with no rows."
+            )
         # IF NOT EXISTS keeps finalize idempotent: a re-triggered Snakemake rule or a manual retry
         # over an already-finalized index is a no-op rather than a raw DuckDB "index already exists"
         # catalog error.
