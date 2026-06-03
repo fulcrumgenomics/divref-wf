@@ -13,6 +13,33 @@ from divref import defaults
 logger = logging.getLogger(__name__)
 
 
+def _haploid_adjusted_call(
+    locus: hl.Expression,
+    gt: hl.Expression,
+    sex_karyotype: hl.Expression,
+) -> hl.Expression:
+    """
+    Collapse chrX non-PAR male genotypes to haploid; pass every other call through unchanged.
+
+    Males (`sex_karyotype == "XY"`) at chrX non-PAR loci are encoded as pseudo-homozygous diploid
+    (0|0 / 1|1) in the SHAPEIT5 BCFs, but gnomAD reports chrX non-PAR allele numbers with males
+    counted as haploid. Replacing such a call with `hl.call(gt[0])` makes the downstream
+    `call_stats` AN/AC match the gnomAD convention. It is lossless given the verified encoding
+    (`GT[0] == GT[1]` there) but would undercount a heterozygous male non-PAR call if one were
+    ever emitted. Autosomes, PAR, and chrY are unaffected.
+
+    Args:
+        locus: The variant locus expression.
+        gt: The diploid genotype call expression.
+        sex_karyotype: The sample's sex-karyotype string expression.
+
+    Returns:
+        A call expression: haploid `call(gt[0])` for chrX non-PAR males, else `gt` unchanged.
+    """
+    is_male_nonpar = locus.in_x_nonpar() & (sex_karyotype == "XY")
+    return hl.if_else(is_male_nonpar, hl.call(gt[0]), gt)
+
+
 def _compute_locus_groups(
     variants_ht: hl.Table,
     window_size: int,
@@ -37,6 +64,7 @@ def _compute_locus_groups(
         `n_groups` is the total number of groups.
     """
     rows = variants_ht.key_by().select("row_idx", "locus", "ref_len").collect()
+    logger.info("compute_locus_groups: collected %d variants to the driver", len(rows))
     rows.sort(key=lambda v: (v.locus.contig, v.locus.position))
     group_of: dict[int, int] = {}
     current_group = -1
@@ -636,17 +664,9 @@ def compute_haplotypes(
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
 
-    # Males in chrX non-PAR are encoded as pseudo-homozygous diploid (0|0 or 1|1) in the
-    # SHAPEIT5 BCFs, but gnomAD reports chrX non-PAR allele numbers with males counted as
-    # haploid. Treat males as haploid here so that empirical AC/AN match the gnomAD HT
-    # convention; everywhere else (autosomes, PAR, chrY) keep the original diploid call.
-    #
-    # `hl.call(mt.GT[0])` discards the second allele. This is lossless given the verified
-    # SHAPEIT5 encoding (males are pseudo-homozygous in non-PAR, so GT[0] == GT[1]) but
-    # would silently undercount carriers if upstream ever emitted heterozygous male calls
-    # in non-PAR.
-    is_male_nonpar = mt.locus.in_x_nonpar() & (mt.sex_karyotype == "XY")
-    adjusted_gt = hl.if_else(is_male_nonpar, hl.call(mt.GT[0]), mt.GT)
+    # Count chrX non-PAR males as haploid so empirical AC/AN match gnomAD's convention; see
+    # `_haploid_adjusted_call`. Autosomes, PAR, and chrY keep the original diploid call.
+    adjusted_gt = _haploid_adjusted_call(mt.locus, mt.GT, mt.sex_karyotype)
     mt = mt.annotate_rows(
         frequencies_by_pop=hl.agg.group_by(mt.pop_int, hl.agg.call_stats(adjusted_gt, 2)),
         ref_len=hl.len(mt.alleles[0]),

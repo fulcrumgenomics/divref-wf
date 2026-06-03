@@ -166,7 +166,9 @@ def haplo_coordinates(
     Returns:
         Hail struct expression with int32 fields `start` (inclusive) and `end` (exclusive).
     """
-    sorted_variants = hl.sorted(variants, key=lambda x: x.locus.position)
+    # Same sort key as get_haplo_sequence so the two stay in lockstep; only the minimum position
+    # (`[0].locus.position`) is read here, and `_max_reference_end` is order-independent.
+    sorted_variants = hl.sorted(variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0])))
     min_variant = sorted_variants[0]
     return hl.struct(
         start=min_variant.locus.position - 1 - window_size,
