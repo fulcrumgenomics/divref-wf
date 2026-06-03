@@ -62,8 +62,12 @@ def read_and_validate_pops_legends(table_pairs: list[TablePair]) -> tuple[list[s
         A tuple of `(gnomad_pops_legend, hgdp_pops_legend)`.
 
     Raises:
-        ValueError: If any contig's gnomAD or HGDP legend disagrees with the bootstrapped legend.
+        ValueError: If `table_pairs` is empty, or if any contig's gnomAD or HGDP legend disagrees
+            with the bootstrapped legend.
     """
+    if not table_pairs:
+        raise ValueError("read_and_validate_pops_legends requires at least one table pair.")
+
     first_with_hap: TablePair | None = next(
         (tp for tp in table_pairs if tp.haplotype_table_path is not None), None
     )
@@ -134,17 +138,25 @@ def write_metadata_tables(
         joint_pops_legend: Joint population codes stored as JSON in `joint_pops_legend`.
         version: Version identifier stored in the `VERSION` table.
     """
-    conn.execute("CREATE TABLE window_size AS SELECT ? AS window_size", [window_size])
-    conn.execute(
-        "CREATE TABLE hgdp_haplotype_pops_legend AS SELECT ? AS pops_legend",
-        [json.dumps(hgdp_pops_legend)],
-    )
-    conn.execute(
-        "CREATE TABLE gnomad_variant_pops_legend AS SELECT ? AS pops_legend",
-        [json.dumps(gnomad_pops_legend)],
-    )
-    conn.execute(
-        "CREATE TABLE joint_pops_legend AS SELECT ? AS pops_legend",
-        [json.dumps(joint_pops_legend)],
-    )
-    conn.execute("CREATE TABLE VERSION AS SELECT ? AS version", [version])
+    # Write the five tables in one transaction so an interrupted init leaves no partially
+    # populated index (which a later append/finalize would then read as corrupt metadata).
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute("CREATE TABLE window_size AS SELECT ? AS window_size", [window_size])
+        conn.execute(
+            "CREATE TABLE hgdp_haplotype_pops_legend AS SELECT ? AS pops_legend",
+            [json.dumps(hgdp_pops_legend)],
+        )
+        conn.execute(
+            "CREATE TABLE gnomad_variant_pops_legend AS SELECT ? AS pops_legend",
+            [json.dumps(gnomad_pops_legend)],
+        )
+        conn.execute(
+            "CREATE TABLE joint_pops_legend AS SELECT ? AS pops_legend",
+            [json.dumps(joint_pops_legend)],
+        )
+        conn.execute("CREATE TABLE VERSION AS SELECT ? AS version", [version])
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise

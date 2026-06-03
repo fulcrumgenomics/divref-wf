@@ -5,6 +5,28 @@ import hail as hl
 import pyspark
 
 
+def _export_gcs_credentials(gcs_credentials_path: Path | None) -> None:
+    """
+    Export GOOGLE_APPLICATION_CREDENTIALS for the JVM subprocess (GCS mode only).
+
+    Args:
+        gcs_credentials_path: Path to the ADC JSON file; must be provided and must exist.
+
+    Raises:
+        ValueError: If `gcs_credentials_path` is None.
+        FileNotFoundError: If the file does not exist.
+    """
+    if gcs_credentials_path is None:
+        raise ValueError("gcs_credentials_path is required when use_s3 is False.")
+    if not gcs_credentials_path.exists():
+        raise FileNotFoundError(
+            f"GCS credentials file not found at {gcs_credentials_path}. Run "
+            "`gcloud auth application-default login` or pass a valid --gcs-credentials-path."
+        )
+    if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcs_credentials_path)
+
+
 def hail_init(
     gcs_credentials_path: Path | None = None,
     spark_driver_memory_gb: int = 1,
@@ -25,9 +47,9 @@ def hail_init(
 
     Args:
         gcs_credentials_path: Absolute path to a GCP Application Default Credentials
-            JSON file. Required when `use_s3` is `False`; ignored otherwise. If the
-            file exists and `GOOGLE_APPLICATION_CREDENTIALS` is not already set, it
-            is exported to the environment before Hail starts.
+            JSON file. Required (and must exist) when `use_s3` is `False`; ignored
+            otherwise. When `GOOGLE_APPLICATION_CREDENTIALS` is not already set, it is
+            exported to the environment before Hail starts.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
         use_s3: If `True`, validate and load the S3A connector JARs and configure
@@ -38,9 +60,9 @@ def hail_init(
         ValueError: If `spark_driver_memory_gb` or `spark_executor_memory_gb`
             is less than 1, or if `use_s3` is `False` and `gcs_credentials_path`
             is `None`.
-        FileNotFoundError: If `use_s3` is `False` and the GCS connector JAR is
-            missing, or if `use_s3` is `True` and either S3A connector JAR is
-            missing.
+        FileNotFoundError: If `use_s3` is `False` and either the credentials file at
+            `gcs_credentials_path` or the GCS connector JAR is missing, or if `use_s3`
+            is `True` and either S3A connector JAR is missing.
     """
     if spark_driver_memory_gb < 1:
         raise ValueError(
@@ -58,10 +80,7 @@ def hail_init(
     )
 
     if not use_s3:
-        if gcs_credentials_path is None:
-            raise ValueError("gcs_credentials_path is required when use_s3 is False.")
-        if gcs_credentials_path.exists() and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcs_credentials_path)
+        _export_gcs_credentials(gcs_credentials_path)
 
     jars_dir = os.path.join(pyspark.__path__[0], "jars")
     cloud_jars: list[str] = []
