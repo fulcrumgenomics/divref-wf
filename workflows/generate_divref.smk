@@ -63,6 +63,10 @@ CHROMS: list[str] = config["chromosomes"]
 _HAPLOTYPE_CONTIGS: frozenset[str] = frozenset(f"chr{n}" for n in range(1, 23)) | {"chrX"}
 HAPLOTYPE_CHROMS: list[str] = [c for c in CHROMS if c in _HAPLOTYPE_CONTIGS]
 
+# Constrains `{chrom}` wildcards to valid GRCh38 main-contig tokens so they cannot greedily match
+# unintended path segments (e.g. an intermediate filename suffix that embeds a contig).
+_CONTIG_WILDCARD_REGEX: str = r"chr(\d+|X|Y)"
+
 REFERENCE_GENOME: str = config["reference_genome_base_name"]
 REFERENCE_GENOME_URI: str = config["reference_genome_uri"]
 
@@ -91,6 +95,14 @@ POLARS_CHUNK_SIZE: int = config["polars_chunk_size"]
 
 SPARK_DRIVER_MEMORY_GB: int = config["spark_driver_memory_gb"]
 SPARK_EXECUTOR_MEMORY_GB: int = config["spark_executor_memory_gb"]
+
+# Memory footprint and a core-count hint for the Hail/Spark rules, so `-j` / `--resources mem_mb=...`
+# can bound how many of these heavyweight JVMs run concurrently (each launches a driver and an
+# executor JVM at the configured per-JVM heap, plus ~2GB for the Python process and off-heap
+# buffers). Spark runs in local mode and grabs cores irrespective of Snakemake, so `threads` is a
+# scheduling hint that keeps the scheduler from packing several of these jobs onto one node.
+_HAIL_RULE_MEM_MB: int = (SPARK_DRIVER_MEMORY_GB + SPARK_EXECUTOR_MEMORY_GB) * 1024 + 2048
+_HAIL_RULE_THREADS: int = 4
 
 # Built once so each Hail rule can append it to its CLI invocation. Empty when on AWS,
 # since the GCS connector is not loaded and the credentials path is ignored.
@@ -194,6 +206,11 @@ rule extract_gnomad_afs:
         variant_ht=directory(f"{WORK_DIR}/inputs/hgdp_1kg.sites.{{chrom}}.ht"),
     log:
         "logs/generate_divref/extract_gnomad_afs.{chrom}.log",
+    wildcard_constraints:
+        chrom=_CONTIG_WILDCARD_REGEX,
+    threads: _HAIL_RULE_THREADS
+    resources:
+        mem_mb=_HAIL_RULE_MEM_MB,
     params:
         variant_ht=HGDP_1KG_VARIANT_ANNOTATION_HAIL_TABLE,
         freq_threshold=HGDP_1KG_MIN_POP_VARIANT_AF,
@@ -226,6 +243,9 @@ rule extract_sample_metadata:
         sample_ht=directory(f"{WORK_DIR}/inputs/hgdp_1kg.sample_metadata.ht"),
     log:
         "logs/generate_divref/extract_sample_metadata.log",
+    threads: _HAIL_RULE_THREADS
+    resources:
+        mem_mb=_HAIL_RULE_MEM_MB,
     params:
         sample_ht=HGDP_1KG_SAMPLE_METADATA_HAIL_TABLE,
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
@@ -258,6 +278,11 @@ rule compute_haplotypes:
         haplotypes_ht=directory(f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{{chrom}}.ht"),
     log:
         "logs/generate_divref/compute_haplotypes.{chrom}.log",
+    wildcard_constraints:
+        chrom=_CONTIG_WILDCARD_REGEX,
+    threads: _HAIL_RULE_THREADS
+    resources:
+        mem_mb=_HAIL_RULE_MEM_MB,
     params:
         window_size=SEQUENCE_WINDOW_SIZE,
         variant_freq_threshold=HGDP_1KG_MIN_POP_VARIANT_AF,
@@ -299,6 +324,11 @@ rule extract_gnomad_variant_afs:
         variant_ht=directory(f"{WORK_DIR}/inputs/gnomad.sites.{{chrom}}.ht"),
     log:
         "logs/generate_divref/extract_gnomad_variant_afs.{chrom}.log",
+    wildcard_constraints:
+        chrom=_CONTIG_WILDCARD_REGEX,
+    threads: _HAIL_RULE_THREADS
+    resources:
+        mem_mb=_HAIL_RULE_MEM_MB,
     params:
         gnomad_source=GNOMAD_VARIANT_ANNOTATION_SOURCE,
         gnomad_cloud=GNOMAD_VARIANT_ANNOTATION_CLOUD,
@@ -342,7 +372,8 @@ rule download_reference_genome:
             dl="{output.fasta}.download"
             case "$uri" in
                 s3://*|s3a://*)
-                    s3_uri="${{uri/s3a:\\/\\//s3:\\/\\/}}"
+                    # `aws s3` uses the s3:// scheme; rewrite a leading s3a:// if present.
+                    s3_uri="${{uri/#s3a:/s3:}}"
                     # Try authenticated first; fall back to --no-sign-request for public
                     # Open Data buckets when no AWS credentials are configured.
                     aws s3 cp "$s3_uri" "$dl" \
@@ -435,6 +466,9 @@ rule create_divref_index:
         duckdb=f"{WORK_DIR}/output/hgdp_1kg.haplotypes_gnomad_merge.index.duckdb",
     log:
         "logs/generate_divref/create_divref_index.log",
+    threads: _HAIL_RULE_THREADS
+    resources:
+        mem_mb=_HAIL_RULE_MEM_MB,
     params:
         window_size=SEQUENCE_WINDOW_SIZE,
         output_base=f"{WORK_DIR}/output/hgdp_1kg",
@@ -453,8 +487,8 @@ rule create_divref_index:
             # Hail's own tmp_dir and the per-contig TSV (via --tmp-dir below), to a per-run temp dir
             # and delete it on exit (success or failure); also clear any dir a previously killed run
             # left behind (safe: this index build is serial and single-writer).
-            rm -rf {params.tmp_dir}/divref_index_tmp.* 2>/dev/null || true
-            run_tmp=$(mktemp -d {params.tmp_dir}/divref_index_tmp.XXXXXX)
+            rm -rf "{params.tmp_dir}"/divref_index_tmp.* 2>/dev/null || true
+            run_tmp=$(mktemp -d "{params.tmp_dir}"/divref_index_tmp.XXXXXX)
             export TMPDIR="$run_tmp"
             trap 'rm -rf "$run_tmp"' EXIT
 

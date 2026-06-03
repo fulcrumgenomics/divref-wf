@@ -65,7 +65,7 @@ rule subset_gnomad_hail_tables:
         sample_ht=directory(f"{OUTPUT_DIR}/hgdp_1kg_sample_metadata.ht"),
         samples_txt=f"{OUTPUT_DIR}/samples.txt",
     log:
-        f"logs/create_test_data/subset_gnomad_hail_tables.log",
+        "logs/create_test_data/subset_gnomad_hail_tables.log",
     params:
         chr1_locus=LOCUS,
         chrx_locus=CHRX_LOCUS,
