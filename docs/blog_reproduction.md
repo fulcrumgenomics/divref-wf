@@ -11,7 +11,7 @@ The default environment (`pixi run ...`) provides Python, Snakemake, Hail, `bcft
 It runs the `generate_divref` workflow and the Python comparison scripts.
 
 The `analysis` environment (`pixi run -e analysis ...`) adds R and is required for the R-based steps: the gnomAD-release comparison workflow (`compare_divref_gnomad.smk`) and the Venn figure (`compare_haplotypes_venn.R`).
-The R packages those scripts import (`duckdb`, `duckplyr`, `eulerr`) are not available as conda builds for all platforms, so install them once before running any analysis step:
+The R packages those scripts import (`duckdb`, `duckplyr`, `eulerr`) are not available as conda builds for all platforms, so install them once before running any analysis step using the pixi task:
 
 ```bash
 pixi run -e analysis setup-r-packages
