@@ -76,6 +76,17 @@ def sequences_row_count(conn: duckdb.DuckDBPyConnection) -> int:
     return int(row[0])
 
 
+def _contig_already_appended(conn: duckdb.DuckDBPyConnection, contig: str) -> bool:
+    """Whether the `sequences` table already holds any rows for `contig` (False if no table yet)."""
+    exists = conn.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
+    ).fetchone()
+    if exists is None:
+        return False
+    row = conn.execute("SELECT 1 FROM sequences WHERE contig = ? LIMIT 1", [contig]).fetchone()
+    return row is not None
+
+
 def build_hgdp_haplotype_table_entries(
     haplotypes_table_path: Path,
     hgdp_to_joint: list[int],
@@ -156,9 +167,6 @@ def build_gnomad_variant_table_entries(
         Hail table of gnomAD single-variant entries annotated to match the HGDP_haplotype schema.
     """
     va = hl.read_table(str(sites_table_path))
-    count_orig: int = va.count()
-    logger.info(f"Variant table {sites_table_path} contains {count_orig} variants.")
-
     va = va.rename({"pop_freqs": "gnomad_freqs"})
     va = va.key_by()
     argmax_pop = hl.argmax(va.gnomad_freqs.map(lambda x: x.AF))
@@ -254,10 +262,18 @@ def build_contig_sequences_table(
         "max_empirical_AC": "popmax_empirical_AC",
     })
 
+    seq_ht = seq_ht.annotate(variant_strs=seq_ht.variants.map(lambda x: hl.variant_str(x)))
+    # Total ordering so the row index — and therefore the assigned sequence_id — is determined by
+    # the data, not by Spark partitioning. Primary key is the genomic start; ties (e.g. a single
+    # variant co-located with a haplotype's leftmost variant) break on source then the joined
+    # variant string, which together uniquely identify a row.
     seq_ht = seq_ht.annotate(
-        min_pos=hl.sorted(seq_ht.variants, key=lambda v: v.locus.position)[0].locus.position
+        min_pos=hl.sorted(seq_ht.variants, key=lambda v: v.locus.position)[0].locus.position,
+        seq_sort_key=hl.delimit(seq_ht.variant_strs, ","),
     )
-    seq_ht = seq_ht.order_by(seq_ht.min_pos).drop("min_pos")
+    seq_ht = seq_ht.order_by(seq_ht.min_pos, seq_ht.source, seq_ht.seq_sort_key).drop(
+        "min_pos", "seq_sort_key"
+    )
     seq_ht = seq_ht.add_index()
     coords = haplo_coordinates(window_size, seq_ht.variants)
     seq_ht = seq_ht.annotate(
@@ -266,7 +282,6 @@ def build_contig_sequences_table(
         start=coords.start,
         end=coords.end,
     )
-    seq_ht = seq_ht.annotate(variant_strs=seq_ht.variants.map(lambda x: hl.variant_str(x)))
     seq_ht = seq_ht.annotate(
         sequence_length=hl.len(seq_ht.sequence),
         sequence_id=hl.str(f"DR-{version}-") + hl.str(seq_ht.idx + sequence_id_offset),
@@ -570,10 +585,12 @@ def _stream_tsv_into_sequences(
     if table_exists is None:
         # `haplotype_filter` is appended last in both the schema-defining empty frame and every
         # inserted chunk, so column order stays consistent across the CREATE and the INSERTs.
-        empty_df = _add_compatibility_flag(  # noqa: F841
+        empty_df = _add_compatibility_flag(
             _scan_sequences_tsv(tsv, joint_pops_legend).limit(0).collect()
         )
+        conn.register("empty_df", empty_df)
         conn.execute("CREATE TABLE sequences AS SELECT * FROM empty_df")
+        conn.unregister("empty_df")
 
     appended_rows: int = 0
     for chunk in iter_dataframe_chunks(
@@ -581,10 +598,64 @@ def _stream_tsv_into_sequences(
         joint_pops_legend=joint_pops_legend,
         chunk_size=chunk_size,
     ):
-        df = _add_compatibility_flag(chunk)  # noqa: F841
-        conn.execute("INSERT INTO sequences SELECT * FROM df")
-        appended_rows += df.height
+        chunk_df = _add_compatibility_flag(chunk)
+        conn.register("chunk_df", chunk_df)
+        conn.execute("INSERT INTO sequences SELECT * FROM chunk_df")
+        conn.unregister("chunk_df")
+        appended_rows += chunk_df.height
     return appended_rows
+
+
+def _export_and_stream_contig(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    seq_ht: hl.Table,
+    contig_tsv: Path,
+    joint_pops_legend: list[str],
+    chunk_size: int,
+    retain_tsv: bool,
+) -> int:
+    """
+    Export a contig's sequences to a TSV and stream it into `sequences` within one transaction.
+
+    The per-contig TSV (which can be ~GB) is deleted on any failure unless `retain_tsv`, and the
+    DuckDB writes (the `sequences` CREATE on the first contig plus all chunk INSERTs) run inside a
+    single transaction, so a crash mid-stream rolls back to leave the index exactly as it was
+    rather than a half-written contig.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+        seq_ht: The contig's annotated sequences Hail table.
+        contig_tsv: Path the per-contig TSV is written to.
+        joint_pops_legend: Ordered joint pop legend used to type the streamed columns.
+        chunk_size: Maximum number of rows per polars read batch.
+        retain_tsv: If True, leave the per-contig TSV in place after streaming.
+
+    Returns:
+        The number of rows appended for this contig.
+    """
+    try:
+        export_sequences_table_to_tsv(
+            ht=seq_ht,
+            out_file=contig_tsv,
+            joint_pops_legend=joint_pops_legend,
+        )
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            contig_rows = _stream_tsv_into_sequences(
+                conn,
+                tsv=contig_tsv,
+                joint_pops_legend=joint_pops_legend,
+                chunk_size=chunk_size,
+            )
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        if not retain_tsv and contig_tsv.exists():
+            contig_tsv.unlink()
+    return contig_rows
 
 
 def append_contig_to_duckdb_index(
@@ -612,6 +683,11 @@ def append_contig_to_duckdb_index(
     `sequences` row count, so running contigs in canonical order reproduces a contiguous
     `DR-{version}-N` numbering across processes.
 
+    Each contig is written in a single transaction, so a crash mid-stream rolls back and leaves the
+    index unchanged. Appends are expected to run once per contig, in order; re-appending a contig
+    whose rows are already present is rejected (rebuild via `init_duckdb_index --force` instead),
+    so the tool is safe to invoke standalone and not only inside the ordered workflow loop.
+
     Args:
         in_table_pairs_tsv: TSV with 'contig', 'haplotype_table_path' (optional), and
             'sites_table_path' columns. Only the row matching `contig` is processed.
@@ -634,8 +710,8 @@ def append_contig_to_duckdb_index(
 
     Raises:
         ValueError: If Spark memory is below 1GB, the contig is not in the TSV, the stored window
-            size disagrees with `window_size`, or this contig's source legends disagree with the
-            stored legends.
+            size disagrees with `window_size`, this contig's source legends disagree with the
+            stored legends, or the contig already has rows in the index.
     """
     assert_path_is_readable(in_table_pairs_tsv)
     assert_path_is_readable(reference_fasta)
@@ -684,6 +760,16 @@ def append_contig_to_duckdb_index(
 
         joint_pops_legend, remaps = _resolve_legends_and_remaps(conn, table_pair)
 
+        # Appends run once per contig, in canonical order, after init_duckdb_index. Re-appending
+        # onto an index that already holds this contig's rows would duplicate them with fresh
+        # sequence IDs, so fail loudly instead; to rebuild, re-run init_duckdb_index with --force
+        # (how the workflow redoes the whole index). This keeps the tool safe to invoke standalone.
+        if _contig_already_appended(conn, contig):
+            raise ValueError(
+                f"Contig {contig} already has rows in {out_duckdb_file}. Appends run once per "
+                f"contig; re-run init_duckdb_index with --force to rebuild from scratch."
+            )
+
         # In production each contig runs in a fresh JVM, so the reference has no sequence yet.
         # Guard against re-adding when a context is reused within a process (e.g. the shared
         # pytest-session Hail context), since add_sequence raises if a sequence is already set.
@@ -707,21 +793,14 @@ def append_contig_to_duckdb_index(
         contig_tsv: Path = (
             per_contig_tsv_dir / f"{output_base.name}.haplotypes_gnomad_merge.{contig}.tsv.bgz"
         )
-        export_sequences_table_to_tsv(
-            ht=contig_seq_ht,
-            out_file=contig_tsv,
-            joint_pops_legend=joint_pops_legend,
-        )
-
-        contig_rows: int = _stream_tsv_into_sequences(
+        contig_rows: int = _export_and_stream_contig(
             conn,
-            tsv=contig_tsv,
+            seq_ht=contig_seq_ht,
+            contig_tsv=contig_tsv,
             joint_pops_legend=joint_pops_legend,
             chunk_size=polars_chunk_size,
+            retain_tsv=retain_per_contig_tsvs,
         )
-
-        if not retain_per_contig_tsvs and contig_tsv.exists():
-            contig_tsv.unlink()
 
     logger.info(
         f"Appended {contig_rows} rows for contig {contig} "

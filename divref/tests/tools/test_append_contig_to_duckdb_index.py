@@ -13,6 +13,7 @@ from divref.tools.append_contig_to_duckdb_index import _stream_tsv_into_sequence
 from divref.tools.append_contig_to_duckdb_index import append_contig_to_duckdb_index
 from divref.tools.append_contig_to_duckdb_index import export_sequences_table_to_tsv
 from divref.tools.append_contig_to_duckdb_index import iter_dataframe_chunks
+from divref.tools.append_contig_to_duckdb_index import sequences_row_count
 from divref.tools.init_duckdb_index import init_duckdb_index
 
 
@@ -572,3 +573,95 @@ def test_add_compatibility_flag_empty_frame() -> None:
     out = _add_compatibility_flag(df)
     assert out.height == 0
     assert out.schema["haplotype_filter"] == polars.String
+
+
+def test_reappending_same_contig_is_rejected(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """Re-appending a contig already in the index raises instead of duplicating its rows."""
+    table_pairs_tsv = _table_pairs(datadir, tmp_path)
+    output_base = tmp_path / "idx"
+    reference_fasta = _reference_fasta(datadir)
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+    append_contig_to_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        contig="chr1",
+        output_base=output_base,
+        reference_fasta=reference_fasta,
+        window_size=25,
+        version="9.9",
+    )
+    with duckdb.connect(str(_db_path(output_base))) as conn:
+        first_row = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
+        assert first_row is not None
+        first_count: int = first_row[0]
+
+    with pytest.raises(ValueError, match="already has rows"):
+        append_contig_to_duckdb_index(
+            in_table_pairs_tsv=table_pairs_tsv,
+            contig="chr1",
+            output_base=output_base,
+            reference_fasta=reference_fasta,
+            window_size=25,
+            version="9.9",
+        )
+
+    with duckdb.connect(str(_db_path(output_base))) as conn:
+        second_row = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
+        assert second_row is not None
+        assert second_row[0] == first_count
+
+
+def test_append_rolls_back_on_streaming_failure(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure while streaming rows rolls back, leaving no partial contig in the index."""
+    import divref.tools.append_contig_to_duckdb_index as mod
+
+    table_pairs_tsv = _table_pairs(datadir, tmp_path)
+    output_base = tmp_path / "idx"
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+
+    original = mod._add_compatibility_flag
+
+    def fail_on_rows(df: polars.DataFrame) -> polars.DataFrame:
+        # Let the schema-defining empty frame through (it creates the table inside the
+        # transaction), but fail on the first non-empty chunk so the INSERT and the CREATE roll
+        # back together.
+        if df.height > 0:
+            raise RuntimeError("injected streaming failure")
+        return original(df)
+
+    monkeypatch.setattr(mod, "_add_compatibility_flag", fail_on_rows)
+
+    with pytest.raises(RuntimeError, match="injected streaming failure"):
+        append_contig_to_duckdb_index(
+            in_table_pairs_tsv=table_pairs_tsv,
+            contig="chr1",
+            output_base=output_base,
+            reference_fasta=_reference_fasta(datadir),
+            window_size=25,
+            version="9.9",
+        )
+
+    # The transaction rolled back: the `sequences` CREATE was inside it, so the table is absent
+    # and the row-count helper reports zero rather than a half-written contig.
+    with duckdb.connect(str(_db_path(output_base))) as conn:
+        assert sequences_row_count(conn) == 0
