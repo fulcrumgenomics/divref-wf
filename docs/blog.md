@@ -12,7 +12,7 @@ The [DivRef](https://zenodo.org/records/14802613) resource bundle developed by E
 
 The existing [DivRef generation workflow](https://github.com/e9genomics/human-diversity-reference) is a set of standalone Python scripts plus a Makefile, with some inputs hard-coded and others unrecorded.
 I wanted a bundle where I could trust the provenance of every haplotype and variant, and tune parameters for individual scientific applications.
-I [re-implemented](https://github.com/fg-labs/divref-wf) the existing workflow as in Snakemake wrapping a Python toolkit, with a configuration schema, GCS or AWS Open Data ingestion, and per-chromosome parallelism so a full rebuild takes less than a 20 hours on a laptop.
+I [re-implemented](https://github.com/fg-labs/divref-wf) the existing workflow in Snakemake wrapping a Python toolkit, with a configuration schema, GCS or AWS Open Data ingestion, and per-chromosome parallelism so a full rebuild takes less than 20 hours on a laptop.
 
 ### Headline improvements
 
