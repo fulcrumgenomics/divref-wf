@@ -14,6 +14,7 @@ from divref.tools.compute_haplotypes import _attach_component_info
 from divref.tools.compute_haplotypes import _compute_metrics
 from divref.tools.compute_haplotypes import _enumerate_subfragments
 from divref.tools.compute_haplotypes import _form_parent_blocks
+from divref.tools.compute_haplotypes import _haploid_adjusted_call
 from divref.tools.compute_haplotypes import compute_haplotypes
 
 
@@ -1123,3 +1124,33 @@ def test_compute_haplotypes_chrx_nonpar(
     results: list[hl.Struct] = result.collect()
     assert all(len(r.haplotype) >= 2 for r in results)
     assert all(len(r.variants) == len(r.haplotype) for r in results)
+
+
+def test_haploid_adjusted_call_counts_chrx_nonpar_males_once(
+    hail_context: None,  # noqa: ARG001
+) -> None:
+    """A chrX non-PAR male alt-carrier contributes one allele to call_stats; everyone else two."""
+    # Two samples: col 0 is male (XY), col 1 is female (XX). Two sites: a chrX non-PAR locus and an
+    # autosome locus. Every entry is a (pseudo-)homozygous alt call (1|1).
+    mt = hl.utils.range_matrix_table(n_rows=2, n_cols=2)
+    mt = mt.annotate_cols(sex_karyotype=hl.if_else(mt.col_idx == 0, "XY", "XX"))
+    mt = mt.annotate_rows(
+        locus=hl.if_else(
+            mt.row_idx == 0,
+            hl.locus("chrX", 50_000_000, reference_genome="GRCh38"),  # well inside non-PAR
+            hl.locus("chr1", 1_000_000, reference_genome="GRCh38"),
+        ),
+        alleles=["A", "T"],
+    )
+    mt = mt.annotate_entries(GT=hl.call(1, 1))
+
+    adjusted = _haploid_adjusted_call(mt.locus, mt.GT, mt.sex_karyotype)
+    mt = mt.annotate_rows(cs=hl.agg.call_stats(adjusted, 2))
+    by_contig = {row.locus.contig: row.cs for row in mt.rows().collect()}
+
+    # chrX non-PAR: male counted haploid (1 allele) + female diploid (2) -> AN 3, all alt.
+    assert by_contig["chrX"].AN == 3
+    assert by_contig["chrX"].AC[1] == 3
+    # Autosome: both diploid -> AN 4 (the correction does not apply off chrX non-PAR).
+    assert by_contig["chr1"].AN == 4
+    assert by_contig["chr1"].AC[1] == 4

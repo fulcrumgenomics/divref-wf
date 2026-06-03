@@ -61,6 +61,10 @@ def test_variant_distance(a: str, b: str, expected: int) -> None:
         ("chr1:100:CA:C", "chr1:100:C:CGG", "same_position_insertion_deletion"),  # "A" != "GG"
         # Insertion anchored at a deleted base: contested anchor -> conflict.
         ("chr1:400:TGG:T", "chr1:402:G:GTTTT", "insertion_in_deletion"),
+        # MNV overlaps (rare in practice) fall through to the catch-all reasons.
+        ("chr1:100:AT:GC", "chr1:100:AT:CG", "same_position_other"),  # two MNVs at one site
+        ("chr1:100:ATGC:A", "chr1:101:TG:CA", "other_overlap"),  # MNV inside a deletion
+        ("chr1:100:ATG:CGT", "chr1:101:T:A", "other_overlap"),  # MNV spanning a downstream SNP
         # Composable overlaps -> None.
         ("chr1:100:C:A", "chr1:100:C:CAA", None),  # snp + insertion at one site
         ("chr1:100:C:A", "chr1:100:CA:C", None),  # snp + deletion at one site
