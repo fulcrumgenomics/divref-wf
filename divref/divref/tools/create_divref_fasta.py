@@ -32,12 +32,14 @@ def create_divref_fasta(
         output_base: Base path for output FASTA files; chromosome name is appended as a suffix.
         contigs: List of contigs to write FASTA files for.
         polars_chunk_size: Maximum number of rows per polars DataFrame batch read from DuckDB.
-    """
-    assert_path_is_readable(duckdb_path)
-    assert_path_is_writable(output_base)
 
-    if len(contigs) == 0:
+    Raises:
+        ValueError: If ``contigs`` is empty.
+    """
+    if not contigs:
         raise ValueError("Contig list must be provided.")
+
+    assert_path_is_readable(duckdb_path)
 
     # Validate all output paths before processing
     out_paths: dict[str, Path] = {
@@ -92,5 +94,8 @@ def iter_sequence_chunks(
     )
     for batch in result.fetch_record_batch(chunk_size):
         df = polars.from_arrow(batch)
-        if isinstance(df, polars.DataFrame) and df.height > 0:
+        # from_arrow on a RecordBatch always returns a DataFrame; assert to narrow the type and
+        # fail loudly rather than silently dropping rows should that ever change.
+        assert isinstance(df, polars.DataFrame)
+        if df.height > 0:
             yield df
