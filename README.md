@@ -100,12 +100,8 @@ Haplotypes are derived from the [gnomAD 3.1.2 HGDP+1KG individual-level phased g
 - Individuals are annotated with continental ancestry using [gnomAD labels](https://gnomad.broadinstitute.org/data).
 - Only variants in the HGDP+1KG subset of gnomAD 3.1.2 are considered for inclusion, as variants only present in the full genomes dataset do not have associated phased genotypes.
 - Variants with less than 0.5%AF in the full gnomAD 3.1.2 genomes (n=76,156) dataset in all of the populations are removed.
-- Sets of phased alleles are computed over 100-base-pair windows of the genome, with two passes offset by 50bp so that haplotypes are not split at fixed window boundaries.
-- Duplicate haplotypes produced by the overlapping passes are removed when the DuckDB index is built (after sub-haplotype splitting, see below).
-- For each haplotype, the population with the highest empirical AF is recorded as `max_pop`. The phase ratio is the empirical AF of the haplotype in `max_pop` divided by the empirical AF of the rarest component variant in `max_pop`.
-- The estimated gnomAD haplotype frequency is the phase ratio multiplied by the smallest gnomAD AF among the component variants in `max_pop`.
-- Haplotypes with estimated gnomAD frequency < 0.5% are removed.
-- Haplotypes spanning variants further than or equal to 25bp apart are broken into sub-haplotypes at those gaps. Sub-haplotypes with fewer than two variants are discarded.
+- Haplotypes are formed by grouping each sample's phased alt-carrier variants into adjacency blocks (consecutive variants within `sequence_window_size` = 25bp of one another) and counting how often each two-or-more-variant sub-haplotype recurs across samples. The algorithm, and its rewrite from DivRef 1.1's two-pass window binning, is described in [Improving haplotype computation](docs/blog.md#improving-haplotype-computation).
+- For each haplotype a per-population empirical AF, phase ratio (`fraction_phased`), and `estimated_gnomad_AF` are computed; `max_pop` is the population with the highest empirical AF, and haplotypes whose `estimated_gnomad_AF` is < 0.5% are removed. See [Estimating gnomAD allele frequency for a haplotype](docs/blog.md#estimating-gnomad-allele-frequency-for-a-haplotype) for the full calculation and filtering.
 
 **Note** Given the sample size of the HGDP+1KG phased genotypes dataset, there is limited power to detect haplotypes under 1%.
 We have included haplotypes discovered between 0.5% and 1%, but would expect to find more haplotypes in that frequency range with a larger dataset.
@@ -151,7 +147,7 @@ The primary table in the DuckDB index is the `sequences` table, which has one ro
 | `estimated_gnomAD_haplotype_AF_{POP}` | Per-pop projection: `fraction_phased_{POP} × min(gnomAD_AF[component, POP])`. Equals `empirical_AF_{POP}` for `gnomAD_variant` rows. |
 | `haplotype_filter` | VCF-style compatibility flag. `PASS` for `gnomAD_variant` rows and for `HGDP_haplotype` rows whose component variants do not overlap; otherwise the `;`-joined reason(s) the haplotype is incompatible (e.g. `snp_in_deletion`, `insertion_in_deletion`, `overlapping_deletions`, or a `same_position_*` reason such as `same_position_deletion` or `same_position_reciprocal_insertion_deletion`). Incompatible haplotypes are component variants that cannot co-occur on one chromosome — e.g. upstream phasing artifacts at tandem repeats — and are flagged rather than dropped. A SNP at the same position as the anchor position of an indel composes to a well-defined haplotype and stays `PASS`. The flag set also carries `end_extends_past_rightmost_variant` when an earlier, longer-reference variant reaches past the rightmost one, so the window `end` is larger than a rightmost-variant-only calculation. |
 
-The DuckDB file also contains three single-row metadata tables: `window_size` (the flanking context size used), `pops_legend` (JSON-encoded ordered population list), and `VERSION`.
+The DuckDB file also contains five single-row metadata tables: `window_size` (the flanking context size used), three JSON-encoded ordered population legends (`hgdp_haplotype_pops_legend`, `gnomad_variant_pops_legend`, and the merged `joint_pops_legend` referenced by the `empirical_AC_{POP}` / `empirical_AF_{POP}` columns), and `VERSION`.
 
 ## Analysis
 

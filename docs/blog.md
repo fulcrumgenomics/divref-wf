@@ -131,7 +131,7 @@ If `min(hgdp_1kg_AF[v,p]) == 0` or missing, `fraction_phased[p]` is missing; eit
 
 Comparing the two algorithms on the autosomes (chr1-22; ≥0.5% for at least one per-population AF, 25 bp window):
 
-![Autosome (chr1-22) haplotype overlap between the original and new algorithms: 1,947,860 shared, 79,064 original-only, 87,553 new-only](../data/analysis/compute_haplotypes/algo_comparison.venn.png)
+![Autosome (chr1-22) haplotype overlap between the original and new algorithms: 1,947,860 shared, 79,064 original-only, 87,553 new-only](algo_comparison.venn.png)
 
 #### AC counts in haplotypes found by both algorithms
 
