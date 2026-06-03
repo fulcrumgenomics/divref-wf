@@ -38,7 +38,9 @@ def extract_sample_metadata(
     assert_path_is_writable(out_sample_metadata)
 
     hail_init(
-        gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None,
+        gcs_credentials_path=(
+            gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None
+        ),
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
         use_s3=use_s3,

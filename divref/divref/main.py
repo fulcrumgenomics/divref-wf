@@ -1,7 +1,6 @@
 import logging
 import sys
-from typing import Callable
-from typing import List
+from collections.abc import Callable
 
 import defopt
 
@@ -16,7 +15,7 @@ from divref.tools.gnomad_hail_table_test_data import gnomad_hail_table_test_data
 from divref.tools.init_duckdb_index import init_duckdb_index
 from divref.tools.remap_divref import remap_divref
 
-_tools: List[Callable[..., None]] = [
+_tools: list[Callable[..., None]] = [
     append_contig_to_duckdb_index,
     compute_haplotypes,
     create_divref_fasta,

@@ -28,6 +28,7 @@ def _export_gcs_credentials(gcs_credentials_path: Path | None) -> None:
 
 
 def hail_init(
+    *,
     gcs_credentials_path: Path | None = None,
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,

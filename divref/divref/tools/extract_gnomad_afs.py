@@ -44,11 +44,16 @@ def extract_gnomad_afs(
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
         use_s3: If `True`, initialize Hail with the S3A connector instead of the GCS
             connector. Set this when `in_gnomad_sites_table` is an `s3a://` URI.
+
+    Raises:
+        ValueError: If a requested population is absent from the gnomAD frequency metadata.
     """
     assert_path_is_writable(out_variant_annotation_table)
 
     hail_init(
-        gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None,
+        gcs_credentials_path=(
+            gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None
+        ),
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
         use_s3=use_s3,
