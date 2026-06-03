@@ -1,5 +1,6 @@
 """Tool to remap DivRef haplotype coordinates to reference genome coordinates."""
 
+import contextlib
 import csv
 import json
 import logging
@@ -267,19 +268,54 @@ def _translate_coordinate_to_ref(
     return v_end_ref + (coord - variant_intervals[last_smaller_variant][1])
 
 
+def _find_index_in_cwd() -> Optional[Path]:
+    """
+    Search the current working directory recursively for a `.duckdb` file.
+
+    Returns:
+        The first `.duckdb` file found while walking the tree, or None if there is none.
+    """
+    for root, _dirs, files in os.walk(Path.cwd()):
+        for file in files:
+            if file.endswith(".duckdb"):
+                return Path(root) / file
+    return None
+
+
 def _get_index_connection(index_path: Optional[Path]) -> duckdb.DuckDBPyConnection:
     if index_path is None:
-        for root, _dirs, files in os.walk(Path.cwd()):
-            for file in files:
-                if file.endswith(".duckdb"):
-                    index_path = Path(root) / file
-                    break
+        index_path = _find_index_in_cwd()
     if index_path is None:
         raise RuntimeError(
             "Unable to find a DuckDB index file. Pass --index-path or run from the "
             "same directory as the index file."
         )
     return duckdb.connect(str(index_path))
+
+
+def _read_metadata_scalar(conn: duckdb.DuckDBPyConnection, query: str, table: str) -> Any:
+    """
+    Read the single scalar value from a one-row metadata table, raising if it is absent.
+
+    Args:
+        conn: Open DuckDB connection to a DivRef index.
+        query: The `SELECT` statement reading the table (a trusted literal, not user input).
+        table: The table's name, used only for the error message.
+
+    Returns:
+        The first column of the table's single row.
+
+    Raises:
+        RuntimeError: If the table is missing (not in the catalog) or empty — i.e. not a valid
+            DivRef index.
+    """
+    try:
+        row = conn.execute(query).fetchone()
+    except duckdb.CatalogException:
+        row = None
+    if row is None:
+        raise RuntimeError(f"Index is missing {table} table — ensure this is a valid DivRef index.")
+    return row[0]
 
 
 def remap_divref(  # noqa: C901
@@ -300,13 +336,11 @@ def remap_divref(  # noqa: C901
     Args:
         input_path: Path to the CALITAS output file.
         output_path: Path to write the remapped output file.
-        index_path: Path to the DivRef DuckDB index file. If not provided, the tool
-            searches the directory containing this script for a .duckdb file.
+        index_path: Path to the DivRef DuckDB index file. If not provided, the current working
+            directory is searched recursively and the first .duckdb file found is used.
         separator: Field delimiter used in both input and output files.
         batch_size: Number of rows to process per database query batch.
     """
-    conn = _get_index_connection(index_path)
-
     df: pd.DataFrame = pd.read_csv(input_path, sep=separator)
     chrom_field: str = "chromosome"
     start_field: str = "coordinate_start"
@@ -329,99 +363,89 @@ def remap_divref(  # noqa: C901
     if df[chrom_field].dtype != object:
         df[chrom_field] = df[chrom_field].astype(str)
 
-    version_row = conn.execute("SELECT * FROM VERSION").fetchone()
-    if version_row is None:
-        raise RuntimeError("Index is missing VERSION table — ensure this is a valid DivRef index.")
-    version: str = version_row[0]
-
-    window_size_row = conn.execute("SELECT * FROM window_size").fetchone()
-    if window_size_row is None:
-        raise RuntimeError(
-            "Index is missing window_size table — ensure this is a valid DivRef index."
+    with contextlib.closing(_get_index_connection(index_path)) as conn:
+        version: str = _read_metadata_scalar(conn, "SELECT * FROM VERSION", "VERSION")
+        window_size: int = _read_metadata_scalar(conn, "SELECT * FROM window_size", "window_size")
+        joint_pops_legend: list[str] = json.loads(
+            _read_metadata_scalar(conn, "SELECT * FROM joint_pops_legend", "joint_pops_legend")
         )
-    window_size: int = window_size_row[0]
 
-    joint_pops_legend_row = conn.execute("SELECT * FROM joint_pops_legend").fetchone()
-    if joint_pops_legend_row is None:
-        raise RuntimeError(
-            "Index is missing joint_pops_legend table — ensure this is a valid DivRef index."
-        )
-    joint_pops_legend: list[str] = json.loads(joint_pops_legend_row[0])
+        contigs: list[str] = []
+        starts: list[int] = []
+        ends: list[int] = []
+        variants_involved: list[str] = []
+        all_variants: list[str] = []
+        n_variants_involved: list[int] = []
+        popmax_empirical_af: list[float] = []
+        popmax_empirical_ac: list[int] = []
+        max_pop: list[str] = []
+        source: list[str] = []
+        haplotype_filter: list[str] = []
+        # One column per pop in the joint legend. `gnomad_af_per_pop` holds the comma-delimited
+        # per-variant AF strings (matches DuckDB's `gnomAD_AF_{POP}` columns verbatim);
+        # `estimated_gnomad_af_per_pop` holds the per-pop scalar haplotype-level estimated AF.
+        gnomad_af_per_pop: dict[str, list[str]] = {pop: [] for pop in joint_pops_legend}
+        estimated_gnomad_af_per_pop: dict[str, list[Optional[float]]] = {
+            pop: [] for pop in joint_pops_legend
+        }
 
-    contigs: list[str] = []
-    starts: list[int] = []
-    ends: list[int] = []
-    variants_involved: list[str] = []
-    all_variants: list[str] = []
-    n_variants_involved: list[int] = []
-    popmax_empirical_af: list[float] = []
-    popmax_empirical_ac: list[int] = []
-    max_pop: list[str] = []
-    source: list[str] = []
-    haplotype_filter: list[str] = []
-    # One column per pop in the joint legend. `gnomad_af_per_pop` holds the comma-delimited
-    # per-variant AF strings (matches DuckDB's `gnomAD_AF_{POP}` columns verbatim);
-    # `estimated_gnomad_af_per_pop` holds the per-pop scalar haplotype-level estimated AF.
-    gnomad_af_per_pop: dict[str, list[str]] = {pop: [] for pop in joint_pops_legend}
-    estimated_gnomad_af_per_pop: dict[str, list[Optional[float]]] = {
-        pop: [] for pop in joint_pops_legend
-    }
+        for batch_start in tqdm(range(0, len(df), batch_size)):
+            batch_end = min(batch_start + batch_size, len(df))
+            batch_df = df.iloc[batch_start:batch_end]
+            batch_hap_ids = batch_df[chrom_field].tolist()
 
-    for batch_start in tqdm(range(0, len(df), batch_size)):
-        batch_end = min(batch_start + batch_size, len(df))
-        batch_df = df.iloc[batch_start:batch_end]
-        batch_hap_ids = batch_df[chrom_field].tolist()
+            results = conn.execute(
+                """
+                SELECT * FROM sequences
+                WHERE sequences.sequence_id IN (SELECT unnest($1::STRING[]))
+                """,
+                [batch_hap_ids],
+            ).fetchall()
 
-        results = conn.execute(
-            """
-            SELECT * FROM sequences
-            WHERE sequences.sequence_id IN (SELECT unnest($1::STRING[]))
-            """,
-            [batch_hap_ids],
-        ).fetchall()
+            columns = [desc[0] for desc in conn.description]
+            id_to_hap: dict[str, Haplotype] = {}
+            for row in results:
+                hap = Haplotype.from_row(dict(zip(columns, row, strict=True)), joint_pops_legend)
+                id_to_hap[hap.sequence_id] = hap
 
-        columns = [desc[0] for desc in conn.description]
-        id_to_hap: dict[str, Haplotype] = {}
-        for row in results:
-            hap = Haplotype.from_row(dict(zip(columns, row, strict=True)), joint_pops_legend)
-            id_to_hap[hap.sequence_id] = hap
+            for _, df_row in batch_df.iterrows():
+                start: int = df_row[start_field]
+                end: int = df_row[end_field]
+                hap_id: str = df_row[chrom_field]
+                strand: str = df_row[strand_field]
+                padded_target: str = df_row[padded_target_field]
+                target: str = df_row[unpadded_target_field]
 
-        for _, df_row in batch_df.iterrows():
-            start: int = df_row[start_field]
-            end: int = df_row[end_field]
-            hap_id: str = df_row[chrom_field]
-            strand: str = df_row[strand_field]
-            padded_target: str = df_row[padded_target_field]
-            target: str = df_row[unpadded_target_field]
+                padded_len_adj = len(padded_target.replace("-", "")) - len(target)
+                if strand == "+":
+                    end += padded_len_adj
+                else:
+                    start -= padded_len_adj
 
-            padded_len_adj = len(padded_target.replace("-", "")) - len(target)
-            if strand == "+":
-                end += padded_len_adj
-            else:
-                start -= padded_len_adj
+                found_hap = id_to_hap.get(hap_id)
+                if found_hap is None:
+                    raise RuntimeError(
+                        f"Unable to find haplotype for {hap_id} — ensure you are aligning against "
+                        f"the same DivRef version as this index (DivRef-v{version})"
+                    )
+                rm = found_hap.reference_mapping(start, end, window_size)
 
-            found_hap = id_to_hap.get(hap_id)
-            if found_hap is None:
-                raise RuntimeError(
-                    f"Unable to find haplotype for {hap_id} — ensure you are aligning against "
-                    f"the same DivRef version as this index (DivRef-v{version})"
-                )
-            rm = found_hap.reference_mapping(start, end, window_size)
-
-            contigs.append(rm.chromosome)
-            starts.append(rm.start)
-            ends.append(rm.end)
-            all_variants.append(found_hap.variants)
-            variants_involved.append(rm.variants_involved_str())
-            n_variants_involved.append(len(rm.variants_involved))
-            popmax_empirical_af.append(found_hap.popmax_empirical_af)
-            popmax_empirical_ac.append(found_hap.popmax_empirical_ac)
-            max_pop.append(found_hap.max_pop)
-            source.append(found_hap.source)
-            haplotype_filter.append(found_hap.haplotype_filter)
-            for pop in joint_pops_legend:
-                gnomad_af_per_pop[pop].append(found_hap.gnomad_afs[pop])
-                estimated_gnomad_af_per_pop[pop].append(found_hap.estimated_gnomad_af_per_pop[pop])
+                contigs.append(rm.chromosome)
+                starts.append(rm.start)
+                ends.append(rm.end)
+                all_variants.append(found_hap.variants)
+                variants_involved.append(rm.variants_involved_str())
+                n_variants_involved.append(len(rm.variants_involved))
+                popmax_empirical_af.append(found_hap.popmax_empirical_af)
+                popmax_empirical_ac.append(found_hap.popmax_empirical_ac)
+                max_pop.append(found_hap.max_pop)
+                source.append(found_hap.source)
+                haplotype_filter.append(found_hap.haplotype_filter)
+                for pop in joint_pops_legend:
+                    gnomad_af_per_pop[pop].append(found_hap.gnomad_afs[pop])
+                    estimated_gnomad_af_per_pop[pop].append(
+                        found_hap.estimated_gnomad_af_per_pop[pop]
+                    )
 
     df["divref_sequence_id"] = df[chrom_field]
     df["divref_start"] = df[start_field]

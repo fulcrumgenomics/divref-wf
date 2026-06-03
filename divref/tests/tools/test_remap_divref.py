@@ -111,6 +111,8 @@ def test_deletion_shifts_coordinates() -> None:
 
     assert rm.first_variant_index == 1
     assert rm.last_variant_index == 2
+    assert rm.start == 504
+    assert rm.end == 511
 
 
 def test_insertion_shifts_coordinates() -> None:
@@ -124,6 +126,8 @@ def test_insertion_shifts_coordinates() -> None:
 
     assert rm.first_variant_index == 1
     assert rm.last_variant_index == 1
+    assert rm.start == 503
+    assert rm.end == 506
 
 
 def test_no_variants_in_range() -> None:
@@ -152,6 +156,8 @@ def test_complex_multi_indel_mapping() -> None:
 
     assert rm.first_variant_index == 0
     assert rm.last_variant_index == 2
+    assert rm.start == 499
+    assert rm.end == 513
 
 
 def test_large_insertion_with_null_frequencies() -> None:
