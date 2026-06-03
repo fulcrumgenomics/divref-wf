@@ -100,13 +100,19 @@ divref_in_gnomad %>% write_tsv(paste0(opts$output_base, ".divref_in_gnomad.tsv")
 
 # Plot: Venn diagram of DivRef vs gnomAD variant overlap ----
 
-n_both <- nrow(divref_in_gnomad)
-n_divref_only <- nrow(divref_not_in_gnomad)
-n_gnomad_only <- nrow(gnomad) - n_both
+# Count by distinct variant key, not by joined-row count: a duplicate `variant` in the gnomAD
+# table would otherwise inflate the overlap and could push n_gnomad_only negative (which euler()
+# rejects). On clean inputs these equal the row counts. The joined frames above are still used for
+# the per-variant AF-difference plots.
+divref_keys <- unique(divref$variants)
+gnomad_keys <- unique(gnomad$variant)
+n_both <- length(intersect(divref_keys, gnomad_keys))
+n_divref_only <- length(setdiff(divref_keys, gnomad_keys))
+n_gnomad_only <- length(setdiff(gnomad_keys, divref_keys))
 
-log_info(nrow(divref_in_gnomad), " DivRef variants found in gnomAD")
-log_info(nrow(divref_not_in_gnomad), " DivRef variants not found in gnomAD")
-log_info(n_gnomad_only, "gnomAD variants not found in DivRef")
+log_info(n_both, " DivRef variants found in gnomAD")
+log_info(n_divref_only, " DivRef variants not found in gnomAD")
+log_info(n_gnomad_only, " gnomAD variants not found in DivRef")
 
 venn_counts <- c(n_divref_only, n_gnomad_only, n_both)
 names(venn_counts) <- c("DivRef 1.1", opts$gnomad_label, paste0("DivRef 1.1&", opts$gnomad_label))
