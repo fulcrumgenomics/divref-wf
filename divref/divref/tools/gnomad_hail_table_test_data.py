@@ -140,7 +140,7 @@ def gnomad_hail_table_test_data(
     assert_path_is_writable(out_samples_txt)
 
     hail_init(
-        gcs_credentials_path.expanduser(),
+        gcs_credentials_path=gcs_credentials_path.expanduser(),
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
     )

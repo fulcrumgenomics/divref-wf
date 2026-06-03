@@ -176,6 +176,10 @@ def extract_gnomad_single_afs(
             when `gnomad_cloud` is `GCS`; ignored otherwise.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
+
+    Raises:
+        ValueError: If neither `out_sites_hail_table` nor `out_sites_tsv` is provided, or if a
+            requested population is absent from the gnomAD frequency metadata.
     """
     if out_sites_hail_table is None and out_sites_tsv is None:
         raise ValueError("At least one of out_sites_hail_table or out_sites_tsv must be provided")
@@ -185,7 +189,9 @@ def extract_gnomad_single_afs(
         assert_path_is_writable(out_sites_tsv)
 
     hail_init(
-        gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None,
+        gcs_credentials_path=(
+            gcs_credentials_path.expanduser() if gcs_credentials_path is not None else None
+        ),
         spark_driver_memory_gb=spark_driver_memory_gb,
         spark_executor_memory_gb=spark_executor_memory_gb,
         use_s3=(gnomad_cloud is GnomadCloud.S3),
