@@ -1,0 +1,69 @@
+# Resource Description
+
+The below statements are from using the [default parameters](workflows/config/config_schema.yml).
+
+## Populations
+
+AFR, AMR, EAS, SAS, NFE
+
+## Index database and FASTA files
+
+The `HGDP_haplotype` and `gnomAD_variant` data is merged and position-sorted.
+The 25bp sequence context around each haplotype/variant is obtained from the GRCh38 reference genome and exported to FASTA.
+An accompanying DuckDB index database contains all of the input haplotypes/variants, their population AFs, and for haplotypes, the empirical AF and AC.
+
+The FASTA files are intended to be used with tools for guide design and off-target nomination that already accept reference sequences in FASTA format.
+
+### `sequences` table columns
+
+The primary table in the DuckDB index is the `sequences` table, which has one row per haplotype or single variant.
+
+| Column | Description |
+|---|---|
+| `sequence_id` | Unique identifier of the form `DR-{version}-{index}`. `index` is the global row number assigned in genomic-position order across all contigs. |
+| `sequence` | Sequence string for the haplotype/variant, with `window_size` bp of flanking reference context on each side. |
+| `sequence_length` | Length of `sequence` in bases. |
+| `n_variants` | Number of component variants in this row (`1` for `gnomAD_variant`, `>= 2` for `HGDP_haplotype`). |
+| `contig` | Reference contig (e.g. `chr1`). |
+| `start` | 0-based inclusive start of `sequence` on `contig`: `(first_variant_position − 1) − window_size`. |
+| `end` | 0-based exclusive end of `sequence` on `contig`: `(last_variant_position − 1 + length(ref_allele)) + window_size`. |
+| `source` | `HGDP_haplotype` or `gnomAD_variant`. |
+| `max_pop` | Population code with the highest empirical AF for this haplotype/variant. |
+| `popmax_empirical_AF` | For `HGDP_haplotype`: empirical AF of the haplotype in `max_pop` from observed phased genotypes. For `gnomAD_variant`: the gnomAD AF in `max_pop`. |
+| `popmax_empirical_AC` | Allele count corresponding to `popmax_empirical_AF`. |
+| `popmax_estimated_gnomad_AF` | For `HGDP_haplotype`: `popmax_fraction_phased × min(gnomAD_AF[component, max_pop])` over the component variants — i.e. the phase ratio applied to the rarest component's gnomAD AF in `max_pop`. For `gnomAD_variant`: the gnomAD AF in `max_pop`. Equivalent to `estimated_gnomAD_haplotype_AF_{max_pop}`. |
+| `popmax_fraction_phased` | For `HGDP_haplotype`: phase ratio, `popmax_empirical_AF / min(empirical_AF[component, max_pop])` — empirical haplotype AF over empirical AF of the rarest component variant in the same population. `1.0` for `gnomAD_variant`. Equivalent to `fraction_phased_{max_pop}`. |
+| `variants` | Comma-separated list of component variants in `chr:pos:ref:alt` form, in the order they appear in the haplotype. |
+| `gnomAD_AF_{POP}` | One column per configured population (e.g. `gnomAD_AF_AFR`). Comma-separated per-component gnomAD AFs in that population, in the same order as `variants`, formatted to 5 decimal places. |
+| `empirical_AC_{POP}` | One column per pop in `joint_pops_legend`. For `HGDP_haplotype`: count of chromosomes carrying the haplotype in that pop (haplotype-level). For `gnomAD_variant`: the gnomAD AC for that variant in that pop (variant-level). Missing if the pop has no source data for this row. |
+| `empirical_AF_{POP}` | For `HGDP_haplotype`: empirical AF of the haplotype in that pop, derived from `empirical_AC_{POP}` and the min AN over component variants. For `gnomAD_variant`: the gnomAD AF for that variant in that pop. Missing if AN is 0 or the pop has no source data. |
+| `fraction_phased_{POP}` | Per-pop phase ratio: `empirical_AF_{POP} / min(local_call_stats_AF[component, POP])`. `1.0` for `gnomAD_variant` rows. Uses *that pop's own* denominators (not `max_pop`'s). |
+| `estimated_gnomAD_haplotype_AF_{POP}` | Per-pop projection: `fraction_phased_{POP} × min(gnomAD_AF[component, POP])`. Equals `empirical_AF_{POP}` for `gnomAD_variant` rows. |
+| `haplotype_filter` | VCF-style compatibility flag. `PASS` for `gnomAD_variant` rows and for `HGDP_haplotype` rows whose component variants do not overlap; otherwise the `;`-joined reason(s) the haplotype is incompatible (e.g. `snp_in_deletion`, `insertion_in_deletion`, `overlapping_deletions`, or a `same_position_*` reason such as `same_position_deletion` or `same_position_reciprocal_insertion_deletion`). Incompatible haplotypes are component variants that cannot co-occur on one chromosome — e.g. upstream phasing artifacts at tandem repeats — and are flagged rather than dropped. A SNP at the same position as the anchor position of an indel composes to a well-defined haplotype and stays `PASS`. The flag set also carries `end_extends_past_rightmost_variant` when an earlier, longer-reference variant reaches past the rightmost one, so the window `end` is larger than a rightmost-variant-only calculation. |
+
+The DuckDB file also contains five single-row metadata tables: `window_size` (the flanking context size used), three JSON-encoded ordered population legends (`hgdp_haplotype_pops_legend`, `gnomad_variant_pops_legend`, and the merged `joint_pops_legend` referenced by the `empirical_AC_{POP}` / `empirical_AF_{POP}` columns), and `VERSION`.
+
+## HGDP_haplotype
+
+Haplotypes are derived from the [gnomAD 3.1.2 HGDP+1KG individual-level phased genotypes](https://gnomad.broadinstitute.org/news/2021-10-gnomad-v3-1-2-minor-release/).
+
+> [!IMPORTANT]
+> **Sample-input assumption: sex-aneuploid samples must not have an assigned population.**
+> The haplotype computation assumes all samples that survive the population filter have either an `XX` or `XY` karyotype, so that the chrX non-PAR ploidy correction (males treated as haploid) is well-defined. This invariant is enforced indirectly: samples are kept only when their `gnomad_population_inference.pop` is in the configured set of populations, and the gnomAD 3.1.2 HGDP+1KG sample-meta source declines to assign a population to any sex-aneuploid sample (`X`, `XXY`, `XYY`, `ambiguous`) — their PCA-based pop inference is unreliable on non-diploid sex karyotypes. Aneuploid samples therefore have `pop = None` upstream and get dropped by the population filter before the chrX correction runs.
+>
+> If you point the workflow at a different sample-metadata source that *does* assign populations to aneuploid samples, those samples will pass the population filter and their genotypes will be fed into the chrX non-PAR correction with incorrect ploidy assumptions. The pipeline does not currently check for this; users supplying custom sample metadata are responsible for filtering aneuploid samples upstream.
+
+- Individuals are annotated with continental ancestry using [gnomAD labels](https://gnomad.broadinstitute.org/data).
+- Only variants in the HGDP+1KG subset of gnomAD 3.1.2 are considered for inclusion, as variants only present in the full genomes dataset do not have associated phased genotypes.
+- Variants with less than 0.5%AF in the full gnomAD 3.1.2 genomes (n=76,156) dataset in all of the populations are removed.
+- Haplotypes are formed by grouping each sample's phased alt-carrier variants into adjacency blocks (consecutive variants within `sequence_window_size` = 25bp of one another) and counting how often each two-or-more-variant sub-haplotype recurs across samples. The algorithm, and its rewrite from DivRef 1.1's two-pass window binning, is described in [Improving haplotype computation](docs/blog.md#improving-haplotype-computation).
+- For each haplotype a per-population empirical AF, phase ratio (`fraction_phased`), and `estimated_gnomad_AF` are computed; `max_pop` is the population with the highest empirical AF, and haplotypes whose `estimated_gnomad_AF` is < 0.5% are removed. See [Estimating gnomAD allele frequency for a haplotype](docs/blog.md#estimating-gnomad-allele-frequency-for-a-haplotype) for the full calculation and filtering.
+
+**Note** Given the sample size of the HGDP+1KG phased genotypes dataset, there is limited power to detect haplotypes under 1%.
+We have included haplotypes discovered between 0.5% and 1%, but would expect to find more haplotypes in that frequency range with a larger dataset.
+
+## gnomAD_variant
+
+gnomAD variants are derived from the [gnomAD 4.1 joint exomes+genomes sites](https://gnomad.broadinstitute.org/news/2024-04-gnomad-v4-1/).
+
+- Genotypes at variants with less than 0.5% AF in all of the populations are removed.
