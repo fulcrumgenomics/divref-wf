@@ -21,4 +21,4 @@ jobs:
           cache: true
 
       - name: Run linting
-        run: pixi run lint --check
+        run: pixi run --locked lint --check
