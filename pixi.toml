@@ -33,7 +33,7 @@ analysis = { features = ["workflow", "analysis"] }
 check-toolkit = "uv run --directory divref poe check-all"
 fix-and-check-toolkit = "uv run --directory divref poe fix-and-check-all"
 
-check-lock   = "pixi lock --check"
+check-lock = "pixi lock --check"
 
 check-all = [
     { task = "check-toolkit" },
