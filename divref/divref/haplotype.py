@@ -1,27 +1,8 @@
 """Shared utilities for Hail-based DivRef pipeline tools."""
 
-from collections.abc import Hashable
-from typing import TypeVar
-
 import hail as hl
 
 from divref import defaults
-
-_V = TypeVar("_V", bound=Hashable)
-"""Type variable for hashable dictionary values used in to_hashable_items."""
-
-
-def to_hashable_items(d: dict[str, _V]) -> tuple[tuple[str, _V], ...]:
-    """
-    Convert a dictionary to a sorted tuple of items for use as a hashable key.
-
-    Args:
-        d: Dictionary with hashable values to convert.
-
-    Returns:
-        Sorted tuple of (key, value) pairs.
-    """
-    return tuple(sorted(d.items()))
 
 
 def _max_reference_end(variants: hl.Expression) -> hl.Expression:

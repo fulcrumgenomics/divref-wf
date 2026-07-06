@@ -8,7 +8,6 @@ from fgpyo.io import assert_path_is_writable
 from divref import defaults
 from divref.alias import HailPath
 from divref.hail import hail_init
-from divref.haplotype import to_hashable_items
 
 
 def extract_gnomad_afs(
@@ -64,11 +63,11 @@ def extract_gnomad_afs(
     va = hl.filter_intervals(va_all, [interval])
 
     freq_meta = va.globals.gnomad_freq_meta.collect()[0]
-    map_to_index = {to_hashable_items(x): i for i, x in enumerate(freq_meta)}
+    map_to_index = {frozenset(x.items()): i for i, x in enumerate(freq_meta)}
 
     pop_indices = []
     for pop in populations:
-        idx = map_to_index.get(to_hashable_items({"group": "adj", "pop": pop}))
+        idx = map_to_index.get(frozenset({"group": "adj", "pop": pop}.items()))
         if idx is None:
             raise ValueError(f"Population {pop!r} not found in gnomAD frequency metadata")
         pop_indices.append(idx)

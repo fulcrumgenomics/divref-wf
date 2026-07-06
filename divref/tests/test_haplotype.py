@@ -9,7 +9,6 @@ import pytest
 
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
-from divref.haplotype import to_hashable_items
 from divref.haplotype import variant_distance
 
 # ---------------------------------------------------------------------------
@@ -176,26 +175,6 @@ def test_get_haplo_sequence_empty_tuple_raises() -> None:
     """get_haplo_sequence should raise ValueError when given an empty tuple."""
     with pytest.raises(ValueError, match="at least one variant"):
         get_haplo_sequence(context_size=2, variants=())
-
-
-# ---------------------------------------------------------------------------
-# to_hashable_items
-# ---------------------------------------------------------------------------
-
-
-def test_to_hashable_items_empty() -> None:
-    """to_hashable_items should return an empty tuple for an empty dict."""
-    assert to_hashable_items({}) == ()
-
-
-def test_to_hashable_items_single_entry() -> None:
-    """to_hashable_items should return a one-element tuple for a single-entry dict."""
-    assert to_hashable_items({"key": "value"}) == (("key", "value"),)
-
-
-def test_to_hashable_items_sorted_by_key() -> None:
-    """to_hashable_items should return items sorted by key regardless of insertion order."""
-    assert to_hashable_items({"b": 2, "a": 1, "c": 3}) == (("a", 1), ("b", 2), ("c", 3))
 
 
 # ---------------------------------------------------------------------------
