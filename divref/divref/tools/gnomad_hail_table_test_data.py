@@ -125,6 +125,9 @@ def gnomad_hail_table_test_data(
         gcs_credentials_path: Path to GCS default credentials JSON file.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
+
+    Raises:
+        ValueError: If `loci` is empty.
     """
     if not loci:
         raise ValueError("loci must contain at least one interval.")
