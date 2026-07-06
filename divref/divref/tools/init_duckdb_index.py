@@ -51,7 +51,7 @@ def init_duckdb_index(
     """
     assert_path_is_readable(in_table_pairs_tsv)
 
-    out_duckdb_file: Path = Path(f"{str(output_base)}.haplotypes_gnomad_merge.index.duckdb")
+    out_duckdb_file: Path = Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
     if out_duckdb_file.exists():
         if not force:
             raise FileExistsError(

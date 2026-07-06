@@ -30,6 +30,24 @@ class TablePair(Metric):
     sites_table_path: Path
 
 
+def sequences_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
+    """
+    Return whether the `sequences` table exists in the connected DuckDB index.
+
+    Args:
+        conn: Open DuckDB connection to a DivRef index.
+
+    Returns:
+        True if a `sequences` table is present.
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
+        ).fetchone()
+        is not None
+    )
+
+
 def read_pops_legend(table_path: Path) -> list[str]:
     """
     Read a Hail table's population legend from its globals.
