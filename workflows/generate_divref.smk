@@ -411,6 +411,8 @@ rule index_reference_genome:
     log:
         "logs/generate_divref/index_reference_genome.log",
     shell:
+        # Force the `.fai` name (not samtools' default `<fasta>.fasta.fai`) to match the
+        # `reference_fasta.with_suffix(".fai")` lookup in append_contig_to_duckdb_index.
         """
         (
             samtools faidx \

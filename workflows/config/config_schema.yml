@@ -32,6 +32,9 @@ properties:
     type: array
     items:
       type: string
+      # chr1-chr22, chrX, chrY; rejects typos (chrM, chr23, ...) at config-validation time
+      # rather than deep in a "no rule to produce ..." error.
+      pattern: "^chr([1-9]|1[0-9]|2[0-2]|X|Y)$"
     minItems: 1
     uniqueItems: true
     description: |

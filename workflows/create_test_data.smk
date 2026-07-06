@@ -27,7 +27,8 @@ MIN_POP_AF_COMPUTE_HAPLOTYPES: float = 0.005
 WINDOW_SIZE_COMPUTE_HAPLOTYPES: int = 25
 # Hail-using divref tools require a GCS credentials path when reading from local-only Hail
 # tables, because hail_init currently sets `use_s3=False` by default and asserts the path is
-# present. Threaded through every rule below for consistency.
+# present. Passed explicitly to the rules below (the first subset rule relies on the tool's
+# matching default of this same path).
 GCS_CREDENTIALS_PATH: str = "~/.config/gcloud/application_default_credentials.json"
 
 ####################################################################################################
