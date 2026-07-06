@@ -43,7 +43,7 @@ def _haploid_adjusted_call(
 def _compute_locus_groups(
     variants_ht: hl.Table,
     window_size: int,
-) -> tuple[dict[int, int], int]:
+) -> dict[int, int]:
     """
     Assign each variant a global `locus_group` id by cutting at gaps ≥ `window_size`.
 
@@ -60,8 +60,7 @@ def _compute_locus_groups(
         window_size: adjacency-gap threshold in bp.
 
     Returns:
-        `(group_of, n_groups)` where `group_of` maps `row_idx → locus_group_id` and
-        `n_groups` is the total number of groups.
+        `group_of`, mapping `row_idx → locus_group_id`.
     """
     rows = variants_ht.key_by().select("row_idx", "locus", "ref_len").collect()
     logger.info("compute_locus_groups: collected %d variants to the driver", len(rows))
@@ -76,7 +75,7 @@ def _compute_locus_groups(
         group_of[v.row_idx] = current_group
         prev_end = max(prev_end, v.locus.position + v.ref_len)
         prev_contig = v.locus.contig
-    return group_of, current_group + 1
+    return group_of
 
 
 def _multi_member_locus_groups(rows_with_groups: hl.Table) -> hl.Table:
@@ -690,7 +689,7 @@ def compute_haplotypes(
     if variants_ht.head(1).count() == 0:
         raise ValueError(f"No variants found with minimum population AF {variant_freq_threshold}.")
 
-    group_of, _n_groups = _compute_locus_groups(variants_ht, window_size)
+    group_of = _compute_locus_groups(variants_ht, window_size)
     group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))
     mt = mt.annotate_rows(locus_group=group_lit[mt.row_idx])
 
