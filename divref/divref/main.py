@@ -46,7 +46,7 @@ def run() -> None:
     """Set up logging, then hand over to defopt for running command line tools."""
     setup_logging()
     logger = logging.getLogger("divref")
-    logger.info("Executing: " + " ".join(sys.argv))
+    logger.info("Executing: %s", " ".join(sys.argv))
     defopt.run(
         funcs=_tools,
         argv=sys.argv[1:],

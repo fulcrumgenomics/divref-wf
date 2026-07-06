@@ -1,6 +1,6 @@
 """Shared utilities for Hail-based DivRef pipeline tools."""
 
-from typing import Hashable
+from collections.abc import Hashable
 from typing import TypeVar
 
 import hail as hl

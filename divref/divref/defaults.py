@@ -22,8 +22,11 @@ GNOMAD_HGDP_1KG_SAMPLE_METADATA_HAIL_TABLE_S3: Final[HailPath] = (
 )
 """HGDP+1KG sample metadata (AWS S3 alternative)."""
 
-POPULATIONS: list[str] = ["afr", "amr", "eas", "sas", "nfe"]
+# The five continental genetic-ancestry groups DivRef selects from the gnomAD HGDP+1KG legend
+# (a subset of gnomAD's full ancestry set, which also includes e.g. fin, asj, ami, mid, oth).
+# Update this list only to track a deliberate change to the DivRef population definition.
+POPULATIONS: Final[list[str]] = ["afr", "amr", "eas", "sas", "nfe"]
 """Default HGDP+1KG populations."""
 
-REFERENCE_GENOME: str = "GRCh38"
+REFERENCE_GENOME: Final[str] = "GRCh38"
 """Default reference genome assembly."""

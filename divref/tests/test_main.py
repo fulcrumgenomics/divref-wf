@@ -1,5 +1,5 @@
+from collections.abc import Callable
 from inspect import isfunction
-from typing import Callable
 
 import pytest
 from defopt import signature
