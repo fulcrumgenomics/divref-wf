@@ -17,6 +17,7 @@ from hail.context import Env
 from divref import defaults
 from divref.duckdb_index import TablePair
 from divref.duckdb_index import read_and_validate_pops_legends
+from divref.duckdb_index import sequences_table_exists
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
 from divref.haplotype_compat import compatibility_flag
@@ -65,10 +66,7 @@ def read_window_size(conn: duckdb.DuckDBPyConnection) -> int:
 
 def sequences_row_count(conn: duckdb.DuckDBPyConnection) -> int:
     """Current number of rows in `sequences`, or 0 if the table does not exist yet."""
-    exists = conn.execute(
-        "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
-    ).fetchone()
-    if exists is None:
+    if not sequences_table_exists(conn):
         return 0
     row = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
     if row is None:
@@ -78,10 +76,7 @@ def sequences_row_count(conn: duckdb.DuckDBPyConnection) -> int:
 
 def _contig_already_appended(conn: duckdb.DuckDBPyConnection, contig: str) -> bool:
     """Whether the `sequences` table already holds any rows for `contig` (False if no table yet)."""
-    exists = conn.execute(
-        "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
-    ).fetchone()
-    if exists is None:
+    if not sequences_table_exists(conn):
         return False
     row = conn.execute("SELECT 1 FROM sequences WHERE contig = ? LIMIT 1", [contig]).fetchone()
     return row is not None
@@ -279,6 +274,7 @@ def build_contig_sequences_table(
     seq_ht = seq_ht.annotate(
         sequence=get_haplo_sequence(window_size, seq_ht.variants),
         contig=seq_ht.variants[0].locus.contig,
+        # `start`/`end` are 0-based half-open (from `haplo_coordinates`; variant loci are 1-based).
         start=coords.start,
         end=coords.end,
     )
@@ -456,7 +452,10 @@ def iter_dataframe_chunks(
             yield df
 
 
-@dataclass(frozen=True, kw_only=True)
+# eq=False so the frozen dataclass keeps a (default, identity-based) __hash__ despite its list
+# fields; without it, frozen+eq would synthesize a __hash__ that raises TypeError on unhashable
+# lists. The struct is only ever field-accessed, never compared or hashed by value.
+@dataclass(frozen=True, kw_only=True, eq=False)
 class _RemapArrays:
     """
     The four pop-legend remap arrays used to build a contig's sequences table.
@@ -579,10 +578,7 @@ def _stream_tsv_into_sequences(
     Returns:
         The number of rows appended for this contig.
     """
-    table_exists = conn.execute(
-        "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
-    ).fetchone()
-    if table_exists is None:
+    if not sequences_table_exists(conn):
         # `haplotype_filter` is appended last in both the schema-defining empty frame and every
         # inserted chunk, so column order stays consistent across the CREATE and the INSERTs.
         empty_df = _add_compatibility_flag(
@@ -600,7 +596,9 @@ def _stream_tsv_into_sequences(
     ):
         chunk_df = _add_compatibility_flag(chunk)
         conn.register("chunk_df", chunk_df)
-        conn.execute("INSERT INTO sequences SELECT * FROM chunk_df")
+        # BY NAME matches columns by name, not position, so a future change to the export/scan
+        # column order surfaces as a bind error rather than silently misaligning columns.
+        conn.execute("INSERT INTO sequences BY NAME SELECT * FROM chunk_df")
         conn.unregister("chunk_df")
         appended_rows += chunk_df.height
     return appended_rows
@@ -728,7 +726,8 @@ def append_contig_to_duckdb_index(
             f"Spark executor memory must be at least 1GB. Saw {spark_executor_memory_gb}GB."
         )
 
-    out_duckdb_file: Path = Path(f"{str(output_base)}.haplotypes_gnomad_merge.index.duckdb")
+    out_duckdb_file: Path = Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
+    # readable (not writable): enforces the index file already exists, i.e. init_duckdb_index ran.
     assert_path_is_readable(out_duckdb_file)
 
     table_pairs: list[TablePair] = list(TablePair.read(in_table_pairs_tsv))
