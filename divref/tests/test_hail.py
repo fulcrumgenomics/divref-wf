@@ -17,3 +17,18 @@ def test_hail_init_requires_credentials_for_gcs() -> None:
     """GCS mode with no credentials path raises ValueError."""
     with pytest.raises(ValueError, match="gcs_credentials_path is required"):
         hail_init(gcs_credentials_path=None, use_s3=False)
+
+
+@pytest.mark.parametrize(("driver_gb", "executor_gb"), [(0, 1), (1, 0)])
+def test_hail_init_rejects_sub_1gb_memory(driver_gb: int, executor_gb: int) -> None:
+    """
+    Spark driver/executor memory below 1GB fails loudly before starting Hail.
+
+    The memory guards run before any credentials/JAR resolution, so ``use_s3=True`` isolates them.
+    """
+    with pytest.raises(ValueError, match="at least 1GB"):
+        hail_init(
+            spark_driver_memory_gb=driver_gb,
+            spark_executor_memory_gb=executor_gb,
+            use_s3=True,
+        )
