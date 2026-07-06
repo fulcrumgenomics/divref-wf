@@ -1,4 +1,4 @@
-"""Tool to extract gnomAD variant and sample frequency data for the DivRef pipeline."""
+"""Tool to extract gnomAD per-population variant allele frequencies for the DivRef pipeline."""
 
 from pathlib import Path
 
@@ -25,11 +25,11 @@ def extract_gnomad_afs(
     use_s3: bool = False,
 ) -> None:
     """
-    Extract gnomAD variant and sample frequency data for downstream pipeline tools.
+    Extract gnomAD per-population variant allele frequencies for downstream pipeline tools.
 
     Reads the gnomAD v3.1.2 HGDP/1KG subset, extracts per-population allele frequencies
     for the specified populations, filters to variants above the frequency threshold in at
-    least one population, and writes compact variant annotation and sample metadata tables.
+    least one population, and writes a compact variant annotation Hail table.
 
     Args:
         in_gnomad_sites_table: Path to the gnomAD HGDP/1KG sites table.

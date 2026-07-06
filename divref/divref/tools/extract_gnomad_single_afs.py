@@ -1,4 +1,4 @@
-"""Tool to extract gnomAD variant and sample frequency data for the DivRef pipeline."""
+"""Tool to extract gnomAD per-population single-variant allele frequencies."""
 
 import operator
 from dataclasses import dataclass
@@ -44,13 +44,12 @@ _GNOMAD_TABLE_URI: dict[tuple[GnomadVersion, GnomadCloud], str] = {
     (GnomadVersion.GENOMES_312, GnomadCloud.GCS): (
         "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/gnomad.genomes.v3.1.2.sites.ht"
     ),
+    # Same tables as extract_gnomad_afs reads; single-sourced from defaults to avoid drift.
     (GnomadVersion.HGDP_1KG_312, GnomadCloud.S3): (
-        "s3a://gnomad-public-us-east-1/release/3.1.2/ht/genomes/"
-        "gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
+        defaults.GNOMAD_HGDP_1KG_VARIANT_ANNOTATION_HAIL_TABLE_S3
     ),
     (GnomadVersion.HGDP_1KG_312, GnomadCloud.GCS): (
-        "gs://gcp-public-data--gnomad/release/3.1.2/ht/genomes/"
-        "gnomad.genomes.v3.1.2.hgdp_1kg_subset_variant_annotations.ht"
+        defaults.GNOMAD_HGDP_1KG_VARIANT_ANNOTATION_HAIL_TABLE
     ),
 }
 
@@ -138,7 +137,7 @@ def extract_gnomad_single_afs(
     *,
     gnomad_version: GnomadVersion,
     contig: str,
-    freq_threshold: float = 0,
+    freq_threshold: float = 0.0,
     no_apply_filters: bool = False,
     populations: list[str] = defaults.POPULATIONS,
     reference_genome: str = defaults.REFERENCE_GENOME,
@@ -150,7 +149,7 @@ def extract_gnomad_single_afs(
     spark_executor_memory_gb: int = 1,
 ) -> None:
     """
-    Extract gnomAD variant and sample frequency data for downstream pipeline tools.
+    Extract gnomAD per-population single-variant allele frequencies for downstream pipeline tools.
 
     Reads a gnomAD sites table and filters to variants above the frequency threshold in at least one
     population. Writes up to two outputs: a Hail table at `out_sites_hail_table` for downstream
@@ -185,6 +184,8 @@ def extract_gnomad_single_afs(
         raise ValueError("At least one of out_sites_hail_table or out_sites_tsv must be provided")
 
     # validate output paths before starting Hail
+    if out_sites_hail_table is not None:
+        assert_path_is_writable(out_sites_hail_table)
     if out_sites_tsv is not None:
         assert_path_is_writable(out_sites_tsv)
 
