@@ -12,7 +12,9 @@ Used by `append_contig_to_duckdb_index` to compute the per-row `haplotype_filter
 # A component variant: (contig, pos, ref, alt). pos is 1-based.
 Variant = tuple[str, int, str, str]
 
-# Reason labels in precedence order (first match wins in classify_pair) and stable output order.
+# The complete set of incompatibility reason labels classify_pair can return. This tuple is
+# documentation only: classify_pair selects a reason via its own if/elif order (not this tuple),
+# and compatibility_flag emits flags alphabetically (not in this order).
 # A SNP co-located with an indel is NOT listed: the SNP substitutes the shared base and the indel
 # acts on/after it, so the overlap composes to a well-defined haplotype (see classify_pair). An
 # insertion anchored inside a deletion IS a conflict (`insertion_in_deletion`): its anchor base is
@@ -69,11 +71,21 @@ def parse_variants_string(s: str) -> list[Variant]:
 
     Returns:
         Variants sorted by ascending position, then by reference-allele length.
+
+    Raises:
+        ValueError: If a token is not `contig:position:ref:alt` or its position is not an integer.
     """
     out: list[Variant] = []
     for token in s.split(","):
-        contig, pos, ref, alt = token.split(":")
-        out.append((contig, int(pos), ref, alt))
+        fields = token.split(":")
+        if len(fields) != 4:
+            raise ValueError(f"expected 'contig:pos:ref:alt', got {token!r} in {s!r}")
+        contig, pos, ref, alt = fields
+        try:
+            position = int(pos)
+        except ValueError as e:
+            raise ValueError(f"non-integer position in variant token {token!r} in {s!r}") from e
+        out.append((contig, position, ref, alt))
     out.sort(key=lambda v: (v[1], len(v[2])))
     return out
 
@@ -126,7 +138,7 @@ def _same_position_reason(v1: Variant, v2: Variant, k1: str, k2: str) -> str:
 
 def classify_pair(v1: Variant, v2: Variant) -> str | None:
     """
-    Classify an adjacent variant pair into an incompatibility reason.
+    Classify a variant pair (`v1` at or before `v2` by position) into an incompatibility reason.
 
     Returns `None` when the pair is compatible: either it does not overlap (`variant_distance >= 0`)
     or it is a SNP co-located with an indel, which composes to a well-defined haplotype (the SNP
