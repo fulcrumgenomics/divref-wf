@@ -296,7 +296,8 @@ def _attach_component_info(hap_table: hl.Table, variants_ht: hl.Table) -> hl.Tab
     logger.info("attach_component_info: collected %d variant components for broadcast", len(pairs))
     # Keyed by int32 to match the `hl.int32(idx)` lookup below; the explicit dtype also keeps the
     # literal well-typed when `pairs` is empty (no haplotype-referenced variants), where
-    # `hl.literal({})` would otherwise fail to infer the key/value types.
+    # `hl.literal({})` would otherwise fail to infer the key/value types. The int64->int32 downcast
+    # of `row_idx` at the lookup is safe: `row_idx` is a per-contig variant index, well below 2^31.
     components_dict = hl.literal(
         dict(pairs),
         dtype=hl.tdict(
@@ -607,8 +608,9 @@ def compute_haplotypes(
         variant_freq_threshold: Minimum gnomAD population allele frequency to retain a variant.
         haplotype_freq_threshold: Minimum estimated gnomAD allele frequency for the haplotype to
             be retained.
-        output_base: Base output path; writes `{output_base}.variants.ht` (per-variant
-            checkpoint) and the final `{output_base}.ht`.
+        output_base: Base output path. Writes intermediate checkpoints
+            `{output_base}.variants.ht`, `.blocks.ht`, `.parents.ht`, and `.hap_ac.ht`
+            (kept, not cleaned up, for restart/debugging) and the final `{output_base}.ht`.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
@@ -660,6 +662,15 @@ def compute_haplotypes(
         pop_int=hl.literal(pop_ints).get(sa_row.pop),
         sex_karyotype=sa_row.sex_karyotype,
     )
+    sample_counts = mt.aggregate_cols(
+        hl.struct(total=hl.agg.count(), assigned=hl.agg.count_where(hl.is_defined(mt.pop_int)))
+    )
+    logger.info(
+        "Dropped %d of %d samples with no population assignment "
+        "(aneuploid karyotype or population not in the legend)",
+        sample_counts.total - sample_counts.assigned,
+        sample_counts.total,
+    )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
@@ -668,6 +679,7 @@ def compute_haplotypes(
     # `_haploid_adjusted_call`. Autosomes, PAR, and chrY keep the original diploid call.
     adjusted_gt = _haploid_adjusted_call(mt.locus, mt.GT, mt.sex_karyotype)
     mt = mt.annotate_rows(
+        # call_stats n_alleles=2: gnomAD HGDP+1KG sites are biallelic (one alt per row).
         frequencies_by_pop=hl.agg.group_by(mt.pop_int, hl.agg.call_stats(adjusted_gt, 2)),
         ref_len=hl.len(mt.alleles[0]),
     )
@@ -747,4 +759,6 @@ def compute_haplotypes(
 
     logger.info("Writing final %s.ht ...", output_base)
     hap_table = hap_table.annotate_globals(pops=hl.literal(pop_legend))
+    # Coalesce to a fixed output partition count (independent of the input-side `min_partitions`)
+    # to bound the number of part-files written for the final table.
     hap_table.key_by("haplotype").naive_coalesce(64).write(f"{str(output_base)}.ht", overwrite=True)
