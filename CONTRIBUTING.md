@@ -41,7 +41,7 @@ uv lock --directory divref --check
 To check the `pixi` lock file is up to date:
 
 ```console
-pixi run check-lock
+pixi lock --check
 ```
 
 ## Shortcut Task Commands
