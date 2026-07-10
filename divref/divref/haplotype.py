@@ -64,7 +64,11 @@ def get_haplo_sequence(
         raise ValueError(
             "get_haplo_sequence requires at least one variant; received an empty sequence"
         )
-    sorted_variants = hl.sorted(variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0])))
+    # Tertiary tiebreak on alt length so a substitution (len(alt) == 1) composes before a pure
+    # insertion (len(alt) > 1) at the same position.
+    sorted_variants = hl.sorted(
+        variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0]), hl.len(x.alleles[1]))
+    )
     min_pos = sorted_variants[0].locus.position
     max_ref_end = _max_reference_end(sorted_variants)
     full_context = hl.get_sequence(
@@ -149,7 +153,9 @@ def haplo_coordinates(
     """
     # Same sort key as get_haplo_sequence so the two stay in lockstep; only the minimum position
     # (`[0].locus.position`) is read here, and `_max_reference_end` is order-independent.
-    sorted_variants = hl.sorted(variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0])))
+    sorted_variants = hl.sorted(
+        variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0]), hl.len(x.alleles[1]))
+    )
     min_variant = sorted_variants[0]
     return hl.struct(
         start=min_variant.locus.position - 1 - window_size,

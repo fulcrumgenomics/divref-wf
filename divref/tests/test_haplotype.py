@@ -20,31 +20,6 @@ def _make_variant(position: int, ref: str, alt: str, contig: str = "chr1") -> hl
     return hl.Struct(locus=hl.Struct(contig=contig, position=position), alleles=[ref, alt])
 
 
-def _make_haplotype_table(variant_positions: list[tuple[str, int, str, str]]) -> hl.Table:
-    variant_type = hl.tstruct(
-        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32), alleles=hl.tarray(hl.tstr)
-    )
-    row_type = hl.tstruct(
-        variants=hl.tarray(variant_type),
-        haplotype=hl.tarray(hl.tstr),
-        gnomad_freqs=hl.tarray(hl.tfloat64),
-    )
-    variants = [
-        {"locus": {"contig": contig, "position": pos}, "alleles": [ref, alt]}
-        for contig, pos, ref, alt in variant_positions
-    ]
-    return hl.Table.parallelize(
-        [
-            {
-                "variants": variants,
-                "haplotype": [str(i) for i in range(len(variants))],
-                "gnomad_freqs": [0.1] * len(variants),
-            }
-        ],
-        schema=row_type,
-    )
-
-
 # ---------------------------------------------------------------------------
 # get_haplo_sequence
 # ---------------------------------------------------------------------------
@@ -115,6 +90,9 @@ def test_get_haplo_sequence_deletion_consumes_interior_variant(
         # Composable overlaps: the alt is composed onto the reference, not concatenated.
         ([(4, "AAA", "D"), (6, "G", "GTT")], "23DTT78", "insertion composes inside a deletion"),
         ([(4, "X", "Y"), (4, "X", "XZZ")], "23YZZ56", "snp + insertion at one site"),
+        # Same pair with the insertion listed first: the alt-length tiebreak must still compose the
+        # SNP before the insertion, so the SNP is not dropped.
+        ([(4, "X", "XZZ"), (4, "X", "Y")], "23YZZ56", "snp + insertion, insertion listed first"),
         ([(4, "X", "Y"), (4, "XBC", "X")], "23Y78", "snp + deletion at one site"),
         # Genuinely-incompatible overlaps still resolve to a defined (flagged) sequence.
         ([(4, "AAA", "A"), (4, "AAAA", "A")], "23A89", "two deletions: the longer one wins"),
