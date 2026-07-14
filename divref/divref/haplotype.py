@@ -1,27 +1,8 @@
 """Shared utilities for Hail-based DivRef pipeline tools."""
 
-from typing import Hashable
-from typing import TypeVar
-
 import hail as hl
 
 from divref import defaults
-
-_V = TypeVar("_V", bound=Hashable)
-"""Type variable for hashable dictionary values used in to_hashable_items."""
-
-
-def to_hashable_items(d: dict[str, _V]) -> tuple[tuple[str, _V], ...]:
-    """
-    Convert a dictionary to a sorted tuple of items for use as a hashable key.
-
-    Args:
-        d: Dictionary with hashable values to convert.
-
-    Returns:
-        Sorted tuple of (key, value) pairs.
-    """
-    return tuple(sorted(d.items()))
 
 
 def _max_reference_end(variants: hl.Expression) -> hl.Expression:
@@ -83,7 +64,13 @@ def get_haplo_sequence(
         raise ValueError(
             "get_haplo_sequence requires at least one variant; received an empty sequence"
         )
-    sorted_variants = hl.sorted(variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0])))
+    # Tertiary tiebreak on alt length so a substitution (len(alt) == 1) composes before a pure
+    # insertion (len(alt) > 1) at the same position. A remaining tie (same position, ref length,
+    # and alt length) falls back to input order, but that requires two alleles at one site, which
+    # cannot occur on a single phased haplotype.
+    sorted_variants = hl.sorted(
+        variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0]), hl.len(x.alleles[1]))
+    )
     min_pos = sorted_variants[0].locus.position
     max_ref_end = _max_reference_end(sorted_variants)
     full_context = hl.get_sequence(
@@ -168,7 +155,9 @@ def haplo_coordinates(
     """
     # Same sort key as get_haplo_sequence so the two stay in lockstep; only the minimum position
     # (`[0].locus.position`) is read here, and `_max_reference_end` is order-independent.
-    sorted_variants = hl.sorted(variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0])))
+    sorted_variants = hl.sorted(
+        variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0]), hl.len(x.alleles[1]))
+    )
     min_variant = sorted_variants[0]
     return hl.struct(
         start=min_variant.locus.position - 1 - window_size,

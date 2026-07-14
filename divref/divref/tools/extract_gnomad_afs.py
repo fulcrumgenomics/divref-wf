@@ -1,4 +1,4 @@
-"""Tool to extract gnomAD variant and sample frequency data for the DivRef pipeline."""
+"""Tool to extract gnomAD per-population variant allele frequencies for the DivRef pipeline."""
 
 from pathlib import Path
 
@@ -8,7 +8,6 @@ from fgpyo.io import assert_path_is_writable
 from divref import defaults
 from divref.alias import HailPath
 from divref.hail import hail_init
-from divref.haplotype import to_hashable_items
 
 
 def extract_gnomad_afs(
@@ -25,11 +24,11 @@ def extract_gnomad_afs(
     use_s3: bool = False,
 ) -> None:
     """
-    Extract gnomAD variant and sample frequency data for downstream pipeline tools.
+    Extract gnomAD per-population variant allele frequencies for downstream pipeline tools.
 
     Reads the gnomAD v3.1.2 HGDP/1KG subset, extracts per-population allele frequencies
     for the specified populations, filters to variants above the frequency threshold in at
-    least one population, and writes compact variant annotation and sample metadata tables.
+    least one population, and writes a compact variant annotation Hail table.
 
     Args:
         in_gnomad_sites_table: Path to the gnomAD HGDP/1KG sites table.
@@ -64,11 +63,11 @@ def extract_gnomad_afs(
     va = hl.filter_intervals(va_all, [interval])
 
     freq_meta = va.globals.gnomad_freq_meta.collect()[0]
-    map_to_index = {to_hashable_items(x): i for i, x in enumerate(freq_meta)}
+    map_to_index = {frozenset(x.items()): i for i, x in enumerate(freq_meta)}
 
     pop_indices = []
     for pop in populations:
-        idx = map_to_index.get(to_hashable_items({"group": "adj", "pop": pop}))
+        idx = map_to_index.get(frozenset({"group": "adj", "pop": pop}.items()))
         if idx is None:
             raise ValueError(f"Population {pop!r} not found in gnomAD frequency metadata")
         pop_indices.append(idx)

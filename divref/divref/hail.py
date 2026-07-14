@@ -18,7 +18,7 @@ def _export_gcs_credentials(gcs_credentials_path: Path | None) -> None:
     """
     if gcs_credentials_path is None:
         raise ValueError("gcs_credentials_path is required when use_s3 is False.")
-    if not gcs_credentials_path.exists():
+    if not gcs_credentials_path.is_file():
         raise FileNotFoundError(
             f"GCS credentials file not found at {gcs_credentials_path}. Run "
             "`gcloud auth application-default login` or pass a valid --gcs-credentials-path."
@@ -83,19 +83,19 @@ def hail_init(
     if not use_s3:
         _export_gcs_credentials(gcs_credentials_path)
 
-    jars_dir = os.path.join(pyspark.__path__[0], "jars")
+    jars_dir = Path(pyspark.__path__[0]) / "jars"
     cloud_jars: list[str] = []
     spark_conf: dict[str, str] = {}
 
     if use_s3:
-        hadoop_aws_jar = os.path.join(jars_dir, "hadoop-aws.jar")
-        aws_sdk_bundle_jar = os.path.join(jars_dir, "aws-java-sdk-bundle.jar")
+        hadoop_aws_jar = jars_dir / "hadoop-aws.jar"
+        aws_sdk_bundle_jar = jars_dir / "aws-java-sdk-bundle.jar"
         for jar in (hadoop_aws_jar, aws_sdk_bundle_jar):
-            if not os.path.exists(jar):
+            if not jar.is_file():
                 raise FileNotFoundError(
                     f"S3 connector JAR not found at {jar}. Run 'pixi run setup-s3' to download it."
                 )
-        cloud_jars.extend([hadoop_aws_jar, aws_sdk_bundle_jar])
+        cloud_jars.extend([str(hadoop_aws_jar), str(aws_sdk_bundle_jar)])
         spark_conf.update({
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
             # All workflow inputs live on public Open Data buckets that allow anonymous
@@ -112,13 +112,13 @@ def hail_init(
             "spark.hadoop.fs.s3a.threads.max": "64",
         })
     else:
-        gcs_jar = os.path.join(jars_dir, "gcs-connector.jar")
-        if not os.path.exists(gcs_jar):
+        gcs_jar = jars_dir / "gcs-connector.jar"
+        if not gcs_jar.is_file():
             raise FileNotFoundError(
                 f"GCS connector JAR not found at {gcs_jar}. "
                 "Run 'pixi run setup-gcs' to download it."
             )
-        cloud_jars.append(gcs_jar)
+        cloud_jars.append(str(gcs_jar))
         spark_conf.update({
             "spark.hadoop.fs.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
             "spark.hadoop.fs.AbstractFileSystem.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",  # noqa: E501

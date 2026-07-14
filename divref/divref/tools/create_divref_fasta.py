@@ -9,6 +9,8 @@ import polars
 from fgpyo.io import assert_path_is_readable
 from fgpyo.io import assert_path_is_writable
 
+from divref.duckdb_index import sequences_table_exists
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +36,7 @@ def create_divref_fasta(
         polars_chunk_size: Maximum number of rows per polars DataFrame batch read from DuckDB.
 
     Raises:
-        ValueError: If ``contigs`` is empty.
+        ValueError: If ``contigs`` is empty, or the index has no ``sequences`` table.
     """
     if not contigs:
         raise ValueError("Contig list must be provided.")
@@ -49,6 +51,11 @@ def create_divref_fasta(
         assert_path_is_writable(out_path)
 
     with duckdb.connect(str(duckdb_path), read_only=True) as conn:
+        if not sequences_table_exists(conn):
+            raise ValueError(
+                f"DuckDB index {duckdb_path} has no 'sequences' table; "
+                f"run append_contig_to_duckdb_index and finalize_duckdb_index first."
+            )
         for contig in contigs:
             logger.info(f"Creating FASTA for chromosome {contig} at {out_paths[contig]}")
             rows_written: int = 0
@@ -75,10 +82,12 @@ def iter_sequence_chunks(
     chunk_size: int,
 ) -> Iterator[polars.DataFrame]:
     """
-    Yield polars DataFrames of ``(sequence_id, sequence)`` rows for one contig.
+    Yield polars DataFrames of ``(sequence_id, sequence)`` rows for one contig, in genomic order.
 
-    Streams the DuckDB result set as Arrow record batches and converts each batch to polars,
-    bounding in-process memory by ``chunk_size`` rows.
+    Rows are ordered by genomic ``start`` (then ``sequence_id`` to break ties) so the FASTA output
+    is deterministic across runs. Streams the DuckDB result set as Arrow record batches via
+    ``to_arrow_reader`` and converts each batch to polars, bounding in-process memory by
+    ``chunk_size`` rows.
 
     Args:
         conn: Open DuckDB connection to the DivRef index.
@@ -88,11 +97,14 @@ def iter_sequence_chunks(
     Yields:
         Polars DataFrame batches with ``sequence_id`` and ``sequence`` columns.
     """
+    # ORDER BY genomic start (contig is fixed by the filter) so FASTA output is deterministic
+    # across runs; sequence_id is a unique tiebreak for rows sharing a start position.
     result = conn.execute(
-        "SELECT sequence_id, sequence FROM sequences WHERE contig = $contig",
+        "SELECT sequence_id, sequence FROM sequences WHERE contig = $contig "
+        "ORDER BY start, sequence_id",
         {"contig": contig},
     )
-    for batch in result.fetch_record_batch(chunk_size):
+    for batch in result.to_arrow_reader(chunk_size):
         df = polars.from_arrow(batch)
         # from_arrow on a RecordBatch always returns a DataFrame; assert to narrow the type and
         # fail loudly rather than silently dropping rows should that ever change.

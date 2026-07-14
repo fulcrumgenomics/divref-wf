@@ -585,7 +585,7 @@ ipython = [
 [package.metadata]
 requires-dist = [
     { name = "defopt", specifier = "~=6.4" },
-    { name = "duckdb", specifier = ">=1.0" },
+    { name = "duckdb", specifier = ">=1.4.0" },
     { name = "fgmetric", specifier = ">=0.2.0" },
     { name = "fgpyo", specifier = ">=1.5.1" },
     { name = "hail", specifier = ">=0.2" },

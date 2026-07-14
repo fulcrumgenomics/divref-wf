@@ -9,19 +9,21 @@ import pytest
 from divref.tools.create_divref_fasta import create_divref_fasta
 
 
-def _build_index(db_path: Path, rows: list[tuple[str, str, str]]) -> None:
+def _build_index(db_path: Path, rows: list[tuple[str, str, str, int]]) -> None:
     """
     Build a minimal DuckDB index with just the columns create_divref_fasta reads.
 
     Args:
         db_path: Path to the DuckDB file to create.
-        rows: ``(sequence_id, sequence, contig)`` rows to insert into ``sequences``.
+        rows: ``(sequence_id, sequence, contig, start)`` rows to insert into ``sequences``.
+            ``start`` is the genomic start the tool orders output by.
     """
     with duckdb.connect(str(db_path)) as conn:
         conn.execute(
-            "CREATE TABLE sequences (sequence_id VARCHAR, sequence VARCHAR, contig VARCHAR)"
+            "CREATE TABLE sequences "
+            "(sequence_id VARCHAR, sequence VARCHAR, contig VARCHAR, start BIGINT)"
         )
-        conn.executemany("INSERT INTO sequences VALUES (?, ?, ?)", rows)
+        conn.executemany("INSERT INTO sequences VALUES (?, ?, ?, ?)", rows)
 
 
 def _parse_fasta(path: Path) -> list[tuple[str, str]]:
@@ -49,9 +51,9 @@ def test_writes_only_the_requested_contig(tmp_path: Path) -> None:
     _build_index(
         db_path,
         rows=[
-            ("DR-1-0", "ACGT", "chr1"),
-            ("DR-1-1", "TTTT", "chr1"),
-            ("DR-1-2", "GGGG", "chr2"),
+            ("DR-1-0", "ACGT", "chr1", 100),
+            ("DR-1-1", "TTTT", "chr1", 200),
+            ("DR-1-2", "GGGG", "chr2", 50),
         ],
     )
     output_base = tmp_path / "out"
@@ -70,8 +72,8 @@ def test_writes_one_file_per_requested_contig(tmp_path: Path) -> None:
     _build_index(
         db_path,
         rows=[
-            ("DR-1-0", "ACGT", "chr1"),
-            ("DR-1-1", "GGGG", "chr2"),
+            ("DR-1-0", "ACGT", "chr1", 100),
+            ("DR-1-1", "GGGG", "chr2", 100),
         ],
     )
     output_base = tmp_path / "out"
@@ -88,7 +90,7 @@ def test_contig_with_no_rows_writes_empty_file_and_warns(
 ) -> None:
     """A requested contig absent from the index yields an empty FASTA plus a warning."""
     db_path = tmp_path / "index.duckdb"
-    _build_index(db_path, rows=[("DR-1-0", "ACGT", "chr1")])
+    _build_index(db_path, rows=[("DR-1-0", "ACGT", "chr1", 100)])
     output_base = tmp_path / "out"
 
     with caplog.at_level(logging.WARNING):
@@ -103,7 +105,7 @@ def test_contig_with_no_rows_writes_empty_file_and_warns(
 def test_empty_contigs_raises_value_error(tmp_path: Path) -> None:
     """An empty contig list is rejected."""
     db_path = tmp_path / "index.duckdb"
-    _build_index(db_path, rows=[("DR-1-0", "ACGT", "chr1")])
+    _build_index(db_path, rows=[("DR-1-0", "ACGT", "chr1", 100)])
 
     with pytest.raises(ValueError, match="[Cc]ontig"):
         create_divref_fasta(duckdb_path=db_path, output_base=tmp_path / "out", contigs=[])
@@ -112,7 +114,7 @@ def test_empty_contigs_raises_value_error(tmp_path: Path) -> None:
 def test_streams_all_rows_across_chunk_boundaries(tmp_path: Path) -> None:
     """All rows are written even when the result spans multiple read chunks."""
     db_path = tmp_path / "index.duckdb"
-    rows = [(f"DR-1-{i}", "A" * (i + 1), "chr1") for i in range(5)]
+    rows = [(f"DR-1-{i}", "A" * (i + 1), "chr1", i) for i in range(5)]
     _build_index(db_path, rows=rows)
     output_base = tmp_path / "out"
 
@@ -124,5 +126,31 @@ def test_streams_all_rows_across_chunk_boundaries(tmp_path: Path) -> None:
     )
 
     written = _parse_fasta(Path(f"{output_base}.chr1.fasta"))
-    assert set(written) == {(sid, seq) for sid, seq, _ in rows}
+    assert set(written) == {(sid, seq) for sid, seq, _, _ in rows}
     assert len(written) == 5
+
+
+def test_output_is_ordered_by_genomic_start(tmp_path: Path) -> None:
+    """Rows are written in genomic-start order regardless of insertion order."""
+    db_path = tmp_path / "index.duckdb"
+    # Inserted out of start order; expect ascending-start output (ties broken by sequence_id).
+    _build_index(
+        db_path,
+        rows=[
+            ("DR-1-2", "GGGG", "chr1", 300),
+            ("DR-1-0", "ACGT", "chr1", 100),
+            ("DR-1-1b", "CCCC", "chr1", 200),
+            ("DR-1-1a", "TTTT", "chr1", 200),
+        ],
+    )
+    output_base = tmp_path / "out"
+
+    create_divref_fasta(duckdb_path=db_path, output_base=output_base, contigs=["chr1"])
+
+    written = _parse_fasta(Path(f"{output_base}.chr1.fasta"))
+    assert written == [
+        ("DR-1-0", "ACGT"),
+        ("DR-1-1a", "TTTT"),
+        ("DR-1-1b", "CCCC"),
+        ("DR-1-2", "GGGG"),
+    ]

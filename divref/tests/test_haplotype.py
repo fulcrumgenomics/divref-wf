@@ -9,7 +9,6 @@ import pytest
 
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
-from divref.haplotype import to_hashable_items
 from divref.haplotype import variant_distance
 
 # ---------------------------------------------------------------------------
@@ -19,31 +18,6 @@ from divref.haplotype import variant_distance
 
 def _make_variant(position: int, ref: str, alt: str, contig: str = "chr1") -> hl.Struct:
     return hl.Struct(locus=hl.Struct(contig=contig, position=position), alleles=[ref, alt])
-
-
-def _make_haplotype_table(variant_positions: list[tuple[str, int, str, str]]) -> hl.Table:
-    variant_type = hl.tstruct(
-        locus=hl.tstruct(contig=hl.tstr, position=hl.tint32), alleles=hl.tarray(hl.tstr)
-    )
-    row_type = hl.tstruct(
-        variants=hl.tarray(variant_type),
-        haplotype=hl.tarray(hl.tstr),
-        gnomad_freqs=hl.tarray(hl.tfloat64),
-    )
-    variants = [
-        {"locus": {"contig": contig, "position": pos}, "alleles": [ref, alt]}
-        for contig, pos, ref, alt in variant_positions
-    ]
-    return hl.Table.parallelize(
-        [
-            {
-                "variants": variants,
-                "haplotype": [str(i) for i in range(len(variants))],
-                "gnomad_freqs": [0.1] * len(variants),
-            }
-        ],
-        schema=row_type,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +90,9 @@ def test_get_haplo_sequence_deletion_consumes_interior_variant(
         # Composable overlaps: the alt is composed onto the reference, not concatenated.
         ([(4, "AAA", "D"), (6, "G", "GTT")], "23DTT78", "insertion composes inside a deletion"),
         ([(4, "X", "Y"), (4, "X", "XZZ")], "23YZZ56", "snp + insertion at one site"),
+        # Same pair with the insertion listed first: the alt-length tiebreak must still compose the
+        # SNP before the insertion, so the SNP is not dropped.
+        ([(4, "X", "XZZ"), (4, "X", "Y")], "23YZZ56", "snp + insertion, insertion listed first"),
         ([(4, "X", "Y"), (4, "XBC", "X")], "23Y78", "snp + deletion at one site"),
         # Genuinely-incompatible overlaps still resolve to a defined (flagged) sequence.
         ([(4, "AAA", "A"), (4, "AAAA", "A")], "23A89", "two deletions: the longer one wins"),
@@ -176,26 +153,6 @@ def test_get_haplo_sequence_empty_tuple_raises() -> None:
     """get_haplo_sequence should raise ValueError when given an empty tuple."""
     with pytest.raises(ValueError, match="at least one variant"):
         get_haplo_sequence(context_size=2, variants=())
-
-
-# ---------------------------------------------------------------------------
-# to_hashable_items
-# ---------------------------------------------------------------------------
-
-
-def test_to_hashable_items_empty() -> None:
-    """to_hashable_items should return an empty tuple for an empty dict."""
-    assert to_hashable_items({}) == ()
-
-
-def test_to_hashable_items_single_entry() -> None:
-    """to_hashable_items should return a one-element tuple for a single-entry dict."""
-    assert to_hashable_items({"key": "value"}) == (("key", "value"),)
-
-
-def test_to_hashable_items_sorted_by_key() -> None:
-    """to_hashable_items should return items sorted by key regardless of insertion order."""
-    assert to_hashable_items({"b": 2, "a": 1, "c": 3}) == (("a", 1), ("b", 2), ("c", 3))
 
 
 # ---------------------------------------------------------------------------

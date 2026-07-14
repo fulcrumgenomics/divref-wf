@@ -14,7 +14,7 @@ COMPARISON_NAME: str = "compare_divref_gnomad"
 CONTIG: str = "chr22"
 FREQUENCY_THRESHOLD: float = 0.005
 DIVREF_DUCKDB_URL: str = (
-    "https://zenodo.org/records/14802613/files/" "DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb"
+    "https://zenodo.org/records/14802613/files/DivRef-v1.1.haplotypes_gnomad_merge.index.duckdb"
 )
 # Zenodo-published md5 for the DuckDB above (record 14802613). Verified after download so a
 # truncated or corrupted fetch fails the rule instead of silently feeding a bad index downstream.
@@ -72,7 +72,9 @@ rule download_divref_index:
     shell:
         """
         (
-            wget --no-verbose -O {output.duckdb} {params.url}
+            # curl (not wget): ships on macOS by default; --fail exits non-zero on an HTTP
+            # error so the checksum step isn't handed an error page.
+            curl --fail --location --silent --show-error --output {output.duckdb} {params.url}
             # Verify against the Zenodo-published md5 (md5sum on Linux, md5 on macOS).
             if command -v md5sum >/dev/null 2>&1; then
                 actual=$(md5sum "{output.duckdb}" | awk '{{print $1}}')

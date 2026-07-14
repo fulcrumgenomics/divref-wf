@@ -30,7 +30,7 @@ To install the GCS connector for Hail/Spark, run
 pixi run setup-gcs
 ```
 
-Log in before running any Hail-dependent tools:
+Log in before running any Hail-dependent tools, requires [the gcloud cli be installed](https://docs.cloud.google.com/sdk/docs/install-sdk):
 
 ```bash
 gcloud auth application-default login
@@ -51,7 +51,7 @@ To install both connectors at once, run `pixi run setup-cloud`.
 
 ### Running the workflow
 
-The workflow does not bundle a default `configfile:` — pass one explicitly with
+The workflow does not set a default `configfile:` — pass one explicitly with
 `--configfile`. Two ready-made configs are provided under `workflows/config/`:
 
 - `config_gcs.yml` — reads all cloud inputs from GCS (`gs://gcp-public-data--gnomad/`,

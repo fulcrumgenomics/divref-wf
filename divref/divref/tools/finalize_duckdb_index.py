@@ -6,6 +6,8 @@ from pathlib import Path
 import duckdb
 from fgpyo.io import assert_path_is_readable
 
+from divref.duckdb_index import sequences_table_exists
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,14 +27,11 @@ def finalize_duckdb_index(
     Raises:
         ValueError: If the DuckDB index has no `sequences` table.
     """
-    out_duckdb_file: Path = Path(f"{str(output_base)}.haplotypes_gnomad_merge.index.duckdb")
+    out_duckdb_file: Path = Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
     assert_path_is_readable(out_duckdb_file)
 
     with duckdb.connect(str(out_duckdb_file)) as conn:
-        sequences_exists = conn.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
-        ).fetchone()
-        if sequences_exists is None:
+        if not sequences_table_exists(conn):
             raise ValueError(
                 f"DuckDB index {out_duckdb_file} has no 'sequences' table; "
                 f"run append_contig_to_duckdb_index before finalizing."
