@@ -666,10 +666,12 @@ def compute_haplotypes(
         hl.struct(total=hl.agg.count(), assigned=hl.agg.count_where(hl.is_defined(mt.pop_int)))
     )
     logger.info(
-        "Dropped %d of %d samples with no population assignment "
-        "(aneuploid karyotype or population not in the legend)",
+        "Dropped %d of %d samples whose population is not in the DivRef legend "
+        "(a gnomAD ancestry outside %s, or an unassigned population, indicating an "
+        "aneuploid karyotype)",
         sample_counts.total - sample_counts.assigned,
         sample_counts.total,
+        pop_legend,
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
     mt = mt.add_row_index().add_col_index()
