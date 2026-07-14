@@ -91,7 +91,7 @@ def hail_init(
         hadoop_aws_jar = jars_dir / "hadoop-aws.jar"
         aws_sdk_bundle_jar = jars_dir / "aws-java-sdk-bundle.jar"
         for jar in (hadoop_aws_jar, aws_sdk_bundle_jar):
-            if not jar.exists():
+            if not jar.is_file():
                 raise FileNotFoundError(
                     f"S3 connector JAR not found at {jar}. Run 'pixi run setup-s3' to download it."
                 )
