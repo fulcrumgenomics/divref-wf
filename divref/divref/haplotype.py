@@ -65,7 +65,9 @@ def get_haplo_sequence(
             "get_haplo_sequence requires at least one variant; received an empty sequence"
         )
     # Tertiary tiebreak on alt length so a substitution (len(alt) == 1) composes before a pure
-    # insertion (len(alt) > 1) at the same position.
+    # insertion (len(alt) > 1) at the same position. A remaining tie (same position, ref length,
+    # and alt length) falls back to input order, but that requires two alleles at one site, which
+    # cannot occur on a single phased haplotype.
     sorted_variants = hl.sorted(
         variants, key=lambda x: (x.locus.position, hl.len(x.alleles[0]), hl.len(x.alleles[1]))
     )
