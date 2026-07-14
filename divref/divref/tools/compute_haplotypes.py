@@ -609,7 +609,8 @@ def compute_haplotypes(
             be retained.
         output_base: Base output path. Writes intermediate checkpoints
             `{output_base}.variants.ht`, `.blocks.ht`, `.parents.ht`, and `.hap_ac.ht`
-            (kept, not cleaned up, for restart/debugging) and the final `{output_base}.ht`.
+            (the tool does not delete them; the Snakemake rule removes them post-run) and
+            the final `{output_base}.ht`.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
