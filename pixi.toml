@@ -1,7 +1,7 @@
 [workspace]
 authors = ["Fulcrum Genomics"]
 channels = ["conda-forge", "bioconda"]
-name = "fg-labs-divref-wf"
+name = "fulcrumgenomics-divref-wf"
 platforms = ["osx-arm64", "osx-64", "linux-64"]
 version = "0.1.0"
 

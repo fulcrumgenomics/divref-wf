@@ -35,9 +35,9 @@ classifiers     = [
 ]
 
 [project.urls]
-"homepage" = "https://github.com/fg-labs/divref-wf"
-"repository" = "https://github.com/fg-labs/divref-wf"
-"Bug Tracker" = "https://github.com/fg-labs/divref-wf/issues"
+"homepage" = "https://github.com/fulcrumgenomics/divref-wf"
+"repository" = "https://github.com/fulcrumgenomics/divref-wf"
+"Bug Tracker" = "https://github.com/fulcrumgenomics/divref-wf/issues"
 
 [project.scripts]
 divref = "divref.main:run"
