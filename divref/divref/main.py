@@ -8,6 +8,7 @@ from divref.alias import HailPath
 from divref.tools.append_contig_to_duckdb_index import append_contig_to_duckdb_index
 from divref.tools.compute_haplotypes import compute_haplotypes
 from divref.tools.create_divref_fasta import create_divref_fasta
+from divref.tools.create_duckdb_from_tsv import create_duckdb_from_tsv
 from divref.tools.extract_gnomad_afs import extract_gnomad_afs
 from divref.tools.extract_gnomad_single_afs import extract_gnomad_single_afs
 from divref.tools.extract_sample_metadata import extract_sample_metadata
@@ -20,6 +21,7 @@ _tools: list[Callable[..., None]] = [
     append_contig_to_duckdb_index,
     compute_haplotypes,
     create_divref_fasta,
+    create_duckdb_from_tsv,
     extract_gnomad_afs,
     extract_gnomad_single_afs,
     extract_sample_metadata,

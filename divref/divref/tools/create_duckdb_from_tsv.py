@@ -7,15 +7,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import duckdb
 import polars
 import pysam
 import yaml
+from fgpyo.io import assert_directory_exists
+from fgpyo.io import assert_path_is_readable
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import StrictStr
 from pydantic import field_validator
 
+from divref.duckdb_index import create_sequence_id_index
+from divref.duckdb_index import sequences_row_count
 from divref.duckdb_index import sequences_tsv_columns
+from divref.duckdb_index import stream_sequences_tsv_into_duckdb
+from divref.duckdb_index import write_metadata_tables
 
 logger = logging.getLogger(__name__)
 
@@ -457,3 +464,129 @@ def build_sequences_frame(
         row.values["sequence_id"] = f"DR-{version}-{sequence_id_offset + index}"
 
     return polars.DataFrame([row.values for row in rows]).select(columns)
+
+
+def create_duckdb_from_tsv(
+    *,
+    variants_tsv: Path,
+    source_meta: Path,
+    output_base: Path,
+    reference_fasta: Path,
+    window_size: int,
+    contigs: list[str],
+    tmp_dir: Path = Path("/tmp"),
+    polars_chunk_size: int = 100_000,
+    retain_per_contig_tsvs: bool = False,
+    force: bool = False,
+) -> None:
+    """
+    Build a standalone DivRef DuckDB index from a wide single-variant TSV (no Hail).
+
+    Reads the `source_meta.yml` sidecar and the wide variants TSV, writes the metadata tables
+    (Addendum A: `annotation_af_prefix=source_name`, `haplotype_pops_legend=[]` since this source
+    has no haplotype track), then for each contig in `contigs`: builds that contig's sequences
+    rows, writes them to a per-contig TSV, and streams the TSV into the `sequences` table.
+    `sequence_id` numbering continues across contigs from the current row count, exactly as
+    `append_contig_to_duckdb_index` does. Finally builds the `sequence_id` index.
+
+    Args:
+        variants_tsv: Path to the wide single-variant TSV (`contig, pos, ref, alt` plus
+            `AC_<pop>` / `AF_<pop>` per population).
+        source_meta: Path to the `source_meta.yml` sidecar naming the source and its
+            population legend.
+        output_base: Base path; writes `{output_base}.index.duckdb`.
+        reference_fasta: Path to the indexed reference FASTA for sequence extraction. Its FASTA
+            index is read from the `.fai` sibling path.
+        window_size: Flanking reference-context size around each variant.
+        contigs: Contigs to build, in the order their sequence IDs are assigned. Variants on any
+            other contig in `variants_tsv` are skipped with a warning.
+        tmp_dir: Temporary directory for the per-contig intermediate TSV (when not retained).
+        polars_chunk_size: Maximum number of rows per polars read batch when streaming a
+            per-contig TSV into DuckDB.
+        retain_per_contig_tsvs: If True, write each per-contig TSV alongside the DuckDB output
+            rather than into `tmp_dir`, and do not delete it.
+        force: Overwrite an existing DuckDB; otherwise raise `FileExistsError`.
+
+    Raises:
+        FileExistsError: If the output DuckDB already exists and `force` is False.
+        ValueError: If `source_meta` or `variants_tsv` fails validation, or a variant's flanking
+            window falls outside its contig's bounds, or its `ref` does not match the reference.
+    """
+    assert_path_is_readable(variants_tsv)
+    assert_path_is_readable(source_meta)
+    assert_path_is_readable(reference_fasta)
+    assert_path_is_readable(reference_fasta.with_suffix(".fai"))
+    assert_directory_exists(tmp_dir)
+
+    meta = read_source_metadata(source_meta)
+    df = read_and_validate_variants(variants_tsv, meta.populations)
+
+    out_db = Path(f"{output_base}.index.duckdb")
+    if out_db.exists():
+        if not force:
+            raise FileExistsError(f"{out_db} already exists. Pass --force to overwrite.")
+        out_db.unlink()
+
+    with duckdb.connect(str(out_db)) as conn:
+        write_metadata_tables(
+            conn,
+            window_size=window_size,
+            # This source has no haplotype track: every row is single-variant.
+            haplotype_pops_legend=[],
+            variant_pops_legend=meta.populations,
+            joint_pops_legend=meta.populations,
+            # Addendum A: drives the `<source>_AF_<pop>` annotation-column names.
+            annotation_af_prefix=meta.source_name,
+            version=meta.version,
+        )
+
+        known_contigs = set(contigs)
+        for stray_contig in sorted(set(df["contig"].to_list()) - known_contigs):
+            logger.warning(
+                "Skipping %d rows on contig %s (not in --contigs).",
+                df.filter(polars.col("contig") == stray_contig).height,
+                stray_contig,
+            )
+
+        for contig in contigs:
+            contig_df = df.filter(polars.col("contig") == contig)
+            if contig_df.height == 0:
+                logger.warning("No variants for contig %s.", contig)
+                continue
+
+            frame = build_sequences_frame(
+                df=contig_df,
+                populations=meta.populations,
+                reference=reference_fasta,
+                window_size=window_size,
+                version=meta.version,
+                source=meta.source_name,
+                # Continue the global counter from the current row count, exactly as the gnomAD
+                # per-contig append does. Must reflect rows already committed so cross-contig
+                # sequence IDs stay contiguous.
+                sequence_id_offset=sequences_row_count(conn),
+            )
+
+            # Write into the configured tmp_dir (honoring it, not the system TMPDIR); only the
+            # file is created here, so nothing leaks. This repo has a recurring /private/tmp
+            # fill problem from tools that ignore tmp_dir.
+            tsv_dir = output_base.parent if retain_per_contig_tsvs else tmp_dir
+            contig_tsv = tsv_dir / f"{output_base.name}.{contig}.sequences.tsv"
+            frame.write_csv(contig_tsv, separator="\t")
+            try:
+                stream_sequences_tsv_into_duckdb(
+                    conn,
+                    tsv=contig_tsv,
+                    joint_pops_legend=meta.populations,
+                    chunk_size=polars_chunk_size,
+                    # Addendum A: read back the `<source>_AF_<pop>` columns just written.
+                    af_prefix=meta.source_name,
+                    popmax_estimated_col=f"popmax_estimated_{meta.source_name}_AF",
+                )
+            finally:
+                if not retain_per_contig_tsvs:
+                    contig_tsv.unlink(missing_ok=True)
+
+        create_sequence_id_index(conn)
+
+    logger.info("Built %s for source %s.", out_db, meta.source_name)
