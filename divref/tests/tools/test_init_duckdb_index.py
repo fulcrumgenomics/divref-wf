@@ -5,10 +5,10 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from divref.duckdb_index import read_legend
+from divref.duckdb_index import read_window_size
 from divref.gnomad_index_source import compute_joint_legend
 from divref.gnomad_index_source import read_and_validate_pops_legends
-from divref.tools.append_contig_to_duckdb_index import read_legend
-from divref.tools.append_contig_to_duckdb_index import read_window_size
 from divref.tools.init_duckdb_index import init_duckdb_index
 
 
