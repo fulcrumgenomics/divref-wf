@@ -4,9 +4,90 @@ from pathlib import Path
 
 import duckdb
 import polars
+import pytest
 
 from divref.duckdb_index import _stream_tsv_into_sequences
+from divref.duckdb_index import sequences_tsv_columns
 from divref.duckdb_index import with_compatibility_flag
+
+
+@pytest.mark.parametrize(
+    ("af_prefix", "popmax_estimated_col", "expected"),
+    [
+        pytest.param(
+            "gnomAD",
+            "popmax_estimated_gnomad_AF",
+            [
+                "sequence",
+                "sequence_length",
+                "sequence_id",
+                "n_variants",
+                "contig",
+                "start",
+                "end",
+                "popmax_empirical_AF",
+                "popmax_empirical_AC",
+                "source",
+                "popmax_estimated_gnomad_AF",
+                "popmax_fraction_phased",
+                "max_pop",
+                "variants",
+                "gnomAD_AF_afr",
+                "gnomAD_AF_eas",
+                "empirical_AC_afr",
+                "empirical_AF_afr",
+                "fraction_phased_afr",
+                "estimated_gnomAD_haplotype_AF_afr",
+                "empirical_AC_eas",
+                "empirical_AF_eas",
+                "fraction_phased_eas",
+                "estimated_gnomAD_haplotype_AF_eas",
+            ],
+            id="gnomad-defaults",
+        ),
+        pytest.param(
+            "src",
+            "popmax_estimated_src_AF",
+            [
+                "sequence",
+                "sequence_length",
+                "sequence_id",
+                "n_variants",
+                "contig",
+                "start",
+                "end",
+                "popmax_empirical_AF",
+                "popmax_empirical_AC",
+                "source",
+                "popmax_estimated_src_AF",
+                "popmax_fraction_phased",
+                "max_pop",
+                "variants",
+                "src_AF_afr",
+                "src_AF_eas",
+                "empirical_AC_afr",
+                "empirical_AF_afr",
+                "fraction_phased_afr",
+                "estimated_src_haplotype_AF_afr",
+                "empirical_AC_eas",
+                "empirical_AF_eas",
+                "fraction_phased_eas",
+                "estimated_src_haplotype_AF_eas",
+            ],
+            id="source-prefixed",
+        ),
+    ],
+)
+def test_sequences_tsv_columns(
+    af_prefix: str, popmax_estimated_col: str, expected: list[str]
+) -> None:
+    """Column order: 14 scalars, then per-pop AF, then per-pop families grouped by pop."""
+    assert (
+        sequences_tsv_columns(
+            ["afr", "eas"], af_prefix=af_prefix, popmax_estimated_col=popmax_estimated_col
+        )
+        == expected
+    )
 
 
 def test_stream_empty_tsv_creates_sequences_table(tmp_path: Path) -> None:

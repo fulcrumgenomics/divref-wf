@@ -12,11 +12,12 @@ from fgpyo.io import assert_path_is_readable
 from hail.context import Env
 
 from divref import defaults
-from divref.duckdb_index import _stream_tsv_into_sequences
 from divref.duckdb_index import contig_already_appended
 from divref.duckdb_index import read_legend
 from divref.duckdb_index import read_window_size
 from divref.duckdb_index import sequences_row_count
+from divref.duckdb_index import sequences_tsv_columns
+from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.gnomad_index_source import TablePair
 from divref.gnomad_index_source import read_and_validate_pops_legends
 from divref.haplotype import get_haplo_sequence
@@ -262,6 +263,8 @@ def export_sequences_table_to_tsv(
     from `fraction_phased` / `estimated_gnomad_AF` to make the max-pop semantic explicit
     alongside `popmax_empirical_AF` / `popmax_empirical_AC`.
 
+    The emitted column order is driven by `divref.duckdb_index.sequences_tsv_columns`.
+
     Args:
         ht: Annotated haplotype/variant table with sequences and variant strings.
         out_file: Path for the output TSV file.
@@ -276,50 +279,53 @@ def export_sequences_table_to_tsv(
         _pop_lookup=hl.dict(ht.all_pop_freqs.map(lambda x: (x.pop, x))),
     )
     missing_pop_struct = hl.missing(pop_freq_value_type)
-    per_pop_columns: dict[str, hl.Expression] = {}
+
+    expr_by_name: dict[str, hl.Expression] = {
+        "sequence": ht.sequence,
+        "sequence_length": ht.sequence_length,
+        "sequence_id": ht.sequence_id,
+        "n_variants": ht.n_variants,
+        "contig": ht.contig,
+        "start": ht.start,
+        "end": ht.end,
+        "popmax_empirical_AF": ht.popmax_empirical_AF,
+        "popmax_empirical_AC": ht.popmax_empirical_AC,
+        "source": ht.source,
+        "popmax_estimated_gnomad_AF": ht.estimated_gnomad_AF,
+        "popmax_fraction_phased": ht.fraction_phased,
+        "max_pop": hl.literal(joint_pops_legend)[ht.max_pop],
+        "variants": hl.delimit(ht.variant_strs, ","),
+    }
     for i, pop in enumerate(joint_pops_legend):
         entry = ht._pop_lookup.get(i, missing_pop_struct)
-        per_pop_columns[f"empirical_AC_{pop}"] = entry.empirical_AC
-        per_pop_columns[f"empirical_AF_{pop}"] = entry.empirical_AF
-        per_pop_columns[f"fraction_phased_{pop}"] = entry.fraction_phased
-        per_pop_columns[f"estimated_gnomAD_haplotype_AF_{pop}"] = entry.estimated_gnomad_AF
-
-    ht.select(
-        "sequence",
-        "sequence_length",
-        "sequence_id",
-        "n_variants",
-        "contig",
-        "start",
-        "end",
-        "popmax_empirical_AF",
-        "popmax_empirical_AC",
-        "source",
-        popmax_estimated_gnomad_AF=ht.estimated_gnomad_AF,
-        popmax_fraction_phased=ht.fraction_phased,
-        max_pop=hl.literal(joint_pops_legend)[ht.max_pop],
-        variants=hl.delimit(ht.variant_strs, ","),
         # Substitute "NA" per element for variants where this pop's AF is missing (e.g. an
         # HGDP_haplotype row at a joint pop that isn't in the HGDP source legend). Without the
         # substitution Hail collapses the whole all-missing array to a single missing token,
         # which polars then reads as a SQL NULL and trips the downstream Haplotype model.
         # Always emitting a comma-delimited string of length `n_variants` keeps the column
         # shape consistent regardless of which source emitted the row.
-        **{
-            f"gnomAD_AF_{pop}": hl.delimit(
-                ht.gnomad_freqs.map(
-                    lambda x, _i=i: hl.if_else(
-                        hl.is_defined(x[_i].AF),
-                        hl.format("%.5f", x[_i].AF),
-                        hl.literal("NA"),
-                    )
-                ),
-                ",",
-            )
-            for i, pop in enumerate(joint_pops_legend)
-        },
-        **per_pop_columns,
-    ).export(str(out_file))
+        expr_by_name[f"gnomAD_AF_{pop}"] = hl.delimit(
+            ht.gnomad_freqs.map(
+                lambda x, _i=i: hl.if_else(
+                    hl.is_defined(x[_i].AF),
+                    hl.format("%.5f", x[_i].AF),
+                    hl.literal("NA"),
+                )
+            ),
+            ",",
+        )
+        expr_by_name[f"empirical_AC_{pop}"] = entry.empirical_AC
+        expr_by_name[f"empirical_AF_{pop}"] = entry.empirical_AF
+        expr_by_name[f"fraction_phased_{pop}"] = entry.fraction_phased
+        expr_by_name[f"estimated_gnomAD_haplotype_AF_{pop}"] = entry.estimated_gnomad_AF
+
+    cols = sequences_tsv_columns(
+        joint_pops_legend, af_prefix="gnomAD", popmax_estimated_col="popmax_estimated_gnomad_AF"
+    )
+    assert sorted(expr_by_name) == sorted(cols), (
+        "sequences_tsv_columns and the built expressions have drifted apart."
+    )
+    ht.select(**{name: expr_by_name[name] for name in cols}).export(str(out_file))
 
 
 # eq=False so the frozen dataclass keeps a (default, identity-based) __hash__ despite its list
@@ -427,18 +433,12 @@ def _export_and_stream_contig(
             out_file=contig_tsv,
             joint_pops_legend=joint_pops_legend,
         )
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            contig_rows = _stream_tsv_into_sequences(
-                conn,
-                tsv=contig_tsv,
-                joint_pops_legend=joint_pops_legend,
-                chunk_size=chunk_size,
-            )
-            conn.execute("COMMIT")
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
+        contig_rows = stream_sequences_tsv_into_duckdb(
+            conn,
+            tsv=contig_tsv,
+            joint_pops_legend=joint_pops_legend,
+            chunk_size=chunk_size,
+        )
     finally:
         if not retain_tsv and contig_tsv.exists():
             contig_tsv.unlink()
