@@ -15,9 +15,9 @@ from fgpyo.io import assert_path_is_readable
 from hail.context import Env
 
 from divref import defaults
-from divref.duckdb_index import TablePair
-from divref.duckdb_index import read_and_validate_pops_legends
 from divref.duckdb_index import sequences_table_exists
+from divref.gnomad_index_source import TablePair
+from divref.gnomad_index_source import read_and_validate_pops_legends
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
 from divref.haplotype_compat import compatibility_flag
