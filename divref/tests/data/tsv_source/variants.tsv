@@ -1,0 +1,5 @@
+contig	pos	ref	alt	AC_afr	AF_afr	AC_eas	AF_eas
+chr1	100050	A	G	12	0.00400	3	0.00100
+chr1	100120	T	C	40	0.01300		
+chr1	100200	T	TA	7	0.00230	2	0.00070
+chr1	100260	AA	A	5	0.00160	1	0.00030
