@@ -41,7 +41,12 @@ The primary table in the DuckDB index is the `sequences` table, which has one ro
 | `estimated_gnomAD_haplotype_AF_{POP}` | Per-pop projection: `fraction_phased_{POP} × min(gnomAD_AF[component, POP])`. The `min` is over the components' *gnomAD* AFs: the haplotype's rarest component in gnomAD, not necessarily the rarest-by-local-AF component that anchors `fraction_phased_{POP}`. That gnomAD min is the haplotype's frequency ceiling (it is no more common than its rarest component), and `fraction_phased` scales it by the observed local phasing. Equals `empirical_AF_{POP}` for `gnomAD_variant` rows. |
 | `haplotype_filter` | VCF-style compatibility flag. `PASS` for `gnomAD_variant` rows and for `HGDP_haplotype` rows whose component variants do not overlap; otherwise the `;`-joined reason(s) the haplotype is incompatible (e.g. `snp_in_deletion`, `insertion_in_deletion`, `overlapping_deletions`, or a `same_position_*` reason such as `same_position_deletion` or `same_position_reciprocal_insertion_deletion`). Incompatible haplotypes are component variants that cannot co-occur on one chromosome — e.g. upstream phasing artifacts at tandem repeats — and are flagged rather than dropped. A SNP at the same position as the anchor position of an indel composes to a well-defined haplotype and stays `PASS`. The flag set also carries `end_extends_past_rightmost_variant` when an earlier, longer-reference variant reaches past the rightmost one, so the window `end` is larger than a rightmost-variant-only calculation. |
 
-The DuckDB file also contains five single-row metadata tables: `window_size` (the flanking context size used), three JSON-encoded ordered population legends (`hgdp_haplotype_pops_legend`, `gnomad_variant_pops_legend`, and the merged `joint_pops_legend` referenced by the `empirical_AC_{POP}` / `empirical_AF_{POP}` columns), and `VERSION`.
+The DuckDB file also contains six single-row metadata tables.
+`window_size` stores the flanking context size used.
+Three JSON-encoded ordered population legends are `haplotype_pops_legend`, `variant_pops_legend`, and the merged `joint_pops_legend`.
+The `empirical_AC_{POP}` and `empirical_AF_{POP}` columns reference `joint_pops_legend`.
+`annotation_af_prefix` stores the annotation-AF column prefix, `gnomAD` for the gnomAD-built index.
+`VERSION` stores the version identifier.
 
 ## HGDP_haplotype
 

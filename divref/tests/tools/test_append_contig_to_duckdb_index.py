@@ -173,9 +173,9 @@ def test_append_legend_mismatch_raises(
     corrupt_db = _db_path(corrupt_output_base)
     shutil.copy(db, corrupt_db)
     with duckdb.connect(str(corrupt_db)) as conn:
-        conn.execute("DROP TABLE gnomad_variant_pops_legend")
+        conn.execute("DROP TABLE variant_pops_legend")
         conn.execute(
-            "CREATE TABLE gnomad_variant_pops_legend AS SELECT ? AS pops_legend",
+            "CREATE TABLE variant_pops_legend AS SELECT ? AS pops_legend",
             ['["totally", "wrong"]'],
         )
 

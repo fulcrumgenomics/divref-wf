@@ -31,7 +31,7 @@ def test_init_writes_metadata_and_no_sequences(
     datadir: Path,
     tmp_path: Path,
 ) -> None:
-    """After init the DuckDB has the four metadata tables and no sequences table."""
+    """After init the DuckDB has the metadata tables and no sequences table."""
     table_pairs_tsv = _write_table_pairs_tsv(
         tmp_path / "table_pairs.tsv",
         rows=[
@@ -64,11 +64,14 @@ def test_init_writes_metadata_and_no_sequences(
         assert version_row is not None
         assert version_row[0] == "9.9"
         joint = read_legend(conn, "joint_pops_legend")
-        gnomad = read_legend(conn, "gnomad_variant_pops_legend")
-        hgdp = read_legend(conn, "hgdp_haplotype_pops_legend")
+        gnomad = read_legend(conn, "variant_pops_legend")
+        hgdp = read_legend(conn, "haplotype_pops_legend")
         # gnomAD pops come first in the joint legend.
         assert joint[: len(gnomad)] == gnomad
         assert joint == compute_joint_legend(gnomad, hgdp)
+        af_prefix_row = conn.execute("SELECT af_prefix FROM annotation_af_prefix").fetchone()
+        assert af_prefix_row is not None
+        assert af_prefix_row[0] == "gnomAD"
         # No sequences table is created by init.
         assert (
             conn.execute(
