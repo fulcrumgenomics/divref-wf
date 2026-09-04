@@ -124,6 +124,16 @@ def contig_already_appended(conn: duckdb.DuckDBPyConnection, contig: str) -> boo
     return row is not None
 
 
+def create_sequence_id_index(conn: duckdb.DuckDBPyConnection) -> None:
+    """
+    Create the idempotent `idx_sequence_id` index on `sequences`.
+
+    `IF NOT EXISTS` makes this a no-op on an already-finalized index (a re-triggered Snakemake rule
+    or manual retry) rather than a raw DuckDB "index already exists" error.
+    """
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sequence_id ON sequences(sequence_id)")
+
+
 def scan_sequences_tsv(
     tsv: Path,
     joint_pops_legend: list[str],

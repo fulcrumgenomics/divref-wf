@@ -7,6 +7,7 @@ import polars
 import pytest
 
 from divref.duckdb_index import _stream_tsv_into_sequences
+from divref.duckdb_index import create_sequence_id_index
 from divref.duckdb_index import sequences_tsv_columns
 from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.duckdb_index import with_compatibility_flag
@@ -293,6 +294,21 @@ def test_with_compatibility_flag_values() -> None:
     })
     out = with_compatibility_flag(df)
     assert out["haplotype_filter"].to_list() == ["snp_in_deletion", "PASS", "PASS"]
+
+
+def test_create_sequence_id_index_is_idempotent(tmp_path: Path) -> None:
+    """Creates `idx_sequence_id` on `sequences`, and a second call does not raise."""
+    db = tmp_path / "idx.duckdb"
+    with duckdb.connect(str(db)) as conn:
+        conn.execute("CREATE TABLE sequences AS SELECT * FROM (VALUES ('a'), ('b')) t(sequence_id)")
+
+        create_sequence_id_index(conn)
+        index_row = conn.execute(
+            "SELECT index_name FROM duckdb_indexes() WHERE index_name = 'idx_sequence_id'"
+        ).fetchone()
+        assert index_row is not None
+
+        create_sequence_id_index(conn)  # second call must not raise
 
 
 def test_with_compatibility_flag_empty_frame() -> None:
