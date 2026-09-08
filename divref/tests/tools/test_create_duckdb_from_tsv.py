@@ -1,15 +1,25 @@
 from pathlib import Path
 
 import polars as pl
+import pysam
 import pytest
 from pydantic import ValidationError
 
+from divref.duckdb_index import sequences_tsv_columns
 from divref.tools.create_duckdb_from_tsv import SourceMetadata
 from divref.tools.create_duckdb_from_tsv import _format_raw_number
 from divref.tools.create_duckdb_from_tsv import _hail_argmax
+from divref.tools.create_duckdb_from_tsv import build_sequences_frame
 from divref.tools.create_duckdb_from_tsv import read_and_validate_variants
 from divref.tools.create_duckdb_from_tsv import read_source_metadata
 from divref.tools.create_duckdb_from_tsv import validate_variants_header
+
+# NB the fixture is `…fa.gz`, so its index is `…fa.fai` (samtools/pysam append `.fai` to the full
+# name). Derive it from the `.fa.gz` path -- `("…fa.gz").with_suffix(".fai")` replaces `.gz` and
+# yields `…fa.fai`. Do NOT apply `.with_suffix(".fai")` to a `…fa` name: that replaces `.fa` and
+# yields `…fai`, which does not exist. Simplest is the literal `…fa.fai`.
+_FIXTURE_FA = "test_reference.chr1_chrX.fa.gz"
+_FIXTURE_FAI = "test_reference.chr1_chrX.fa.fai"
 
 
 def test_read_source_metadata_happy(datadir: Path) -> None:
@@ -134,3 +144,184 @@ def test_hail_argmax(values: list[float | None], expected_index: int | None) -> 
             _hail_argmax(values)
     else:
         assert _hail_argmax(values) == expected_index
+
+
+def _one_variant_wide(contig: str, pos: int, ref: str, alt: str) -> pl.DataFrame:
+    """Build a 1-row wide variants frame (population `afr` only)."""
+    return pl.DataFrame({
+        "contig": [contig],
+        "pos": [pos],
+        "ref": [ref],
+        "alt": [alt],
+        "AC_afr": [10],
+        "AF_afr": [0.1],
+    })
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param("snp", id="snp"),
+        pytest.param("ins", id="ins"),
+        pytest.param("del", id="del"),
+    ],
+)
+def test_builder_snp_ins_del(datadir: Path, kind: str) -> None:
+    fa = pysam.FastaFile(str(datadir / _FIXTURE_FA), filepath_index=str(datadir / _FIXTURE_FAI))
+    w, pos, contig = 25, 100_100, "chr1"  # interior position within the fixture's covered range
+    # ref must match the reference bases at pos (build_sequences_frame now validates this), so
+    # derive ref -- and a consistent alt -- from the reference rather than hardcoding bases.
+    if kind == "snp":
+        ref = fa.fetch(contig, pos - 1, pos)
+        alt = "A" if ref != "A" else "C"  # any base different from ref
+    elif kind == "ins":
+        ref = fa.fetch(contig, pos - 1, pos)
+        alt = ref + "A"
+    else:
+        ref = fa.fetch(contig, pos - 1, pos + 1)
+        alt = ref[0]
+    left = fa.fetch(contig, pos - 1 - w, pos - 1)
+    right = fa.fetch(contig, pos - 1 + len(ref), pos - 1 + len(ref) + w)
+    expected_seq = left + alt + right  # bases as-is; NO .upper()
+    df = _one_variant_wide(contig, pos, ref, alt)
+    row = build_sequences_frame(
+        df=df,
+        populations=["afr"],
+        reference=datadir / _FIXTURE_FA,
+        window_size=w,
+        version="9.9",
+        source="s",
+        sequence_id_offset=0,
+    ).row(0, named=True)
+    assert row["sequence"] == expected_seq
+    assert row["start"] == pos - 1 - w
+    assert row["end"] == pos - 1 + len(ref) + w
+    assert row["sequence_length"] == 2 * w + len(alt)
+
+
+def test_builder_rejects_edge_of_contig_variant(datadir: Path) -> None:
+    df = _one_variant_wide("chr1", 5, "A", "G")  # pos-1-w = -21 < 0 for w=25; fails before any
+    # ref/reference comparison, so the (possibly wrong) hardcoded ref here doesn't matter.
+    with pytest.raises(ValueError, match="contig bounds|out of"):
+        build_sequences_frame(
+            df=df,
+            populations=["afr"],
+            reference=datadir / _FIXTURE_FA,
+            window_size=25,
+            version="9.9",
+            source="s",
+            sequence_id_offset=0,
+        )
+
+
+def test_builder_rejects_ref_reference_mismatch(datadir: Path) -> None:
+    fa = pysam.FastaFile(str(datadir / _FIXTURE_FA), filepath_index=str(datadir / _FIXTURE_FAI))
+    pos, contig = 100_100, "chr1"
+    true_ref = fa.fetch(contig, pos - 1, pos)
+    wrong_ref = "A" if true_ref != "A" else "C"  # deliberately does not match the reference
+    df = _one_variant_wide(contig, pos, wrong_ref, "G")
+    with pytest.raises(ValueError, match="reference bases"):
+        build_sequences_frame(
+            df=df,
+            populations=["afr"],
+            reference=datadir / _FIXTURE_FA,
+            window_size=25,
+            version="9.9",
+            source="s",
+            sequence_id_offset=0,
+        )
+
+
+# Popmax tie-break and null-skip are NOT covered by the golden (it has 0 AF ties; null-AF pops
+# appear in only 10 rows), so pin `hl.argmax`'s two edge behaviours here with hand-built rows.
+def test_builder_popmax_tie_breaks_on_first_index(datadir: Path) -> None:
+    # Two pops share the max AF. hl.argmax(unique=False) returns the LOWEST index, so max_pop
+    # must be the first such pop in legend order (afr), with its AC.
+    df = pl.DataFrame({
+        "contig": ["chr1"],
+        "pos": [100_100],
+        "ref": ["T"],  # true reference base at chr1:100100
+        "alt": ["G"],
+        "AC_afr": [10],
+        "AF_afr": [0.20],
+        "AC_eas": [7],
+        "AF_eas": [0.20],
+    })
+    row = build_sequences_frame(
+        df=df,
+        populations=["afr", "eas"],
+        reference=datadir / _FIXTURE_FA,
+        window_size=25,
+        version="9.9",
+        source="s",
+        sequence_id_offset=0,
+    ).row(0, named=True)
+    assert row["max_pop"] == "afr"
+    assert row["popmax_empirical_AC"] == 10
+
+
+def test_builder_popmax_skips_null_af_pops(datadir: Path) -> None:
+    # afr has no data (both AC/AF empty); argmax must skip the missing element and pick eas,
+    # matching hl.argmax's missing-element semantics. afr's gnomAD_AF cell renders "NA".
+    df = pl.DataFrame(
+        {
+            "contig": ["chr1"],
+            "pos": [100_100],
+            "ref": ["T"],  # true reference base at chr1:100100
+            "alt": ["G"],
+            "AC_afr": [None],
+            "AF_afr": [None],
+            "AC_eas": [3],
+            "AF_eas": [0.05],
+        },
+        schema_overrides={"AC_afr": pl.Int64, "AF_afr": pl.Float64},
+    )
+    row = build_sequences_frame(
+        df=df,
+        populations=["afr", "eas"],
+        reference=datadir / _FIXTURE_FA,
+        window_size=25,
+        version="9.9",
+        source="s",
+        sequence_id_offset=0,
+    ).row(0, named=True)
+    assert row["max_pop"] == "eas"
+    assert row["s_AF_afr"] == "NA"
+
+
+def test_builder_empty_variants_frame_returns_typed_empty_frame(datadir: Path) -> None:
+    df = pl.DataFrame(
+        schema={"contig": pl.String, "pos": pl.Int64, "ref": pl.String, "alt": pl.String}
+    )
+    built = build_sequences_frame(
+        df=df,
+        populations=["afr"],
+        reference=datadir / _FIXTURE_FA,
+        window_size=25,
+        version="9.9",
+        source="s",
+        sequence_id_offset=0,
+    )
+    assert built.height == 0
+    assert built.columns == sequences_tsv_columns(
+        ["afr"], af_prefix="s", popmax_estimated_col="popmax_estimated_s_AF"
+    )
+
+
+def test_builder_rejects_all_null_popmax(datadir: Path) -> None:
+    df = pl.DataFrame(
+        # ref "T" is the true reference base at chr1:100100 (this test targets the all-null-AF
+        # ValueError, not the ref/reference-mismatch ValueError, so ref must be valid here).
+        {"contig": ["chr1"], "pos": [100_100], "ref": ["T"], "alt": ["G"], "AF_afr": [None]},
+        schema_overrides={"AF_afr": pl.Float64},
+    )
+    with pytest.raises(ValueError, match="popmax"):
+        build_sequences_frame(
+            df=df,
+            populations=["afr"],
+            reference=datadir / _FIXTURE_FA,
+            window_size=25,
+            version="9.9",
+            source="s",
+            sequence_id_offset=0,
+        )
