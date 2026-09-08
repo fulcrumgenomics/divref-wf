@@ -5,6 +5,8 @@ import pytest
 from pydantic import ValidationError
 
 from divref.tools.create_duckdb_from_tsv import SourceMetadata
+from divref.tools.create_duckdb_from_tsv import _format_raw_number
+from divref.tools.create_duckdb_from_tsv import _hail_argmax
 from divref.tools.create_duckdb_from_tsv import read_and_validate_variants
 from divref.tools.create_duckdb_from_tsv import read_source_metadata
 from divref.tools.create_duckdb_from_tsv import validate_variants_header
@@ -98,3 +100,37 @@ def test_variant_row_refusals(tmp_path: Path, row: str, match: str) -> None:
     p.write_text("contig\tpos\tref\talt\tAC_afr\tAF_afr\tAC_eas\tAF_eas\n" + row + "\n")
     with pytest.raises(ValueError, match=match):
         read_and_validate_variants(p, ["afr", "eas"])
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        # An integer-valued AF keeps its decimal point (Hail's Double export, not Python %g).
+        pytest.param(1.0, "1.0", id="integer-valued-af-keeps-decimal-point"),
+        # 5 sig figs of 3.0312e-05 is itself; magnitude < 1e-4 renders in scientific notation.
+        # Cross-checked against duckdb_index_golden/sequences.chr1_chrX.tsv's empirical_AF_afr.
+        pytest.param(3.0312e-05, "3.0312e-05", id="small-af-renders-scientific-notation"),
+        # 0.123456789 -> first 5 significant digits 12345, 6th digit 6 rounds the 5th up: 0.12346.
+        pytest.param(0.123456789, "0.12346", id="value-needs-5-sig-fig-rounding"),
+        pytest.param(None, None, id="none-passes-through"),
+    ],
+)
+def test_format_raw_number(value: float | None, expected: str | None) -> None:
+    assert _format_raw_number(value) == expected
+
+
+@pytest.mark.parametrize(
+    "values, expected_index",
+    [
+        pytest.param([None, 0.2, 0.9, 0.3], 2, id="skip-none"),
+        pytest.param([0.5, 0.5, 0.1], 0, id="tie-first-index-wins"),
+        pytest.param([0.1, 0.4, 0.2], 1, id="normal-max"),
+        pytest.param([None, None], None, id="all-none-raises"),
+    ],
+)
+def test_hail_argmax(values: list[float | None], expected_index: int | None) -> None:
+    if expected_index is None:
+        with pytest.raises(ValueError, match="popmax"):
+            _hail_argmax(values)
+    else:
+        assert _hail_argmax(values) == expected_index

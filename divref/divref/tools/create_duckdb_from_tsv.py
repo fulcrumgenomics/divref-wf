@@ -2,6 +2,7 @@
 
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -192,3 +193,61 @@ def _validate(df: polars.DataFrame, mask: polars.Series, message: str) -> None:
             f"{message} ({bad.height} row(s) failed). First offending variant: "
             f"{first['contig']}:{first['pos']}:{first['ref']}:{first['alt']}"
         )
+
+
+def _format_raw_number(value: float | None) -> str | None:
+    """
+    Render a "raw" (unformatted) AF or fraction-phased value as Hail's TSV exporter does.
+
+    Verified against every gnomAD single-variant row's true (Hail-table) AF in the committed
+    golden: Hail's `Double` -> text export for these columns rounds to 5 SIGNIFICANT figures
+    (not decimal places), then renders that rounded value with the shortest round-trip decimal
+    text -- switching to scientific notation for small magnitudes and always keeping a decimal
+    point (`1.0`, not `1`). `%.5g` alone does not reproduce this: Python's `%g` strips the
+    decimal point off whole numbers (`1`, not `1.0`), so the 5-sig-fig rounding and the
+    decimal-text rendering must be two separate steps. This differs from
+    `polars.Series.cast(pl.String)` on a plain `Float64` column, which neither rounds to 5
+    significant figures nor ever emits scientific notation. Unlike the `%.5f`-formatted
+    `<source>_AF_<pop>` column, `popmax_empirical_AF`, `empirical_AF_<pop>`,
+    `fraction_phased_*`, and `estimated_<source>_haplotype_AF_<pop>` are passed through this way
+    rather than left as a native `Float64` column.
+
+    Args:
+        value: The value, or `None` if this population/row has no data.
+
+    Returns:
+        The 5-significant-figure decimal text of `value`, or `None` if `value` is `None`.
+    """
+    if value is None:
+        return None
+    return str(float(f"{value:.5g}"))
+
+
+def _hail_argmax(values: Sequence[float | None]) -> int:
+    """
+    Replicate `hl.argmax`'s index-of-maximum semantics over per-population AFs.
+
+    Null AFs are skipped. On a tie, the first (lowest) index wins, matching Hail's
+    `hl.argmax(unique=False)` default used by `build_gnomad_variant_table_entries`.
+
+    Args:
+        values: Per-population AF values, in population-legend order; a population with no
+            data is `None`.
+
+    Returns:
+        The index of the maximum non-null value.
+
+    Raises:
+        ValueError: If every value is `None`.
+    """
+    best_index: int | None = None
+    best_value: float | None = None
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        if best_value is None or value > best_value:
+            best_value = value
+            best_index = index
+    if best_index is None:
+        raise ValueError("Cannot compute popmax: every population AF is null for this variant.")
+    return best_index
