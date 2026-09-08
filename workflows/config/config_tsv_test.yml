@@ -1,0 +1,11 @@
+# Config for a dry-run integration check of generate_divref_from_tsv.smk against the committed
+# TSV-source fixtures (see divref/tests/test_workflow_from_tsv.py).
+chromosomes: ["chr1"]
+
+work_dir: data/work_tsv_test
+tmp_dir: /tmp
+
+sources:
+  - name: test_cohort
+    variants_tsv: divref/tests/data/tsv_source/variants.tsv
+    source_meta: divref/tests/data/tsv_source/source_meta.yml
