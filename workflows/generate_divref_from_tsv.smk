@@ -148,7 +148,9 @@ rule create_tsv_index:
         contigs=" ".join(CHROMS),
         tmp_dir=TMP_DIR,
     shell:
+        # The tool requires --tmp-dir to already exist; Snakemake only auto-creates output dirs.
         """
+        mkdir -p {params.tmp_dir}
         divref create-duckdb-from-tsv \
             --variants-tsv {input.variants} --source-meta {input.source_meta} \
             --output-base {params.output_base} --reference-fasta {input.fasta} \
