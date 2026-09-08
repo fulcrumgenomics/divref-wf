@@ -58,7 +58,6 @@ def create_haplotype(
         "popmax_fraction_phased": 1.0,
         "popmax_empirical_AF": 0.25,
         "popmax_empirical_AC": 1000,
-        "popmax_estimated_gnomad_AF": 0.15,
         "max_pop": "amr",
         "source": "test_source",
     }
@@ -335,8 +334,15 @@ def test_parse_pop_freqs_na_treated_as_missing() -> None:
     assert _parse_pop_freqs("0.1,NA,null,0.4") == [0.1, 0.0, 0.0, 0.4]
 
 
-def test_from_row_splits_per_pop_columns() -> None:
-    """Haplotype.from_row should pull per-pop columns into the dict fields by pop label."""
+@pytest.mark.parametrize(
+    "af_prefix",
+    [
+        pytest.param("gnomAD", id="default_gnomad_prefix"),
+        pytest.param("mysource", id="source_prefixed_columns"),
+    ],
+)
+def test_from_row_splits_per_pop_columns(af_prefix: str) -> None:
+    """Haplotype.from_row pulls per-pop columns into the dict fields by pop label and prefix."""
     pops_legend = ["afr", "amr", "eas"]
     row: dict[str, Any] = {
         "sequence_id": "row_hap",
@@ -346,18 +352,19 @@ def test_from_row_splits_per_pop_columns() -> None:
         "popmax_fraction_phased": 1.0,
         "popmax_empirical_AF": 0.5,
         "popmax_empirical_AC": 10,
-        "popmax_estimated_gnomad_AF": 0.5,
+        # A scalar popmax estimated-AF column exists in real indexes; from_row ignores it.
+        f"popmax_estimated_{af_prefix}_AF": 0.5,
         "max_pop": "afr",
         "variants": "chr1:100:A:T",
         "source": "test",
-        "gnomAD_AF_afr": "0.5",
-        "gnomAD_AF_amr": "0.3",
-        "gnomAD_AF_eas": "NA",
-        "estimated_gnomAD_haplotype_AF_afr": 0.5,
-        "estimated_gnomAD_haplotype_AF_amr": 0.3,
-        "estimated_gnomAD_haplotype_AF_eas": None,
+        f"{af_prefix}_AF_afr": "0.5",
+        f"{af_prefix}_AF_amr": "0.3",
+        f"{af_prefix}_AF_eas": "NA",
+        f"estimated_{af_prefix}_haplotype_AF_afr": 0.5,
+        f"estimated_{af_prefix}_haplotype_AF_amr": 0.3,
+        f"estimated_{af_prefix}_haplotype_AF_eas": None,
     }
-    hap = Haplotype.from_row(row, pops_legend)
+    hap = Haplotype.from_row(row, pops_legend, af_prefix=af_prefix)
     assert hap.gnomad_afs == {"afr": "0.5", "amr": "0.3", "eas": "NA"}
     assert list(hap.gnomad_afs.keys()) == pops_legend
     assert hap.estimated_gnomad_af_per_pop == {"afr": 0.5, "amr": 0.3, "eas": None}

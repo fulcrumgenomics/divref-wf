@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+from typing import Optional
 
 import duckdb
 import pandas as pd
@@ -23,6 +24,7 @@ def _seq_row(
     *,
     haplotype_filter: str = "PASS",
     pops: Iterable[str] = _POPS,
+    af_prefix: str = "gnomAD",
 ) -> dict[str, Any]:
     """Build one `sequences` row dict with the columns remap_divref reads."""
     row: dict[str, Any] = {
@@ -33,15 +35,16 @@ def _seq_row(
         "popmax_fraction_phased": 1.0,
         "popmax_empirical_AF": 0.25,
         "popmax_empirical_AC": 1000,
-        "popmax_estimated_gnomad_AF": 0.15,
+        # A scalar popmax estimated-AF column exists in real indexes; remap_divref ignores it.
+        f"popmax_estimated_{af_prefix}_AF": 0.15,
         "max_pop": "amr",
         "variants": variants,
         "source": "HGDP_haplotype",
         "haplotype_filter": haplotype_filter,
     }
     for pop in pops:
-        row[f"gnomAD_AF_{pop}"] = "0.1,0.2,0.3"
-        row[f"estimated_gnomAD_haplotype_AF_{pop}"] = 0.05
+        row[f"{af_prefix}_AF_{pop}"] = "0.1,0.2,0.3"
+        row[f"estimated_{af_prefix}_haplotype_AF_{pop}"] = 0.05
     return row
 
 
@@ -52,6 +55,7 @@ def _build_index(
     version: str = "9.9",
     window_size: int = 10,
     pops: Iterable[str] = _POPS,
+    af_prefix: Optional[str] = None,
     skip: Iterable[str] = (),
 ) -> None:
     """
@@ -63,6 +67,8 @@ def _build_index(
         version: Value for the VERSION table.
         window_size: Value for the window_size table.
         pops: Population labels for the joint_pops_legend table.
+        af_prefix: When set, write the `annotation_af_prefix` table with this value; when None,
+            omit it (an index built before that table existed, so remap falls back to `gnomAD`).
         skip: Metadata table names to NOT create (to exercise error paths).
     """
     skip = set(skip)
@@ -76,6 +82,8 @@ def _build_index(
                 "CREATE TABLE joint_pops_legend AS SELECT ? AS pops_legend",
                 [json.dumps(list(pops))],
             )
+        if af_prefix is not None:
+            conn.execute("CREATE TABLE annotation_af_prefix AS SELECT ? AS af_prefix", [af_prefix])
         seq_df = pd.DataFrame(seq_rows)
         conn.register("seq_df", seq_df)
         conn.execute("CREATE TABLE sequences AS SELECT * FROM seq_df")
@@ -138,6 +146,47 @@ def test_remap_plus_strand_appends_reference_coordinates(tmp_path: Path) -> None
     # haplotype_filter is carried through verbatim.
     assert row["haplotype_filter"] == "snp_in_deletion"
     # One gnomAD_AF_/estimated column per joint-legend population.
+    assert row["gnomAD_AF_afr"] == "0.1,0.2,0.3"
+    assert row["estimated_gnomAD_haplotype_AF_amr"] == 0.05
+
+
+def test_remap_uses_source_prefixed_annotation_columns(tmp_path: Path) -> None:
+    """An index whose `annotation_af_prefix` is a source name yields source-prefixed AF columns."""
+    db_path = tmp_path / "index.duckdb"
+    _build_index(
+        db_path,
+        seq_rows=[_seq_row("hapA", af_prefix="mysource")],
+        af_prefix="mysource",
+    )
+    input_tsv = _write_calitas_tsv(
+        tmp_path / "calitas.tsv",
+        [_calitas_row("hapA", coordinate_start=12, coordinate_end=17)],
+    )
+    output_tsv = tmp_path / "out.tsv"
+
+    remap_divref(input_path=input_tsv, output_path=output_tsv, index_path=db_path)
+
+    out = pd.read_csv(output_tsv, sep="\t")
+    row = out.iloc[0]
+    # The output annotation columns carry the index's source prefix, not the gnomAD default.
+    assert row["mysource_AF_afr"] == "0.1,0.2,0.3"
+    assert row["estimated_mysource_haplotype_AF_amr"] == 0.05
+    assert not [c for c in out.columns if c.startswith("gnomAD_AF_")]
+
+
+def test_remap_with_explicit_gnomad_prefix_table(tmp_path: Path) -> None:
+    """An explicit `annotation_af_prefix='gnomAD'` table yields the gnomAD-prefixed columns."""
+    db_path = tmp_path / "index.duckdb"
+    _build_index(db_path, seq_rows=[_seq_row("hapA")], af_prefix="gnomAD")
+    input_tsv = _write_calitas_tsv(
+        tmp_path / "calitas.tsv",
+        [_calitas_row("hapA", coordinate_start=12, coordinate_end=17)],
+    )
+    output_tsv = tmp_path / "out.tsv"
+
+    remap_divref(input_path=input_tsv, output_path=output_tsv, index_path=db_path)
+
+    row = pd.read_csv(output_tsv, sep="\t").iloc[0]
     assert row["gnomAD_AF_afr"] == "0.1,0.2,0.3"
     assert row["estimated_gnomAD_haplotype_AF_amr"] == 0.05
 
