@@ -73,3 +73,58 @@ We have included haplotypes discovered between 0.5% and 1%, but would expect to 
 gnomAD variants are derived from the [gnomAD 4.1 joint exomes+genomes sites](https://gnomad.broadinstitute.org/news/2024-04-gnomad-v4-1/).
 
 - Genotypes at variants with less than 0.5% AF in all of the populations are removed.
+
+## Building from a wide variant TSV (no Hail)
+
+`workflows/generate_divref_from_tsv.smk` builds the same resource from a documented
+single-variant TSV, with pure Python and no Hail or Spark.
+Use it when you already have per-population allele frequencies for one source and do not need
+the haplotype track.
+The `divref create-duckdb-from-tsv` tool reads the TSV and a small `source_meta.yml` sidecar and
+writes the DuckDB index.
+The workflow then runs `divref create-divref-fasta` to write the per-chromosome FASTA files from
+that index.
+
+### Input TSV
+
+The variant TSV is tab-delimited with one row per variant and these columns:
+
+| Column | Description |
+|---|---|
+| `contig` | Reference contig (e.g. `chr1`). |
+| `pos` | 1-based variant position. |
+| `ref` | Reference allele. |
+| `alt` | Alternate allele. |
+| `AC_{pop}` | Allele count in each population. One column per population. |
+| `AF_{pop}` | Allele frequency in each population. One column per population. |
+
+A blank `AC_{pop}` or `AF_{pop}` cell means the source has no data for that population on that row.
+Extra columns beyond these are allowed and ignored.
+
+### `source_meta.yml` sidecar
+
+The sidecar names the source and its population legend:
+
+| Key | Description |
+|---|---|
+| `source_name` | Source identifier. Must match `^[A-Za-z][A-Za-z0-9_]*$`. Used as the prefix on this source's annotation columns and stored in the `annotation_af_prefix` metadata table. |
+| `version` | Version identifier baked into `sequence_id` (`DR-{version}-{index}`). |
+| `reference_genome` | Reference genome name (e.g. `GRCh38`). |
+| `populations` | Ordered list of population codes, matching the `AC_{pop}` / `AF_{pop}` columns. |
+
+### Output index
+
+The `sequences` table has the same schema as the [`sequences` table columns](#sequences-table-columns)
+above, with two differences.
+
+- The annotation columns carry the `source_name` prefix instead of `gnomAD`:
+  `{source_name}_AF_{pop}`, `estimated_{source_name}_haplotype_AF_{pop}`, and
+  `popmax_estimated_{source_name}_AF`.
+  The `annotation_af_prefix` metadata table stores `source_name`, so downstream tools such as
+  `remap-divref` read the prefix from the index.
+- Every row is a single variant.
+  `n_variants` is `1`, `source` is `source_name`, `haplotype_filter` is `PASS`, and
+  `popmax_fraction_phased` is `1.0`.
+  The `empirical_AC_{pop}` / `empirical_AF_{pop}` columns are the source allele counts and
+  frequencies, and each `estimated_{source_name}_haplotype_AF_{pop}` equals the source AF,
+  because no haplotypes are formed.
