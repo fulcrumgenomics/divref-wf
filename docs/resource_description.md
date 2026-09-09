@@ -99,7 +99,8 @@ The variant TSV is tab-delimited with one row per variant and these columns:
 | `AF_{pop}` | Allele frequency in each population. One column per population. |
 
 A blank `AC_{pop}` or `AF_{pop}` cell means the source has no data for that population on that row.
-Extra columns beyond these are allowed and ignored.
+Extra columns that are not `AC_`/`AF_` (for example `rsid`) are allowed and ignored. An `AC_`/`AF_`
+column naming a population that is not in the `source_meta.yml` legend is rejected.
 
 ### `source_meta.yml` sidecar
 
