@@ -152,10 +152,16 @@ rule create_tsv_index:
         """
         mkdir -p {params.tmp_dir}
         divref create-duckdb-from-tsv \
-            --variants-tsv {input.variants} --source-meta {input.source_meta} \
-            --output-base {params.output_base} --reference-fasta {input.fasta} \
-            --window-size {params.window_size} --contigs {params.contigs} \
-            --polars-chunk-size {params.polars_chunk_size} --tmp-dir {params.tmp_dir} --force &> {log}
+            --variants-tsv {input.variants} \
+            --source-meta {input.source_meta} \
+            --output-base {params.output_base} \
+            --reference-fasta {input.fasta} \
+            --window-size {params.window_size} \
+            --contigs {params.contigs} \
+            --polars-chunk-size {params.polars_chunk_size} \
+            --tmp-dir {params.tmp_dir} \
+            --force \
+            &> {log}
         """
 
 
@@ -175,6 +181,9 @@ rule create_tsv_fasta:
         output_base=f"{WORK_DIR}/output/{{source}}",
     shell:
         """
-        divref create-divref-fasta --duckdb-path {input.duckdb} \
-            --output-base {params.output_base} --contigs {wildcards.chrom} &> {log}
+        divref create-divref-fasta \
+            --duckdb-path {input.duckdb} \
+            --output-base {params.output_base} \
+            --contigs {wildcards.chrom} \
+            &> {log}
         """
