@@ -79,6 +79,32 @@ To override individual settings (e.g. `chromosomes`, `version`, output paths) wi
 editing the shipped configs, append `--config key=value …` after the `--configfile`
 argument.
 
+### Building from a wide variant TSV (no Hail)
+
+`workflows/generate_divref_from_tsv.smk` builds the resource from a documented single-variant
+TSV, with pure Python and no Hail or Spark.
+Point it at a config that lists one or more sources, each with a variant TSV and a
+`source_meta.yml` sidecar:
+
+```bash
+pixi run snakemake -j1 -s workflows/generate_divref_from_tsv.smk \
+    --configfile my_sources.yml
+```
+
+The input TSV format and the `source_meta.yml` sidecar are described in
+[`docs/resource_description.md`](docs/resource_description.md#building-from-a-wide-variant-tsv-no-hail).
+
+By default the reference genome is downloaded from GCS (needs `gcloud auth application-default
+login`). `config_tsv_gcs.yml` and `config_tsv_aws.yml` are reference-genome overlays; layer one
+after a sources-bearing config to change the reference source, e.g. to fetch it from the public
+AWS Open Data mirror with no credentials:
+
+```bash
+pixi run snakemake -j1 -s workflows/generate_divref_from_tsv.smk \
+    --configfile my_sources.yml \
+    --configfile workflows/config/config_tsv_aws.yml
+```
+
 ## Resource Description
 
 The resource that is generated is described in [`docs/resource_description.md`](docs/resource_description.md).
