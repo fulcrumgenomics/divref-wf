@@ -3,15 +3,19 @@
 import logging
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import polars
+import pysam
 import yaml
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import StrictStr
 from pydantic import field_validator
+
+from divref.duckdb_index import sequences_tsv_columns
 
 logger = logging.getLogger(__name__)
 
@@ -242,3 +246,214 @@ def _hail_argmax(values: Sequence[float | None]) -> int:
     if best_index is None:
         raise ValueError("Cannot compute popmax: every population AF is null for this variant.")
     return best_index
+
+
+def _as_int(value: object) -> int:
+    """Narrow a polars row cell (known to be a Python `int`) to `int` without a `cast()`."""
+    if not isinstance(value, int):
+        raise TypeError(f"Expected int, got {type(value).__name__}: {value!r}")
+    return value
+
+
+def _as_str(value: object) -> str:
+    """Narrow a polars row cell (known to be a Python `str`) to `str` without a `cast()`."""
+    if not isinstance(value, str):
+        raise TypeError(f"Expected str, got {type(value).__name__}: {value!r}")
+    return value
+
+
+def _as_optional_float(value: object) -> float | None:
+    """Narrow a polars row cell (a `float` or `None`) without a `cast()`."""
+    if value is None:
+        return None
+    if not isinstance(value, float):
+        raise TypeError(f"Expected float or None, got {type(value).__name__}: {value!r}")
+    return value
+
+
+def _as_optional_int(value: object) -> int | None:
+    """Narrow a polars row cell (an `int` or `None`) without a `cast()`."""
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise TypeError(f"Expected int or None, got {type(value).__name__}: {value!r}")
+    return value
+
+
+# eq=False keeps the default __hash__; frozen+eq would raise TypeError hashing the `values` dict.
+@dataclass(frozen=True, kw_only=True, eq=False)
+class _SequenceRow:
+    """
+    One built sequences-row, plus the `(contig, start, variants)` sort key.
+
+    Attributes:
+        values: The row's column values, keyed by column name. Does not yet contain
+            `sequence_id`; `build_sequences_frame` fills it in after sorting.
+        contig: The row's contig, the primary sort key.
+        start: The row's window start (0-based), the secondary sort key.
+        variants: The row's `variants` string, the sort tie-break.
+    """
+
+    values: dict[str, object]
+    contig: str
+    start: int
+    variants: str
+
+
+def _build_sequence_row(
+    *,
+    record: dict[str, object],
+    populations: list[str],
+    fasta: pysam.FastaFile,
+    window_size: int,
+    source: str,
+) -> _SequenceRow:
+    """
+    Build one variant's sequences row, matching `build_gnomad_variant_table_entries`.
+
+    Args:
+        record: One row of the wide variants frame (`contig, pos, ref, alt` plus `AC_<pop>` /
+            `AF_<pop>` per population), as returned by `polars.DataFrame.iter_rows(named=True)`.
+        populations: Population codes in `source_meta.yml` legend order; drives per-pop column
+            names and popmax order.
+        fasta: Open reference FASTA reader.
+        window_size: Flanking reference context size on each side of the variant.
+        source: Source name; prefixes the annotation columns.
+
+    Returns:
+        The built `_SequenceRow`.
+
+    Raises:
+        ValueError: If the variant's flanking window falls outside the contig's bounds, or if
+            the supplied `ref` does not match the reference bases at `contig:pos`.
+    """
+    contig = _as_str(record["contig"])
+    pos = _as_int(record["pos"])
+    ref = _as_str(record["ref"])
+    alt = _as_str(record["alt"])
+    variants = f"{contig}:{pos}:{ref}:{alt}"
+
+    start = pos - 1 - window_size
+    end = pos - 1 + len(ref) + window_size
+    contig_length = fasta.get_reference_length(contig)
+    if start < 0 or end > contig_length:
+        raise ValueError(
+            f"Variant {variants} window [{start}, {end}) is out of contig bounds "
+            f"[0, {contig_length}) for {contig}."
+        )
+    # Bases as-is (no .upper()) throughout: matches Hail's case-preserving reference reader.
+    # A mismatch here means the input TSV's ref (or its pos) is wrong relative to this
+    # reference -- fail loud rather than silently building a sequence around the wrong context.
+    reference_bases = fasta.fetch(contig, pos - 1, pos - 1 + len(ref))
+    if reference_bases != ref:
+        raise ValueError(
+            f"Variant {variants}: reference bases at {contig}:{pos} are {reference_bases!r}, "
+            f"not the supplied ref {ref!r}."
+        )
+    left = fasta.fetch(contig, start, pos - 1)
+    right = fasta.fetch(contig, pos - 1 + len(ref), end)
+    sequence = left + alt + right
+
+    afs = [_as_optional_float(record[f"AF_{pop}"]) for pop in populations]
+    popmax_index = _hail_argmax(afs)
+    max_pop = populations[popmax_index]
+    popmax_af = afs[popmax_index]
+    popmax_ac = _as_optional_int(record[f"AC_{max_pop}"])
+
+    values: dict[str, object] = {
+        "sequence": sequence,
+        "sequence_length": len(sequence),
+        "n_variants": 1,
+        "contig": contig,
+        "start": start,
+        "end": end,
+        "popmax_empirical_AF": _format_raw_number(popmax_af),
+        "popmax_empirical_AC": popmax_ac,
+        "source": source,
+        f"popmax_estimated_{source}_AF": _format_raw_number(popmax_af),
+        "popmax_fraction_phased": _format_raw_number(1.0),
+        "max_pop": max_pop,
+        "variants": variants,
+    }
+    for pop, af in zip(populations, afs, strict=True):
+        ac = _as_optional_int(record[f"AC_{pop}"])
+        # Hail-matching: `{source}_AF` renders a missing AF as "NA"; empirical_/estimated_ render
+        # it empty (Hail's default missing-Float export) via _format_raw_number(None) -> None.
+        values[f"{source}_AF_{pop}"] = "NA" if af is None else f"{af:.5f}"
+        values[f"empirical_AC_{pop}"] = ac
+        values[f"empirical_AF_{pop}"] = _format_raw_number(af)
+        values[f"fraction_phased_{pop}"] = _format_raw_number(1.0)
+        values[f"estimated_{source}_haplotype_AF_{pop}"] = _format_raw_number(af)
+
+    return _SequenceRow(values=values, contig=contig, start=start, variants=variants)
+
+
+def build_sequences_frame(
+    *,
+    df: polars.DataFrame,
+    populations: list[str],
+    reference: Path,
+    window_size: int,
+    version: str,
+    source: str,
+    sequence_id_offset: int,
+) -> polars.DataFrame:
+    """
+    Build the per-variant "sequences" rows for one wide single-variant TSV.
+
+    Reproduces `build_gnomad_variant_table_entries`'s single-variant semantics in pure Python:
+    for each variant, fetches flanking reference context with `pysam`, computes popmax by
+    replicating `hl.argmax` (skip null AFs, first index wins on ties), and formats per-population
+    columns to match the Hail TSV exporter byte-for-byte. The annotation columns are prefixed
+    with `source` (`<source>_AF_<pop>`, `estimated_<source>_haplotype_AF_<pop>`,
+    `popmax_estimated_<source>_AF`); `empirical_*` and `fraction_phased_*` are not prefixed.
+
+    Args:
+        df: Wide variants frame with `contig, pos, ref, alt` and, per population, `AC_<pop>` /
+            `AF_<pop>` (each nullable).
+        populations: Population codes in `source_meta.yml` legend order; drives per-pop column
+            names and popmax order.
+        reference: Path to the (optionally bgzipped) reference FASTA. Its index is resolved as
+            `reference.with_suffix(".fai")`.
+        window_size: Flanking reference context size on each side of the variant.
+        version: Version identifier baked into `sequence_id` (`DR-{version}-{n}`).
+        source: Source name; prefixes the annotation columns and fills the `source` column.
+        sequence_id_offset: Added to each row's post-sort index to form `sequence_id`.
+
+    Returns:
+        A `polars.DataFrame` with columns exactly `sequences_tsv_columns(populations,
+        af_prefix=source, popmax_estimated_col=f"popmax_estimated_{source}_AF")`, sorted by
+        `(start, variants)` with `sequence_id` assigned in that order.
+
+    Raises:
+        ValueError: If any variant's flanking window falls outside the contig's bounds, or its
+            `ref` does not match the reference bases at its `contig:pos`.
+    """
+    columns = sequences_tsv_columns(
+        populations, af_prefix=source, popmax_estimated_col=f"popmax_estimated_{source}_AF"
+    )
+    if df.height == 0:
+        return polars.DataFrame({column: [] for column in columns})
+
+    with pysam.FastaFile(
+        str(reference), filepath_index=str(reference.with_suffix(".fai"))
+    ) as fasta:
+        rows = [
+            _build_sequence_row(
+                record=record,
+                populations=populations,
+                fasta=fasta,
+                window_size=window_size,
+                source=source,
+            )
+            for record in df.iter_rows(named=True)
+        ]
+
+    # (contig, start, variants) tie-break equals Hail's (contig, min_pos, source, variants) within
+    # a single source (append_contig_to_duckdb_index.py:265-271). `contig` is constant per call
+    # today (one contig is built at a time) but keys the sort correctly if that ever changes.
+    rows.sort(key=lambda row: (row.contig, row.start, row.variants))
+    for index, row in enumerate(rows):
+        row.values["sequence_id"] = f"DR-{version}-{sequence_id_offset + index}"
+
+    return polars.DataFrame([row.values for row in rows]).select(columns)
