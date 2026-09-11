@@ -2,6 +2,7 @@
 
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -192,3 +193,52 @@ def _validate(df: polars.DataFrame, mask: polars.Series, message: str) -> None:
             f"{message} ({bad.height} row(s) failed). First offending variant: "
             f"{first['contig']}:{first['pos']}:{first['ref']}:{first['alt']}"
         )
+
+
+def _format_raw_number(value: float | None) -> str | None:
+    """
+    Render a "raw" AF or fraction-phased value as Hail's TSV exporter does.
+
+    Round to 5 significant figures, keep a decimal point (`1.0`, not `1`), and use scientific
+    notation for small magnitudes. Round-tripping through `float()` restores the decimal point
+    that `%.5g` strips off whole numbers.
+
+    Args:
+        value: The value, or `None` if this population/row has no data.
+
+    Returns:
+        The 5-significant-figure decimal text of `value`, or `None` if `value` is `None`.
+    """
+    if value is None:
+        return None
+    return str(float(f"{value:.5g}"))
+
+
+def _hail_argmax(values: Sequence[float | None]) -> int:
+    """
+    Replicate `hl.argmax`'s index-of-maximum semantics over per-population AFs.
+
+    Null AFs are skipped. On a tie, the first (lowest) index wins, matching Hail's
+    `hl.argmax(unique=False)` default used by `build_gnomad_variant_table_entries`.
+
+    Args:
+        values: Per-population AF values, in population-legend order; a population with no
+            data is `None`.
+
+    Returns:
+        The index of the maximum non-null value.
+
+    Raises:
+        ValueError: If every value is `None`.
+    """
+    best_index: int | None = None
+    best_value: float | None = None
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        if best_value is None or value > best_value:
+            best_value = value
+            best_index = index
+    if best_index is None:
+        raise ValueError("Cannot compute popmax: every population AF is null for this variant.")
+    return best_index
