@@ -1,0 +1,4 @@
+# Overlay for generate_divref_from_tsv.smk: pass AFTER a sources-bearing --configfile,
+# e.g. `--configfile my_sources.yml --configfile config_tsv_aws.yml`.
+# Explicit AWS Open Data source for the reference genome.
+reference_genome_uri: "s3://broad-references/hg38/v0/Homo_sapiens_assembly38.fasta"

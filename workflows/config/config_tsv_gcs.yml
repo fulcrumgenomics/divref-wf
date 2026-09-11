@@ -1,0 +1,4 @@
+# Overlay for generate_divref_from_tsv.smk: pass AFTER a sources-bearing --configfile,
+# e.g. `--configfile my_sources.yml --configfile config_tsv_gcs.yml`.
+# Explicit GCS source for the reference genome (matches the schema default).
+reference_genome_uri: "gs://hail-common/references/Homo_sapiens_assembly38.fasta.gz"
