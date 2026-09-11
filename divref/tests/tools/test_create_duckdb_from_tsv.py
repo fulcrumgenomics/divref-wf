@@ -1,3 +1,5 @@
+import re
+from decimal import Decimal
 from pathlib import Path
 
 import polars as pl
@@ -13,6 +15,11 @@ from divref.tools.create_duckdb_from_tsv import build_sequences_frame
 from divref.tools.create_duckdb_from_tsv import read_and_validate_variants
 from divref.tools.create_duckdb_from_tsv import read_source_metadata
 from divref.tools.create_duckdb_from_tsv import validate_variants_header
+
+# `chr:pos:ref:alt`, as written by hl.variant_str and by build_sequences_frame's `variants` column.
+_VARIANT_PATTERN = re.compile(
+    r"^(?P<contig>[^:]+):(?P<pos>\d+):(?P<ref>[ACGTN]+):(?P<alt>[ACGTN]+)$"
+)
 
 # NB the fixture is `…fa.gz`, so its index is `…fa.fai` (samtools/pysam append `.fai` to the full
 # name). Derive it from the `.fa.gz` path -- `("…fa.gz").with_suffix(".fai")` replaces `.gz` and
@@ -325,3 +332,185 @@ def test_builder_rejects_all_null_popmax(datadir: Path) -> None:
             source="s",
             sequence_id_offset=0,
         )
+
+
+def _sig_fig_half_ulp(value: Decimal) -> Decimal:
+    """Half the decimal place value of `value`'s 5th significant figure (`value` non-zero)."""
+    _, digits, exponent = value.as_tuple()
+    assert isinstance(exponent, int)  # not "n"/"N" (Infinity/NaN); Decimal(<finite text>) never is
+    place = exponent + (len(digits) - 5)
+    return Decimal(1).scaleb(place) / 2
+
+
+def _reconcile_af(empirical_text: str | None, gnomad_text: str) -> float | None:
+    """
+    Recover an AF consistent with both of the golden's two independently-rounded renderings.
+
+    Hail renders the same underlying AF `double` two lossy ways: `gnomAD_AF_<pop>` as `%.5f`
+    (5 decimal places) and `empirical_AF_<pop>` to 5 significant figures. Parsing one back to a
+    float and re-deriving the other can disagree by one digit (double rounding). Each rendering
+    pins the true value to a narrow interval (+/- 0.000005 for the `%.5f` column; half the 5th
+    significant figure for the other); the intervals always intersect, so their midpoint
+    reproduces both golden columns exactly under `build_sequences_frame`'s formatting.
+
+    Args:
+        empirical_text: The golden's `empirical_AF_<pop>` cell, or `None` if this population has
+            no data for this row.
+        gnomad_text: The golden's `gnomAD_AF_<pop>` cell (`"NA"` iff `empirical_text` is `None`).
+
+    Returns:
+        A `float` consistent with both golden renderings, or `None` if there is no data.
+
+    Raises:
+        ValueError: If the two intervals do not intersect. They always should (same true value),
+            so an empty intersection means a regenerated golden broke this reconciliation's
+            assumptions and needs a fresh look.
+    """
+    if empirical_text is None:
+        return None
+    empirical = Decimal(empirical_text)
+    gnomad = Decimal(gnomad_text)
+    half_ulp_gnomad = Decimal("0.000005")
+    half_ulp_empirical = _sig_fig_half_ulp(empirical) if empirical != 0 else Decimal("0.0000005")
+    lo = max(gnomad - half_ulp_gnomad, empirical - half_ulp_empirical)
+    hi = min(gnomad + half_ulp_gnomad, empirical + half_ulp_empirical)
+    if lo > hi:
+        raise ValueError(
+            f"No AF reconciles empirical_AF={empirical_text!r} with gnomAD_AF={gnomad_text!r}: "
+            f"their rounding intervals [{lo}, {hi}] do not intersect."
+        )
+    return float((lo + hi) / 2)
+
+
+def _golden_rows_to_wide_inputs(subset: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
+    """
+    Parse committed golden single-variant rows into `build_sequences_frame`'s wide input shape.
+
+    Splits each row's `variants` (`chr:pos:ref:alt`) into `contig, pos, ref, alt`, and reads each
+    population's `empirical_AC_<pop>` text column back into a numeric `AC_<pop>` column
+    (nullable). `AF_<pop>` is reconstructed from `empirical_AF_<pop>` AND `gnomAD_AF_<pop>` via
+    `_reconcile_af` (see its docstring for why both are needed). The population list is parsed
+    from the golden's own header, so it need not be hardcoded here.
+
+    Args:
+        subset: Single-variant golden rows (`n_variants == 1`), read all-as-strings from the TSV.
+
+    Returns:
+        The wide variants frame `build_sequences_frame` expects, plus the parsed population list.
+    """
+    pops = [
+        column.removeprefix("empirical_AC_")
+        for column in subset.columns
+        if column.startswith("empirical_AC_")
+    ]
+    parsed = subset["variants"].str.extract_groups(_VARIANT_PATTERN.pattern).struct.unnest()
+    wide = pl.DataFrame({
+        "contig": parsed["contig"],
+        "pos": parsed["pos"].cast(pl.Int64),
+        "ref": parsed["ref"],
+        "alt": parsed["alt"],
+        **{f"AC_{p}": subset[f"empirical_AC_{p}"].cast(pl.Int64) for p in pops},
+        **{
+            f"AF_{p}": pl.Series(
+                [
+                    _reconcile_af(empirical_text, gnomad_text)
+                    for empirical_text, gnomad_text in zip(
+                        subset[f"empirical_AF_{p}"].to_list(),
+                        subset[f"gnomAD_AF_{p}"].to_list(),
+                        strict=True,
+                    )
+                ],
+                dtype=pl.Float64,
+            )
+            for p in pops
+        },
+    })
+    return wide, pops
+
+
+def _ref_alt_pairs(subset: pl.DataFrame) -> list[tuple[str, str]]:
+    """Return each row's `(ref, alt)`, parsed from its `variants` (`chr:pos:ref:alt`) string."""
+    parsed = subset["variants"].str.extract_groups(_VARIANT_PATTERN.pattern).struct.unnest()
+    return list(zip(parsed["ref"].to_list(), parsed["alt"].to_list(), strict=True))
+
+
+_SCALAR_CONTENT_COLS = [
+    "sequence",
+    "sequence_length",
+    "n_variants",
+    "contig",
+    "start",
+    "end",
+    "popmax_empirical_AF",
+    "popmax_empirical_AC",
+    "popmax_estimated_gnomad_AF",
+    "popmax_fraction_phased",
+    "max_pop",
+    "variants",
+]
+
+
+def _content_cols(pops: list[str]) -> list[str]:
+    # Scalars PLUS the per-pop families, so the "%.5f"/"NA" formatting is pinned to Hail, not to
+    # the tool's own first output. source and sequence_id are excluded by construction.
+    per_pop = [f"gnomAD_AF_{p}" for p in pops]
+    for p in pops:
+        per_pop += [
+            f"empirical_AC_{p}",
+            f"empirical_AF_{p}",
+            f"fraction_phased_{p}",
+            f"estimated_gnomAD_haplotype_AF_{p}",
+        ]
+    return _SCALAR_CONTENT_COLS + per_pop
+
+
+def test_builder_matches_gnomad_single_variant_golden(datadir: Path) -> None:
+    golden = pl.read_csv(
+        datadir / "duckdb_index_golden" / "sequences.chr1_chrX.tsv",
+        separator="\t",
+        infer_schema_length=0,  # read all as strings; compare formatted text
+    )
+    # Encode the real precondition of the builder (hardcoded fraction_phased=1.0, estimated==AF):
+    # single gnomAD variants only. A regenerated golden with single-variant HGDP haplotypes must
+    # not silently enter this comparison.
+    subset = golden.filter(
+        (pl.col("n_variants") == "1")
+        & (pl.col("source") == "gnomAD_variant")
+        & (pl.col("contig") == "chr1")  # slice covered by the committed test reference
+    )
+    # Catches silent fixture shrinkage (a regenerated golden with fewer/different rows) rather
+    # than the test quietly comparing far fewer rows than intended.
+    assert subset.height == 966
+    df, pops = _golden_rows_to_wide_inputs(subset)  # test helper: parse variants + empirical_* cols
+    # SNP/ins/del are all present in the committed golden (765/66/135); require them, do not skip.
+    kinds = {
+        ("snp" if len(r) == len(a) else "ins" if len(a) > len(r) else "del")
+        for r, a in _ref_alt_pairs(subset)
+    }
+    assert {"snp", "ins", "del"} <= kinds
+    source = "gnomAD_variant"
+    built = build_sequences_frame(
+        df=df,
+        populations=pops,
+        reference=datadir / "test_reference.chr1_chrX.fa.gz",
+        window_size=25,
+        version="9.9",
+        source=source,
+        sequence_id_offset=0,
+    )
+    # The builder source-prefixes the annotation columns, so the VALUES match Hail but the NAMES
+    # carry `source`. Rename the three families back to the golden's legacy gnomAD names, then
+    # compare values (the equivalence being tested is the numbers, not the prefix).
+    built = built.rename({
+        **{f"{source}_AF_{p}": f"gnomAD_AF_{p}" for p in pops},
+        **{
+            f"estimated_{source}_haplotype_AF_{p}": f"estimated_gnomAD_haplotype_AF_{p}"
+            for p in pops
+        },
+        f"popmax_estimated_{source}_AF": "popmax_estimated_gnomad_AF",
+    })
+    cols = _content_cols(pops)
+    # Total-order sort so two alts at one start cannot reorder between the two frames.
+    got = built.select(cols).cast(pl.String).sort(["start", "variants"])
+    exp = subset.select(cols).cast(pl.String).sort(["start", "variants"])
+    assert got.to_dicts() == exp.to_dicts()

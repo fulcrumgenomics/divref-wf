@@ -25,6 +25,7 @@
 
 # claude
 **/.claude
+**/.superpowers
 
 # hail logs
 **/hail*.log
