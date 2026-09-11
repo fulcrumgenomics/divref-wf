@@ -322,9 +322,8 @@ def export_sequences_table_to_tsv(
     cols = sequences_tsv_columns(
         joint_pops_legend, af_prefix="gnomAD", popmax_estimated_col="popmax_estimated_gnomad_AF"
     )
-    assert sorted(expr_by_name) == sorted(cols), (
-        "sequences_tsv_columns and the built expressions have drifted apart."
-    )
+    if sorted(expr_by_name) != sorted(cols):
+        raise RuntimeError("sequences_tsv_columns and the built expressions have drifted apart.")
     ht.select(**{name: expr_by_name[name] for name in cols}).export(str(out_file))
 
 

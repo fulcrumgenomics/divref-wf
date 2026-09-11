@@ -8,6 +8,7 @@ import pytest
 
 from divref.duckdb_index import _stream_tsv_into_sequences
 from divref.duckdb_index import sequences_tsv_columns
+from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.duckdb_index import with_compatibility_flag
 
 
@@ -256,6 +257,27 @@ def test_stream_tsv_flags_overlapping_haplotype(tmp_path: Path) -> None:
         "DR-9.9-1": "PASS",
         "DR-9.9-2": "PASS",
     }
+
+
+def test_stream_sequences_rolls_back_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure mid-stream rolls back the whole transaction, leaving no partial rows."""
+    conn = duckdb.connect()
+    conn.execute("CREATE TABLE sequences (sequence_id VARCHAR)")
+
+    def _insert_then_fail(conn: duckdb.DuckDBPyConnection, **_: object) -> int:
+        conn.execute("INSERT INTO sequences VALUES ('partial')")
+        raise RuntimeError("mid-stream failure")
+
+    monkeypatch.setattr("divref.duckdb_index._stream_tsv_into_sequences", _insert_then_fail)
+
+    with pytest.raises(RuntimeError, match="mid-stream failure"):
+        stream_sequences_tsv_into_duckdb(
+            conn, tsv=Path("unused.tsv"), joint_pops_legend=["afr"], chunk_size=10
+        )
+
+    remaining = conn.execute("SELECT count(*) FROM sequences").fetchone()
+    assert remaining is not None and remaining[0] == 0
+    conn.close()
 
 
 def test_with_compatibility_flag_values() -> None:
