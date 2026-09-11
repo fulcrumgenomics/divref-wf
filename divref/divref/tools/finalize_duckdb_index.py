@@ -6,6 +6,7 @@ from pathlib import Path
 import duckdb
 from fgpyo.io import assert_path_is_readable
 
+from divref.duckdb_index import create_sequence_id_index
 from divref.duckdb_index import sequences_table_exists
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,6 @@ def finalize_duckdb_index(
                 f"DuckDB index {out_duckdb_file} has an empty 'sequences' table; "
                 f"finalizing an index with no rows."
             )
-        # IF NOT EXISTS keeps finalize idempotent: a re-triggered Snakemake rule or a manual retry
-        # over an already-finalized index is a no-op rather than a raw DuckDB "index already exists"
-        # catalog error.
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sequence_id ON sequences(sequence_id)")
+        create_sequence_id_index(conn)
 
     logger.info(f"Created idx_sequence_id index on {out_duckdb_file}.")
