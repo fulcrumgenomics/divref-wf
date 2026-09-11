@@ -124,11 +124,17 @@ def contig_already_appended(conn: duckdb.DuckDBPyConnection, contig: str) -> boo
     return row is not None
 
 
-def scan_sequences_tsv(tsv: Path, joint_pops_legend: list[str]) -> polars.LazyFrame:
+def scan_sequences_tsv(
+    tsv: Path,
+    joint_pops_legend: list[str],
+    *,
+    af_prefix: str = "gnomAD",
+    popmax_estimated_col: str = "popmax_estimated_gnomad_AF",
+) -> polars.LazyFrame:
     """
     Build the typed polars LazyFrame for a sequences TSV.
 
-    The `sequence_id` and `gnomAD_AF_*` columns are explicitly typed as strings so that
+    The `sequence_id` and `{af_prefix}_AF_*` columns are explicitly typed as strings so that
     schema inference cannot misread comma-delimited per-variant AFs as floats.
 
     Every numeric column is pinned explicitly as well. Each contig is appended in its own process
@@ -141,8 +147,12 @@ def scan_sequences_tsv(tsv: Path, joint_pops_legend: list[str]) -> polars.LazyFr
 
     Args:
         tsv: Path to the sequences TSV (plain or bgz-compressed).
-        joint_pops_legend: Ordered list of population codes used to name `gnomAD_AF_{pop}`
+        joint_pops_legend: Ordered list of population codes used to name `{af_prefix}_AF_{pop}`
             columns; must match what `export_sequences_table_to_tsv` wrote.
+        af_prefix: Source prefix for the per-variant AF and estimated-haplotype-AF columns.
+            Defaults to the gnomAD annotation-source naming.
+        popmax_estimated_col: Name of the popmax estimated-AF column. Defaults to the gnomAD
+            annotation-source naming.
 
     Returns:
         A LazyFrame over `tsv` with the full sequences schema applied.
@@ -155,13 +165,15 @@ def scan_sequences_tsv(tsv: Path, joint_pops_legend: list[str]) -> polars.LazyFr
         "end": polars.Int64,
         "popmax_empirical_AF": polars.Float64,
         "popmax_empirical_AC": polars.Int64,
-        "popmax_estimated_gnomad_AF": polars.Float64,
+        popmax_estimated_col: polars.Float64,
         "popmax_fraction_phased": polars.Float64,
-        **{f"gnomAD_AF_{pop}": polars.String for pop in joint_pops_legend},
+        **{f"{af_prefix}_AF_{pop}": polars.String for pop in joint_pops_legend},
         **{f"empirical_AC_{pop}": polars.Int64 for pop in joint_pops_legend},
         **{f"empirical_AF_{pop}": polars.Float64 for pop in joint_pops_legend},
         **{f"fraction_phased_{pop}": polars.Float64 for pop in joint_pops_legend},
-        **{f"estimated_gnomAD_haplotype_AF_{pop}": polars.Float64 for pop in joint_pops_legend},
+        **{
+            f"estimated_{af_prefix}_haplotype_AF_{pop}": polars.Float64 for pop in joint_pops_legend
+        },
     }
     # Hail's TSV export emits "NA" for missing scalar fields; "null" is included for
     # robustness against other writers.
@@ -177,7 +189,7 @@ def scan_sequences_tsv(tsv: Path, joint_pops_legend: list[str]) -> polars.LazyFr
     # always see a string. This matters mostly for single-variant rows where the per-pop
     # cell can degenerate to a bare "NA".
     lf = lf.with_columns([
-        polars.col(f"gnomAD_AF_{pop}").fill_null("NA").cast(polars.String)
+        polars.col(f"{af_prefix}_AF_{pop}").fill_null("NA").cast(polars.String)
         for pop in joint_pops_legend
     ])
     return lf
@@ -188,20 +200,31 @@ def iter_dataframe_chunks(
     tsv: Path,
     joint_pops_legend: list[str],
     chunk_size: int,
+    af_prefix: str = "gnomAD",
+    popmax_estimated_col: str = "popmax_estimated_gnomad_AF",
 ) -> Iterator[polars.DataFrame]:
     """
     Yield non-empty polars DataFrames of up to `chunk_size` rows from a sequences TSV.
 
     Args:
         tsv: Path to the sequences TSV (plain or bgz-compressed).
-        joint_pops_legend: Ordered list of population codes used to name `gnomAD_AF_{pop}`
+        joint_pops_legend: Ordered list of population codes used to name `{af_prefix}_AF_{pop}`
             columns; must match what `export_sequences_table_to_tsv` wrote.
         chunk_size: Maximum rows per yielded DataFrame.
+        af_prefix: Source prefix for the per-variant AF and estimated-haplotype-AF columns.
+            Defaults to the gnomAD annotation-source naming.
+        popmax_estimated_col: Name of the popmax estimated-AF column. Defaults to the gnomAD
+            annotation-source naming.
 
     Yields:
         Polars DataFrame batches read from `tsv`.
     """
-    lf = scan_sequences_tsv(tsv, joint_pops_legend)
+    lf = scan_sequences_tsv(
+        tsv,
+        joint_pops_legend,
+        af_prefix=af_prefix,
+        popmax_estimated_col=popmax_estimated_col,
+    )
     for df in lf.collect_batches(chunk_size=chunk_size):
         if df.height > 0:
             yield df
@@ -238,12 +261,60 @@ def with_compatibility_flag(df: polars.DataFrame) -> polars.DataFrame:
     return df.with_columns(polars.Series("haplotype_filter", flags, dtype=polars.String))
 
 
+def sequences_tsv_columns(
+    joint_pops_legend: list[str], *, af_prefix: str, popmax_estimated_col: str
+) -> list[str]:
+    """
+    The sequences-TSV column order that `export_sequences_table_to_tsv` selects by.
+
+    The pure-Python TSV builder consumes the same list, so the two column layouts cannot drift.
+
+    Args:
+        joint_pops_legend: Ordered list of population codes used to name the per-pop columns.
+        af_prefix: Source prefix for the per-variant AF and estimated-haplotype-AF columns.
+        popmax_estimated_col: Name of the popmax estimated-AF scalar column.
+
+    Returns:
+        Column names in the order `export_sequences_table_to_tsv` writes them.
+    """
+    scalar_columns = [
+        "sequence",
+        "sequence_length",
+        "sequence_id",
+        "n_variants",
+        "contig",
+        "start",
+        "end",
+        "popmax_empirical_AF",
+        "popmax_empirical_AC",
+        "source",
+        popmax_estimated_col,
+        "popmax_fraction_phased",
+        "max_pop",
+        "variants",
+    ]
+    af_columns = [f"{af_prefix}_AF_{pop}" for pop in joint_pops_legend]
+    per_pop_columns = [
+        column
+        for pop in joint_pops_legend
+        for column in (
+            f"empirical_AC_{pop}",
+            f"empirical_AF_{pop}",
+            f"fraction_phased_{pop}",
+            f"estimated_{af_prefix}_haplotype_AF_{pop}",
+        )
+    ]
+    return scalar_columns + af_columns + per_pop_columns
+
+
 def _stream_tsv_into_sequences(
     conn: duckdb.DuckDBPyConnection,
     *,
     tsv: Path,
     joint_pops_legend: list[str],
     chunk_size: int,
+    af_prefix: str = "gnomAD",
+    popmax_estimated_col: str = "popmax_estimated_gnomad_AF",
 ) -> int:
     """
     Stream a per-contig sequences TSV into the DuckDB `sequences` table.
@@ -256,8 +327,10 @@ def _stream_tsv_into_sequences(
     Args:
         conn: Open connection to the DuckDB index.
         tsv: Path to the per-contig sequences TSV produced by `export_sequences_table_to_tsv`.
-        joint_pops_legend: Ordered joint pop legend used to type the `gnomAD_AF_*` columns.
+        joint_pops_legend: Ordered joint pop legend used to type the `{af_prefix}_AF_*` columns.
         chunk_size: Maximum number of rows per polars read batch.
+        af_prefix: Source prefix for the per-variant AF and estimated-haplotype-AF columns.
+        popmax_estimated_col: Name of the popmax estimated-AF scalar column.
 
     Returns:
         The number of rows appended for this contig.
@@ -266,7 +339,14 @@ def _stream_tsv_into_sequences(
         # `haplotype_filter` is appended last in both the schema-defining empty frame and every
         # inserted chunk, so column order stays consistent across the CREATE and the INSERTs.
         empty_df = with_compatibility_flag(
-            scan_sequences_tsv(tsv, joint_pops_legend).limit(0).collect()
+            scan_sequences_tsv(
+                tsv,
+                joint_pops_legend,
+                af_prefix=af_prefix,
+                popmax_estimated_col=popmax_estimated_col,
+            )
+            .limit(0)
+            .collect()
         )
         conn.register("empty_df", empty_df)
         conn.execute("CREATE TABLE sequences AS SELECT * FROM empty_df")
@@ -277,6 +357,8 @@ def _stream_tsv_into_sequences(
         tsv=tsv,
         joint_pops_legend=joint_pops_legend,
         chunk_size=chunk_size,
+        af_prefix=af_prefix,
+        popmax_estimated_col=popmax_estimated_col,
     ):
         chunk_df = with_compatibility_flag(chunk)
         conn.register("chunk_df", chunk_df)
@@ -286,3 +368,45 @@ def _stream_tsv_into_sequences(
         conn.unregister("chunk_df")
         appended_rows += chunk_df.height
     return appended_rows
+
+
+def stream_sequences_tsv_into_duckdb(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    tsv: Path,
+    joint_pops_legend: list[str],
+    chunk_size: int,
+    af_prefix: str = "gnomAD",
+    popmax_estimated_col: str = "popmax_estimated_gnomad_AF",
+) -> int:
+    """
+    Stream a sequences TSV into `sequences` within one transaction; return rows appended.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+        tsv: Path to the per-contig sequences TSV produced by `export_sequences_table_to_tsv`.
+        joint_pops_legend: Ordered joint pop legend used to type the `{af_prefix}_AF_*` columns.
+        chunk_size: Maximum number of rows per polars read batch.
+        af_prefix: Source prefix for the per-variant AF and estimated-haplotype-AF columns.
+            Defaults to the gnomAD annotation-source naming.
+        popmax_estimated_col: Name of the popmax estimated-AF scalar column. Defaults to the
+            gnomAD annotation-source naming.
+
+    Returns:
+        The number of rows appended for this contig.
+    """
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        rows = _stream_tsv_into_sequences(
+            conn,
+            tsv=tsv,
+            joint_pops_legend=joint_pops_legend,
+            chunk_size=chunk_size,
+            af_prefix=af_prefix,
+            popmax_estimated_col=popmax_estimated_col,
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return rows
