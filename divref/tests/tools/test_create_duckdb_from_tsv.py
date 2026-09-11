@@ -346,23 +346,12 @@ def _reconcile_af(empirical_text: str | None, gnomad_text: str) -> float | None:
     """
     Recover an AF consistent with both of the golden's two independently-rounded renderings.
 
-    Hail's TSV exporter renders the SAME underlying AF `double` through two different, lossy
-    text formats: `gnomAD_AF_<pop>` is `%.5f` of it (fixed 5 decimal places), while
-    `empirical_AF_<pop>` is Hail's default `Double`-to-text export, which rounds to 5
-    SIGNIFICANT figures -- a different rounding position. Naively parsing just one of the two
-    texts back to a `float` and re-deriving the other with `build_sequences_frame`'s own
-    formatting can disagree with the golden by one part in the last digit ("double rounding":
-    e.g. the true AF 366/8052 renders as `empirical_AF_amr="0.045455"` and
-    `gnomAD_AF_amr="0.04545"`, but parsing "0.045455" back to a `float` and applying `%.5f` gives
-    "0.04546" -- the parsed float lands a few ULPs on the wrong side of a rounding boundary that
-    the true, unrounded double never was near).
-
-    Both renderings independently pin the true value to a narrow decimal interval
-    (`gnomAD_AF_<pop>`'s is +/- 0.000005 around its 5 decimal places; `empirical_AF_<pop>`'s is
-    half a unit of its 5th significant figure). Since both intervals contain the same true value,
-    their intersection is never empty; any point in it -- here, the midpoint -- is
-    indistinguishable from the true value under both roundings, so re-applying
-    `build_sequences_frame`'s formatting reproduces both golden columns exactly.
+    Hail renders the same underlying AF `double` two lossy ways: `gnomAD_AF_<pop>` as `%.5f`
+    (5 decimal places) and `empirical_AF_<pop>` to 5 significant figures. Parsing one back to a
+    float and re-deriving the other can disagree by one digit (double rounding). Each rendering
+    pins the true value to a narrow interval (+/- 0.000005 for the `%.5f` column; half the 5th
+    significant figure for the other); the intervals always intersect, so their midpoint
+    reproduces both golden columns exactly under `build_sequences_frame`'s formatting.
 
     Args:
         empirical_text: The golden's `empirical_AF_<pop>` cell, or `None` if this population has
@@ -373,10 +362,9 @@ def _reconcile_af(empirical_text: str | None, gnomad_text: str) -> float | None:
         A `float` consistent with both golden renderings, or `None` if there is no data.
 
     Raises:
-        ValueError: If the two renderings' intervals do not intersect -- they are always
-            supposed to (both were rounded from the same true value), so an empty intersection
-            means a regenerated golden no longer matches this reconciliation's assumptions and
-            needs a fresh look, rather than silently returning a meaningless midpoint.
+        ValueError: If the two intervals do not intersect. They always should (same true value),
+            so an empty intersection means a regenerated golden broke this reconciliation's
+            assumptions and needs a fresh look.
     """
     if empirical_text is None:
         return None
@@ -510,9 +498,9 @@ def test_builder_matches_gnomad_single_variant_golden(datadir: Path) -> None:
         source=source,
         sequence_id_offset=0,
     )
-    # Addendum A: the builder source-prefixes the annotation columns, so the VALUES match Hail but
-    # the NAMES carry `source`. Rename the three families back to the golden's legacy gnomAD names,
-    # then compare values (the equivalence being tested is the numbers, not the prefix).
+    # The builder source-prefixes the annotation columns, so the VALUES match Hail but the NAMES
+    # carry `source`. Rename the three families back to the golden's legacy gnomAD names, then
+    # compare values (the equivalence being tested is the numbers, not the prefix).
     built = built.rename({
         **{f"{source}_AF_{p}": f"gnomAD_AF_{p}" for p in pops},
         **{
