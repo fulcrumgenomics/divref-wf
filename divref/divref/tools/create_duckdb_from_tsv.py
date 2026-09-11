@@ -197,20 +197,11 @@ def _validate(df: polars.DataFrame, mask: polars.Series, message: str) -> None:
 
 def _format_raw_number(value: float | None) -> str | None:
     """
-    Render a "raw" (unformatted) AF or fraction-phased value as Hail's TSV exporter does.
+    Render a "raw" AF or fraction-phased value as Hail's TSV exporter does.
 
-    Verified against every gnomAD single-variant row's true (Hail-table) AF in the committed
-    golden: Hail's `Double` -> text export for these columns rounds to 5 SIGNIFICANT figures
-    (not decimal places), then renders that rounded value with the shortest round-trip decimal
-    text -- switching to scientific notation for small magnitudes and always keeping a decimal
-    point (`1.0`, not `1`). `%.5g` alone does not reproduce this: Python's `%g` strips the
-    decimal point off whole numbers (`1`, not `1.0`), so the 5-sig-fig rounding and the
-    decimal-text rendering must be two separate steps. This differs from
-    `polars.Series.cast(pl.String)` on a plain `Float64` column, which neither rounds to 5
-    significant figures nor ever emits scientific notation. Unlike the `%.5f`-formatted
-    `<source>_AF_<pop>` column, `popmax_empirical_AF`, `empirical_AF_<pop>`,
-    `fraction_phased_*`, and `estimated_<source>_haplotype_AF_<pop>` are passed through this way
-    rather than left as a native `Float64` column.
+    Round to 5 significant figures, keep a decimal point (`1.0`, not `1`), and use scientific
+    notation for small magnitudes. Round-tripping through `float()` restores the decimal point
+    that `%.5g` strips off whole numbers.
 
     Args:
         value: The value, or `None` if this population/row has no data.
