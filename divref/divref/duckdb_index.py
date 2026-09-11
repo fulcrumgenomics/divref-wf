@@ -35,40 +35,46 @@ def write_metadata_tables(
     conn: duckdb.DuckDBPyConnection,
     *,
     window_size: int,
-    hgdp_pops_legend: list[str],
-    gnomad_pops_legend: list[str],
+    haplotype_pops_legend: list[str],
+    variant_pops_legend: list[str],
     joint_pops_legend: list[str],
+    annotation_af_prefix: str,
     version: str,
 ) -> None:
     """
-    Write the window_size, three *_pops_legend, and VERSION metadata tables.
+    Write the window_size, three *_pops_legend, annotation_af_prefix, and VERSION metadata tables.
 
     Args:
         conn: Open DuckDB connection to the index being initialized.
         window_size: Flanking reference-context size stored in the `window_size` table.
-        hgdp_pops_legend: HGDP-source population codes stored as JSON in
-            `hgdp_haplotype_pops_legend`.
-        gnomad_pops_legend: gnomAD-source population codes stored as JSON in
-            `gnomad_variant_pops_legend`.
+        haplotype_pops_legend: Haplotype-source population codes stored as JSON in
+            `haplotype_pops_legend`.
+        variant_pops_legend: Variant-annotation-source population codes stored as JSON in
+            `variant_pops_legend`.
         joint_pops_legend: Joint population codes stored as JSON in `joint_pops_legend`.
+        annotation_af_prefix: Annotation-AF column prefix stored in `annotation_af_prefix`.
         version: Version identifier stored in the `VERSION` table.
     """
-    # Write the five tables in one transaction so an interrupted init leaves no partially
+    # Write the six tables in one transaction so an interrupted init leaves no partially
     # populated index (which a later append/finalize would then read as corrupt metadata).
     conn.execute("BEGIN TRANSACTION")
     try:
         conn.execute("CREATE TABLE window_size AS SELECT ? AS window_size", [window_size])
         conn.execute(
-            "CREATE TABLE hgdp_haplotype_pops_legend AS SELECT ? AS pops_legend",
-            [json.dumps(hgdp_pops_legend)],
+            "CREATE TABLE haplotype_pops_legend AS SELECT ? AS pops_legend",
+            [json.dumps(haplotype_pops_legend)],
         )
         conn.execute(
-            "CREATE TABLE gnomad_variant_pops_legend AS SELECT ? AS pops_legend",
-            [json.dumps(gnomad_pops_legend)],
+            "CREATE TABLE variant_pops_legend AS SELECT ? AS pops_legend",
+            [json.dumps(variant_pops_legend)],
         )
         conn.execute(
             "CREATE TABLE joint_pops_legend AS SELECT ? AS pops_legend",
             [json.dumps(joint_pops_legend)],
+        )
+        conn.execute(
+            "CREATE TABLE annotation_af_prefix AS SELECT ? AS af_prefix",
+            [annotation_af_prefix],
         )
         conn.execute("CREATE TABLE VERSION AS SELECT ? AS version", [version])
         conn.execute("COMMIT")
@@ -79,8 +85,8 @@ def write_metadata_tables(
 
 _LEGEND_TABLES = frozenset({
     "joint_pops_legend",
-    "gnomad_variant_pops_legend",
-    "hgdp_haplotype_pops_legend",
+    "variant_pops_legend",
+    "haplotype_pops_legend",
 })
 
 

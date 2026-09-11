@@ -32,9 +32,9 @@ def init_duckdb_index(
 
     Reads only the `globals.pops` of each input Hail table (no row scan), validates that every
     contig shares the same gnomAD and HGDP population legends, computes the joint legend, and
-    writes the `window_size`, `hgdp_haplotype_pops_legend`, `gnomad_variant_pops_legend`,
-    `joint_pops_legend`, and `VERSION` tables. Does not create `sequences` — the first
-    `append_contig_to_duckdb_index` does that.
+    writes the `window_size`, `haplotype_pops_legend`, `variant_pops_legend`,
+    `joint_pops_legend`, `annotation_af_prefix`, and `VERSION` tables. Does not create `sequences`
+    — the first `append_contig_to_duckdb_index` does that.
 
     Args:
         in_table_pairs_tsv: TSV with 'contig', 'haplotype_table_path' (optional), and
@@ -86,9 +86,10 @@ def init_duckdb_index(
         write_metadata_tables(
             conn,
             window_size=window_size,
-            hgdp_pops_legend=hgdp_pops_legend,
-            gnomad_pops_legend=gnomad_pops_legend,
+            haplotype_pops_legend=hgdp_pops_legend,
+            variant_pops_legend=gnomad_pops_legend,
             joint_pops_legend=joint_pops_legend,
+            annotation_af_prefix="gnomAD",
             version=version,
         )
 

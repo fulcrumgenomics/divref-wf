@@ -370,8 +370,8 @@ def _resolve_legends_and_remaps(
     Raises:
         ValueError: If this contig's gnomAD or HGDP source legend disagrees with the stored legend.
     """
-    stored_gnomad_pops: list[str] = read_legend(conn, "gnomad_variant_pops_legend")
-    stored_hgdp_pops: list[str] = read_legend(conn, "hgdp_haplotype_pops_legend")
+    stored_gnomad_pops: list[str] = read_legend(conn, "variant_pops_legend")
+    stored_hgdp_pops: list[str] = read_legend(conn, "haplotype_pops_legend")
     joint_pops_legend: list[str] = read_legend(conn, "joint_pops_legend")
 
     # Re-read this contig's source legends with the shared validator. Passing a single-element list
