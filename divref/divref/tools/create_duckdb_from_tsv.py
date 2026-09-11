@@ -482,12 +482,14 @@ def create_duckdb_from_tsv(
     """
     Build a standalone DivRef DuckDB index from a wide single-variant TSV (no Hail).
 
-    Reads the `source_meta.yml` sidecar and the wide variants TSV, writes the metadata tables
-    (Addendum A: `annotation_af_prefix=source_name`, `haplotype_pops_legend=[]` since this source
-    has no haplotype track), then for each contig in `contigs`: builds that contig's sequences
-    rows, writes them to a per-contig TSV, and streams the TSV into the `sequences` table.
-    `sequence_id` numbering continues across contigs from the current row count, exactly as
-    `append_contig_to_duckdb_index` does. Finally builds the `sequence_id` index.
+    Reads `source_meta.yml` and the wide variants TSV, then:
+
+    1. Writes the metadata tables (`annotation_af_prefix=source_name`, `haplotype_pops_legend=[]`
+       since this source has no haplotype track).
+    2. For each contig in `contigs`, builds that contig's sequences rows, writes them to a
+       per-contig TSV, and streams the TSV into the `sequences` table. `sequence_id` numbering
+       continues across contigs from the current row count, as `append_contig_to_duckdb_index` does.
+    3. Builds the `sequence_id` index.
 
     Args:
         variants_tsv: Path to the wide single-variant TSV (`contig, pos, ref, alt` plus
@@ -535,7 +537,7 @@ def create_duckdb_from_tsv(
             haplotype_pops_legend=[],
             variant_pops_legend=meta.populations,
             joint_pops_legend=meta.populations,
-            # Addendum A: drives the `<source>_AF_<pop>` annotation-column names.
+            # Drives the `<source>_AF_<pop>` annotation-column names.
             annotation_af_prefix=meta.source_name,
             version=meta.version,
         )
@@ -548,12 +550,14 @@ def create_duckdb_from_tsv(
                 stray_contig,
             )
 
-        for contig in contigs:
+        # dict.fromkeys dedupes while preserving order, so a contig is never built twice.
+        for contig in dict.fromkeys(contigs):
             contig_df = df.filter(polars.col("contig") == contig)
             if contig_df.height == 0:
                 logger.warning("No variants for contig %s.", contig)
-                continue
-
+            # Do not skip an empty contig: streaming its header-only frame still creates the
+            # `sequences` table, so an all-empty --contigs set yields a valid empty index rather
+            # than crashing in create_sequence_id_index (matches the append path).
             frame = build_sequences_frame(
                 df=contig_df,
                 populations=meta.populations,
@@ -567,9 +571,7 @@ def create_duckdb_from_tsv(
                 sequence_id_offset=sequences_row_count(conn),
             )
 
-            # Write into the configured tmp_dir (honoring it, not the system TMPDIR); only the
-            # file is created here, so nothing leaks. This repo has a recurring /private/tmp
-            # fill problem from tools that ignore tmp_dir.
+            # Write into the configured tmp_dir, not the system TMPDIR.
             tsv_dir = output_base.parent if retain_per_contig_tsvs else tmp_dir
             contig_tsv = tsv_dir / f"{output_base.name}.{contig}.sequences.tsv"
             frame.write_csv(contig_tsv, separator="\t")
@@ -579,7 +581,7 @@ def create_duckdb_from_tsv(
                     tsv=contig_tsv,
                     joint_pops_legend=meta.populations,
                     chunk_size=polars_chunk_size,
-                    # Addendum A: read back the `<source>_AF_<pop>` columns just written.
+                    # Read back the `<source>_AF_<pop>` columns just written.
                     af_prefix=meta.source_name,
                     popmax_estimated_col=f"popmax_estimated_{meta.source_name}_AF",
                 )

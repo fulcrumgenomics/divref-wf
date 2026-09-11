@@ -34,9 +34,32 @@ def test_tsv_index_e2e(datadir: Path, tmp_path: Path) -> None:
     )
 
     # Every row is a single-variant, PASS-filtered row from the "test_cohort" source, and the
-    # per-pop annotation columns are prefixed with the source name (Addendum A).
+    # per-pop annotation columns are prefixed with the source name.
     assert got["n_variants"].to_list() == [1] * got.height
     assert got["source"].to_list() == ["test_cohort"] * got.height
     assert got["haplotype_filter"].to_list() == ["PASS"] * got.height
     assert "test_cohort_AF_afr" in got.columns
     assert "test_cohort_AF_eas" in got.columns
+
+
+def test_tsv_index_all_empty_contigs_yields_valid_empty_index(
+    datadir: Path, tmp_path: Path
+) -> None:
+    """Requesting only contigs absent from the TSV finalizes a valid, empty index (no crash)."""
+    out_base = tmp_path / "empty"
+    create_duckdb_from_tsv(
+        variants_tsv=datadir / "tsv_source" / "variants.tsv",  # chr1-only fixture
+        source_meta=datadir / "tsv_source" / "source_meta.yml",
+        output_base=out_base,
+        reference_fasta=datadir / "test_reference.chr1_chrX.fa.gz",
+        window_size=25,
+        contigs=["chr2"],  # absent from the TSV, so every requested contig is empty
+        force=True,
+    )
+
+    conn = duckdb.connect(str(f"{out_base}.index.duckdb"), read_only=True)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
+    finally:
+        conn.close()
+    assert count is not None and count[0] == 0
