@@ -23,16 +23,12 @@ def test_read_source_metadata_happy(datadir: Path) -> None:
         pytest.param(
             {"populations": ["afr", "afr"]}, "unique", id="duplicate-populations-rejected"
         ),
-        # A YAML `version: 1.10` (unquoted) parses as float 1.1 and would silently corrupt the
-        # resource identity DR-{version}-N; StrictStr must reject the non-string scalar.
         pytest.param({"version": 1.10}, "version", id="non-string-version-rejected"),
-        # Addendum A: source_name becomes a column-name prefix + DuckDB base name.
         pytest.param(
             {"source_name": "my cohort"},
             "identifier|source_name",
             id="non-identifier-source-name-rejected",
         ),
-        # Addendum A: each population becomes a column-name suffix (`empirical_AC_<pop>`).
         pytest.param(
             {"populations": ["af-r"]},
             "identifier|population",

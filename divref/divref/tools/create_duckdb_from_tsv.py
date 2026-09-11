@@ -13,8 +13,8 @@ from pydantic import field_validator
 
 logger = logging.getLogger(__name__)
 
-# Addendum A: source_name is a column-name prefix (`<source>_AF_<pop>`) and the DuckDB base name;
-# each population is a column-name suffix (`empirical_AC_<pop>`). Both must be bare identifiers.
+# source_name and each population are interpolated into column names (`<source>_AF_<pop>`,
+# `empirical_AC_<pop>`), so both must be valid identifiers.
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 
@@ -24,8 +24,7 @@ class SourceMetadata(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_name: StrictStr
-    # StrictStr so an unquoted YAML `version: 1.10` (float 1.1) is rejected, not coerced to "1.1"
-    # and baked into sequence_id DR-{version}-N.
+    # StrictStr: an unquoted YAML `version: 1.10` (float 1.1) would corrupt DR-{version}-N.
     version: StrictStr
     reference_genome: Literal["GRCh38"]
     populations: list[str]
