@@ -72,7 +72,7 @@ def read_source_metadata(path: Path) -> SourceMetadata:
     return SourceMetadata.model_validate(data)
 
 
-_FIXED_COLUMNS = ["contig", "pos", "ref", "alt"]
+_FIXED_COLUMNS = frozenset({"contig", "pos", "ref", "alt"})
 
 
 def validate_variants_header(columns: list[str], populations: list[str]) -> None:
@@ -145,42 +145,41 @@ def read_and_validate_variants(path: Path, populations: list[str]) -> polars.Dat
     # 1. The four fixed columns are required and non-null (empty pos/contig must not slip through
     #    the range/regex checks below, which are null-tolerant).
     for col in ("contig", "pos", "ref", "alt"):
-        _assert(df, df[col].is_not_null(), f"{col} is required and must be non-empty")
+        _validate(df, df[col].is_not_null(), f"{col} is required and must be non-empty")
     # 2. Fixed-field ranges/shape. str.contains is vectorized and null-safe (null -> caught above).
-    _assert(df, df["pos"] >= 1, "pos must be >= 1")
-    _assert(
+    _validate(df, df["pos"] >= 1, "pos must be >= 1")
+    _validate(
         df, df["contig"].str.contains(_CONTIG_PATTERN), "contig must be a GRCh38 main-contig token"
     )
     for col in ("ref", "alt"):
-        _assert(
+        _validate(
             df, df[col].str.contains(_BASE_PATTERN), f"{col} must be A/C/G/T/N bases (^[ACGTN]+$)"
         )
-    # 3. Per-pop: both-or-neither, then ranges on the defined cells.
+    # 3. Per-pop: AC/AF must both be present or neither for each population, with range guards.
     for pop in populations:
         af, ac = df[f"AF_{pop}"], df[f"AC_{pop}"]
-        _assert(
+        _validate(
             df,
             af.is_null() == ac.is_null(),
             f"AC_{pop} and AF_{pop} must both be present or both empty",
         )
-        _assert(df, af.is_null() | ((af >= 0.0) & (af <= 1.0)), f"AF_{pop} must be in [0, 1]")
-        _assert(df, ac.is_null() | (ac >= 0), f"AC_{pop} must be >= 0")
+        _validate(df, af.is_null() | ((af >= 0.0) & (af <= 1.0)), f"AF_{pop} must be in [0, 1]")
+        _validate(df, ac.is_null() | (ac >= 0), f"AC_{pop} must be >= 0")
     # 4. At least one defined AF per row (computed once).
     any_af = df.select(
         polars.any_horizontal(polars.col(f"AF_{p}").is_not_null() for p in populations).alias("m")
     )["m"]
-    _assert(df, any_af, "each variant must have at least one defined AF")
+    _validate(df, any_af, "each variant must have at least one defined AF")
     return df
 
 
-def _assert(df: polars.DataFrame, mask: polars.Series, message: str) -> None:
+def _validate(df: polars.DataFrame, mask: polars.Series, message: str) -> None:
     """
     Raise a `ValueError` naming the first offending variant if `mask` is not all-True.
 
     Args:
         df: The variants frame being validated; must have `contig, pos, ref, alt` columns.
-        mask: A boolean, row-aligned series. A null counts as a failure (`fill_null(False)`), so
-            a null-derived comparison cannot silently pass by being dropped from the filter.
+        mask: A boolean, row-aligned series. A null counts as a failure (`fill_null(False)`).
         message: The failure reason to report.
 
     Raises:
@@ -190,6 +189,6 @@ def _assert(df: polars.DataFrame, mask: polars.Series, message: str) -> None:
     if bad.height > 0:
         first = bad.row(0, named=True)
         raise ValueError(
-            f"{message}. First offending variant: "
+            f"{message} ({bad.height} row(s) failed). First offending variant: "
             f"{first['contig']}:{first['pos']}:{first['ref']}:{first['alt']}"
         )
