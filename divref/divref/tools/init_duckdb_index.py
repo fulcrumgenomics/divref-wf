@@ -11,10 +11,10 @@ from fgpyo.io import assert_path_is_readable
 from fgpyo.io import assert_path_is_writable
 from hail.context import Env
 
-from divref.duckdb_index import TablePair
-from divref.duckdb_index import compute_joint_legend
-from divref.duckdb_index import read_and_validate_pops_legends
 from divref.duckdb_index import write_metadata_tables
+from divref.gnomad_index_source import TablePair
+from divref.gnomad_index_source import compute_joint_legend
+from divref.gnomad_index_source import read_and_validate_pops_legends
 
 logger = logging.getLogger(__name__)
 
