@@ -280,22 +280,22 @@ def _as_optional_int(value: object) -> int | None:
     return value
 
 
-# eq=False so the frozen dataclass keeps a (default, identity-based) __hash__ despite its `dict`
-# field; without it, frozen+eq would synthesize a __hash__ that raises TypeError on the
-# unhashable `values` dict. Never compared or hashed by value -- only field-accessed.
+# eq=False keeps the default __hash__; frozen+eq would raise TypeError hashing the `values` dict.
 @dataclass(frozen=True, kw_only=True, eq=False)
 class _SequenceRow:
     """
-    One built sequences-row, plus the `(start, variants)` sort key.
+    One built sequences-row, plus the `(contig, start, variants)` sort key.
 
     Attributes:
         values: The row's column values, keyed by column name. Does not yet contain
             `sequence_id`; `build_sequences_frame` fills it in after sorting.
-        start: The row's window start (0-based), used as the primary sort key.
-        variants: The row's `variants` string, used as the sort tie-break.
+        contig: The row's contig, the primary sort key.
+        start: The row's window start (0-based), the secondary sort key.
+        variants: The row's `variants` string, the sort tie-break.
     """
 
     values: dict[str, object]
+    contig: str
     start: int
     variants: str
 
@@ -314,10 +314,11 @@ def _build_sequence_row(
     Args:
         record: One row of the wide variants frame (`contig, pos, ref, alt` plus `AC_<pop>` /
             `AF_<pop>` per population), as returned by `polars.DataFrame.iter_rows(named=True)`.
-        populations: Ordered population codes; drives per-pop column names and popmax order.
+        populations: Population codes in `source_meta.yml` legend order; drives per-pop column
+            names and popmax order.
         fasta: Open reference FASTA reader.
         window_size: Flanking reference context size on each side of the variant.
-        source: Source name; prefixes the annotation columns (Addendum A).
+        source: Source name; prefixes the annotation columns.
 
     Returns:
         The built `_SequenceRow`.
@@ -376,13 +377,15 @@ def _build_sequence_row(
     }
     for pop, af in zip(populations, afs, strict=True):
         ac = _as_optional_int(record[f"AC_{pop}"])
+        # Hail-matching: `{source}_AF` renders a missing AF as "NA"; empirical_/estimated_ render
+        # it empty (Hail's default missing-Float export) via _format_raw_number(None) -> None.
         values[f"{source}_AF_{pop}"] = "NA" if af is None else f"{af:.5f}"
         values[f"empirical_AC_{pop}"] = ac
         values[f"empirical_AF_{pop}"] = _format_raw_number(af)
         values[f"fraction_phased_{pop}"] = _format_raw_number(1.0)
         values[f"estimated_{source}_haplotype_AF_{pop}"] = _format_raw_number(af)
 
-    return _SequenceRow(values=values, start=start, variants=variants)
+    return _SequenceRow(values=values, contig=contig, start=start, variants=variants)
 
 
 def build_sequences_frame(
@@ -408,13 +411,13 @@ def build_sequences_frame(
     Args:
         df: Wide variants frame with `contig, pos, ref, alt` and, per population, `AC_<pop>` /
             `AF_<pop>` (each nullable).
-        populations: Ordered population codes; drives per-pop column names and popmax order.
+        populations: Population codes in `source_meta.yml` legend order; drives per-pop column
+            names and popmax order.
         reference: Path to the (optionally bgzipped) reference FASTA. Its index is resolved as
             `reference.with_suffix(".fai")`.
         window_size: Flanking reference context size on each side of the variant.
         version: Version identifier baked into `sequence_id` (`DR-{version}-{n}`).
-        source: Source name; prefixes the annotation columns (Addendum A) and fills the
-            `source` column.
+        source: Source name; prefixes the annotation columns and fills the `source` column.
         sequence_id_offset: Added to each row's post-sort index to form `sequence_id`.
 
     Returns:
@@ -446,9 +449,10 @@ def build_sequences_frame(
             for record in df.iter_rows(named=True)
         ]
 
-    # (start, variants) tie-break equals Hail's (min_pos, source, variants) within a single
-    # source (append_contig_to_duckdb_index.py:265-271).
-    rows.sort(key=lambda row: (row.start, row.variants))
+    # (contig, start, variants) tie-break equals Hail's (contig, min_pos, source, variants) within
+    # a single source (append_contig_to_duckdb_index.py:265-271). `contig` is constant per call
+    # today (one contig is built at a time) but keys the sort correctly if that ever changes.
+    rows.sort(key=lambda row: (row.contig, row.start, row.variants))
     for index, row in enumerate(rows):
         row.values["sequence_id"] = f"DR-{version}-{sequence_id_offset + index}"
 
