@@ -1,0 +1,4 @@
+source_name: test_cohort
+version: "9.9"
+reference_genome: GRCh38
+populations: [afr, eas]
