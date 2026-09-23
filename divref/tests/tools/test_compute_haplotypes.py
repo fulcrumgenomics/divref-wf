@@ -1181,16 +1181,25 @@ def test_compute_haplotypes_filters_chry_call_rate_by_default() -> None:
     assert default == 0.8
 
 
-@pytest.mark.parametrize("min_chry_male_call_rate", [-0.1, 1.1], ids=["below_zero", "above_one"])
-def test_compute_haplotypes_rejects_out_of_range_chry_call_rate(
-    tmp_path: Path, min_chry_male_call_rate: float
+@pytest.mark.parametrize(
+    "min_chry_male_call_rate,expected_error",
+    [
+        pytest.param(-0.1, "chrY male call rate must be in", id="below_zero_rejected"),
+        pytest.param(1.1, "chrY male call rate must be in", id="above_one_rejected"),
+        # Accepted values pass this check and stop at the next one (Spark memory is set to 0).
+        pytest.param(0.0, "Spark driver memory", id="zero_accepted"),
+        pytest.param(1.0, "Spark driver memory", id="one_accepted"),
+    ],
+)
+def test_compute_haplotypes_validates_chry_call_rate_range(
+    tmp_path: Path, min_chry_male_call_rate: float, expected_error: str
 ) -> None:
-    """The chrY male call-rate cutoff must be a fraction in [0, 1]."""
+    """The chrY male call-rate cutoff must be a fraction in [0, 1], ends included."""
     vcf_path = tmp_path / "in.vcf.gz"
     vcf_path.touch()
     for ht in ("va.ht", "sa.ht"):
         (tmp_path / ht).mkdir()
-    with pytest.raises(ValueError, match="chrY male call rate must be in"):
+    with pytest.raises(ValueError, match=expected_error):
         compute_haplotypes(
             vcfs_path=vcf_path,
             gnomad_va_file=tmp_path / "va.ht",
@@ -1200,6 +1209,7 @@ def test_compute_haplotypes_rejects_out_of_range_chry_call_rate(
             haplotype_freq_threshold=0.005,
             output_base=tmp_path / "haplos",
             min_chry_male_call_rate=min_chry_male_call_rate,
+            spark_driver_memory_gb=0,
         )
 
 
