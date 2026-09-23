@@ -1304,6 +1304,8 @@ def test_compute_haplotypes_chry_nonpar(
     """
     ChrY non-PAR haplotypes form with haploid carrier counts and fraction_phased ~ 1.0.
 
+    Runs with the male call-rate filter off (0.0) and at the 0.8 default.
+
     This covers chrY haplotype formation only. The downstream index/FASTA leg is contig-agnostic
     (a plain contig+position reference lookup), so the chr1 DuckDB-index e2e tests cover chrY there.
     """
@@ -1512,6 +1514,7 @@ def test_carrier_strands(
 _XY_CALLED = ("XY", True)
 _XY_MISSING = ("XY", False)
 _XX_MISSING = ("XX", False)
+_XX_CALLED = ("XX", True)
 
 
 @pytest.mark.parametrize(
@@ -1547,10 +1550,18 @@ _XX_MISSING = ("XX", False)
         pytest.param(
             "chrY",
             10_000_000,
+            [_XY_CALLED] * 3 + [_XY_MISSING] + [_XX_CALLED] * 2,
+            0.8,
+            False,
+            id="chry_called_non_males_not_counted",
+        ),
+        pytest.param(
+            "chrY",
+            10_000_000,
             [_XY_MISSING] * 4,
             0.0,
             True,
-            id="chry_zero_cutoff_is_no_op",
+            id="chry_zero_cutoff_keeps_variant_with_males",
         ),
         pytest.param(
             "chrY",
@@ -1560,6 +1571,7 @@ _XX_MISSING = ("XX", False)
             False,
             id="chry_no_males_dropped_as_it_has_no_carriers",
         ),
+        pytest.param("chrY", 1_000_000, [_XY_MISSING] * 4, 0.8, True, id="chry_par1_not_filtered"),
         pytest.param(
             "chrX",
             50_000_000,
