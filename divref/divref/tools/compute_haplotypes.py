@@ -89,9 +89,9 @@ def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) ->
     """
     Drop chrY non-PAR variants where too few XY males have a genotype call.
 
-    chrY genotypes are unimputed, so missing male calls shrink AN and inflate local AF. The call
-    rate is over the XY males in `mt`; other karyotypes are always missing on chrY and do not
-    count. A variant with no XY males is dropped, since no sample can carry it. Other loci pass.
+    chrY genotypes are unimputed, so missing male calls shrink AN and inflate the local AF. Only
+    the XY males in `mt` count. A variant with no XY males is dropped, since no sample can carry
+    it. Other loci pass.
 
     Args:
         mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
@@ -104,9 +104,8 @@ def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) ->
     male_call_rate = hl.agg.count_where(is_male & hl.is_defined(mt.GT)) / hl.agg.count_where(
         is_male
     )
-    return mt.filter_rows(
-        ~mt.locus.in_y_nonpar() | hl.coalesce(male_call_rate >= min_male_call_rate, False)
-    )
+    # No XY males gives 0/0 = NaN, which fails the comparison, so the row drops.
+    return mt.filter_rows(~mt.locus.in_y_nonpar() | (male_call_rate >= min_male_call_rate))
 
 
 def _compute_locus_groups(
@@ -673,9 +672,8 @@ def compute_haplotypes(
     carrier strand), and XY males are counted haploid via the left strand only, the same
     single-strand treatment as chrX non-PAR males. Autosomes and PAR1/PAR2 are unaffected.
 
-    chrY genotypes are unimputed, so male calls can be missing. Missing calls shrink AN and
-    inflate the local AF, and they cluster in chrY repeat regions. So chrY non-PAR variants with a
-    male call rate below `min_chry_male_call_rate` are dropped before haplotype formation.
+    chrY non-PAR variants with a male call rate below `min_chry_male_call_rate` are dropped before
+    haplotype formation (see `_filter_chry_low_call_rate`).
 
     Args:
         vcfs_path: Path or glob pattern to input VCF files.
@@ -693,7 +691,8 @@ def compute_haplotypes(
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`.
         min_chry_male_call_rate: Minimum fraction of XY males with a genotype call to keep a chrY
-            non-PAR variant. Other contigs are not filtered. 0 disables the filter.
+            non-PAR variant. Other contigs are not filtered. 0 keeps every chrY variant with an XY
+            male.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
@@ -759,7 +758,8 @@ def compute_haplotypes(
         pop_legend,
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
-    # Before the per-population entry filter, which would otherwise count as missing calls.
+    # Before the entry filter, so the rate covers all XY males, not only those in populations above
+    # the AF threshold (filtered entries leave both the numerator and the denominator).
     mt = _filter_chry_low_call_rate(mt, min_chry_male_call_rate)
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
