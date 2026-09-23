@@ -1,5 +1,6 @@
 """Tests for the compute_haplotypes tool."""
 
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -1174,6 +1175,34 @@ def test_compute_haplotypes(
     assert all(len(r.all_pop_freqs) > 0 for r in results)
 
 
+def test_compute_haplotypes_filters_chry_call_rate_by_default() -> None:
+    """Direct CLI runs get the chrY call-rate filter without opting in."""
+    default = inspect.signature(compute_haplotypes).parameters["min_chry_male_call_rate"].default
+    assert default == 0.8
+
+
+@pytest.mark.parametrize("min_chry_male_call_rate", [-0.1, 1.1], ids=["below_zero", "above_one"])
+def test_compute_haplotypes_rejects_out_of_range_chry_call_rate(
+    tmp_path: Path, min_chry_male_call_rate: float
+) -> None:
+    """The chrY male call-rate cutoff must be a fraction in [0, 1]."""
+    vcf_path = tmp_path / "in.vcf.gz"
+    vcf_path.touch()
+    for ht in ("va.ht", "sa.ht"):
+        (tmp_path / ht).mkdir()
+    with pytest.raises(ValueError, match="chrY male call rate must be in"):
+        compute_haplotypes(
+            vcfs_path=vcf_path,
+            gnomad_va_file=tmp_path / "va.ht",
+            gnomad_sa_file=tmp_path / "sa.ht",
+            window_size=5000,
+            variant_freq_threshold=0.005,
+            haplotype_freq_threshold=0.005,
+            output_base=tmp_path / "haplos",
+            min_chry_male_call_rate=min_chry_male_call_rate,
+        )
+
+
 def test_compute_haplotypes_no_variants(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
@@ -1245,10 +1274,32 @@ def test_compute_haplotypes_chrx_nonpar(
     assert all(len(r.variants) == len(r.haplotype) for r in results)
 
 
+@pytest.mark.parametrize(
+    "min_chry_male_call_rate,expected_lengths,expected_acs",
+    [
+        pytest.param(
+            0.0,
+            [2, 2, 2, 2, 2, 2, 2, 2, 2, 3],
+            [1, 1, 1, 1, 2, 2, 3, 5, 7, 50],
+            id="no_call_rate_filter",
+        ),
+        # 11 of the fixture's 106 variants have a male call rate < 0.8. Three haplotypes contain one
+        # (chrY:2915697 A>C, 2915693 CA>C, 2920654 CCTT>C) and drop; the other seven are unchanged.
+        pytest.param(
+            0.8,
+            [2, 2, 2, 2, 2, 2, 3],
+            [1, 1, 2, 3, 5, 7, 50],
+            id="call_rate_filter_drops_low_call_rate_haplotypes",
+        ),
+    ],
+)
 def test_compute_haplotypes_chry_nonpar(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
     tmp_path: Path,
+    min_chry_male_call_rate: float,
+    expected_lengths: list[int],
+    expected_acs: list[int],
 ) -> None:
     """
     ChrY non-PAR haplotypes form with haploid carrier counts and fraction_phased ~ 1.0.
@@ -1270,15 +1321,15 @@ def test_compute_haplotypes_chry_nonpar(
             haplotype_freq_threshold=0.005,
             output_base=output_base,
             temp_dir=tmp_path / "hail_tmp",
+            min_chry_male_call_rate=min_chry_male_call_rate,
         )
     result = hl.read_table(f"{output_base}.ht").collect()
 
     # Exact regression lock on the committed chrY fixture. Counting a male's single chrY twice would
     # double every empirical AC, so pinning the whole multiset guards the haploid convention.
-    assert len(result) == 10
-    assert sorted(len(r.haplotype) for r in result) == [2, 2, 2, 2, 2, 2, 2, 2, 2, 3]
+    assert sorted(len(r.haplotype) for r in result) == expected_lengths
     assert all(len(r.variants) == len(r.haplotype) for r in result)
-    assert sorted(r.max_empirical_AC for r in result) == [1, 1, 1, 1, 2, 2, 3, 5, 7, 50]
+    assert sorted(r.max_empirical_AC for r in result) == expected_acs
 
     # chrY does not recombine, so a haplotype's rarest component is unique to it and every carrier
     # of it carries the whole haplotype: fraction_phased = AC_hap / AC_component ~ 1.0. This is
