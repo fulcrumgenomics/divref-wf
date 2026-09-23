@@ -62,6 +62,10 @@ chrY non-PAR haplotypes come from the unphased chrY release VCF and cover `XY` m
 - Individuals are annotated with continental ancestry using [gnomAD labels](https://gnomad.broadinstitute.org/data).
 - Only variants in the HGDP+1KG subset of gnomAD 3.1.2 are considered for inclusion. For the autosomes and chrX this is because variants only present in the full genomes dataset have no associated phased genotypes; chrY genotypes come from the HGDP+1KG chrY release VCF.
 - Variants with less than 0.5%AF in the full gnomAD 3.1.2 genomes (n=76,156) dataset in all of the populations are removed.
+- chrY non-PAR variants where fewer than 80% of `XY` males have a genotype call are removed (`hgdp_1kg_min_chry_male_call_rate`).
+  chrY genotypes are unimputed, and missing male calls shrink AN and inflate the local AF.
+  Low call-rate sites cluster in chrY repeat regions.
+  chrY empirical AFs come from about 250 to 550 males per population, so they are noisier than on the other contigs.
 - Haplotypes are formed by grouping each sample's phased (or haploid, on chrY non-PAR) alt-carrier variants into adjacency blocks (consecutive variants within `sequence_window_size` = 25bp of one another) and counting how often each two-or-more-variant sub-haplotype recurs across samples. The algorithm, and its rewrite from DivRef 1.1's two-pass window binning, is described in [Improving haplotype computation](docs/blog.md#improving-haplotype-computation).
 - For each haplotype a per-population empirical AF, phase ratio (`fraction_phased`), and `estimated_gnomad_AF` are computed; `max_pop` is the population with the highest empirical AF, and haplotypes whose `estimated_gnomad_AF` is < 0.5% are removed. See [Estimating gnomAD allele frequency for a haplotype](docs/blog.md#estimating-gnomad-allele-frequency-for-a-haplotype) for the full calculation and filtering.
 
