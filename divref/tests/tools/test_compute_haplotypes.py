@@ -14,6 +14,7 @@ from divref.tools.compute_haplotypes import _attach_component_info
 from divref.tools.compute_haplotypes import _carrier_strands
 from divref.tools.compute_haplotypes import _compute_metrics
 from divref.tools.compute_haplotypes import _enumerate_subfragments
+from divref.tools.compute_haplotypes import _filter_chry_low_call_rate
 from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import _haploid_adjusted_call
 from divref.tools.compute_haplotypes import compute_haplotypes
@@ -1455,3 +1456,84 @@ def test_carrier_strands(
     mt = mt.annotate_entries(is_left=is_left, is_right=is_right)
     r = mt.entries().collect()[0]
     assert r.is_left == expected_left and r.is_right == expected_right
+
+
+_XY_CALLED = ("XY", True)
+_XY_MISSING = ("XY", False)
+_XX_MISSING = ("XX", False)
+
+
+@pytest.mark.parametrize(
+    "contig,position,samples,min_male_call_rate,expected_kept",
+    [
+        pytest.param(
+            "chrY", 10_000_000, [_XY_CALLED] * 4, 0.8, True, id="chry_all_males_called_kept"
+        ),
+        pytest.param(
+            "chrY",
+            10_000_000,
+            [_XY_CALLED] * 3 + [_XY_MISSING],
+            0.8,
+            False,
+            id="chry_below_cutoff_dropped",
+        ),
+        pytest.param(
+            "chrY",
+            10_000_000,
+            [_XY_CALLED] * 4 + [_XY_MISSING],
+            0.8,
+            True,
+            id="chry_exactly_at_cutoff_kept",
+        ),
+        pytest.param(
+            "chrY",
+            10_000_000,
+            [_XY_CALLED] * 2 + [_XX_MISSING] * 3,
+            0.8,
+            True,
+            id="chry_missing_females_not_counted",
+        ),
+        pytest.param(
+            "chrY",
+            10_000_000,
+            [_XY_MISSING] * 4,
+            0.0,
+            True,
+            id="chry_zero_cutoff_is_no_op",
+        ),
+        pytest.param(
+            "chrY",
+            10_000_000,
+            [_XX_MISSING] * 3,
+            0.0,
+            False,
+            id="chry_no_males_dropped_as_it_has_no_carriers",
+        ),
+        pytest.param(
+            "chrX",
+            50_000_000,
+            [_XY_MISSING] * 4,
+            0.8,
+            True,
+            id="chrx_nonpar_not_filtered",
+        ),
+        pytest.param("chr1", 1_000_000, [_XY_MISSING] * 4, 0.8, True, id="autosome_not_filtered"),
+    ],
+)
+def test_filter_chry_low_call_rate(
+    hail_context: None,  # noqa: ARG001
+    contig: str,
+    position: int,
+    samples: list[tuple[str, bool]],
+    min_male_call_rate: float,
+    expected_kept: bool,
+) -> None:
+    """ChrY non-PAR variants are dropped when too few XY males have a call; others pass."""
+    mt = hl.utils.range_matrix_table(n_rows=1, n_cols=len(samples))
+    karyotypes = hl.literal([karyotype for karyotype, _ in samples])
+    called = hl.literal([is_called for _, is_called in samples])
+    mt = mt.annotate_cols(sex_karyotype=karyotypes[mt.col_idx])
+    mt = mt.annotate_rows(locus=hl.locus(contig, position, reference_genome="GRCh38"))
+    mt = mt.annotate_entries(GT=hl.or_missing(called[mt.col_idx], hl.call(0)))
+    result = _filter_chry_low_call_rate(mt, min_male_call_rate)
+    assert (result.count_rows() == 1) == expected_kept

@@ -85,6 +85,30 @@ def _carrier_strands(
     return is_left, is_right
 
 
+def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) -> hl.MatrixTable:
+    """
+    Drop chrY non-PAR variants where too few XY males have a genotype call.
+
+    chrY genotypes are unimputed, so missing male calls shrink AN and inflate local AF. The call
+    rate is over the XY males in `mt`; other karyotypes are always missing on chrY and do not
+    count. A variant with no XY males is dropped, since no sample can carry it. Other loci pass.
+
+    Args:
+        mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
+        min_male_call_rate: Minimum fraction of XY males with a call to keep a chrY variant.
+
+    Returns:
+        `mt` without the chrY non-PAR rows below `min_male_call_rate`.
+    """
+    is_male = mt.sex_karyotype == "XY"
+    male_call_rate = hl.agg.count_where(is_male & hl.is_defined(mt.GT)) / hl.agg.count_where(
+        is_male
+    )
+    return mt.filter_rows(
+        ~mt.locus.in_y_nonpar() | hl.coalesce(male_call_rate >= min_male_call_rate, False)
+    )
+
+
 def _compute_locus_groups(
     variants_ht: hl.Table,
     window_size: int,
