@@ -143,9 +143,9 @@ properties:
     minimum: 0
     maximum: 1
     description: |
-      Minimum fraction of XY males with a genotype call to keep a chrY non-PAR variant in
-      `divref compute-haplotypes`. Other contigs are not filtered. 0 keeps every chrY variant
-      with an XY male.
+      Minimum fraction of XY males in `hgdp_1kg_populations`, pooled across populations, with a
+      genotype call to keep a chrY non-PAR variant in `divref compute-haplotypes`. Other contigs
+      are not filtered. 0 keeps every chrY variant with an XY male.
     default: 0.8
 
   gnomad_variant_annotation_source:

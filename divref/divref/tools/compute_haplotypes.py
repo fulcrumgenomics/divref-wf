@@ -89,9 +89,9 @@ def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) ->
     """
     Drop chrY non-PAR variants where too few XY males have a genotype call.
 
-    chrY genotypes are unimputed, so missing male calls shrink AN and inflate the local AF. Only
-    the XY males in `mt` count. A variant with no XY males is dropped, since no sample can carry
-    it. Other loci pass.
+    chrY genotypes are unimputed, so missing male calls shrink AN and inflate the local AF. The rate
+    pools all XY males in `mt`, so the result depends on which populations survive the column
+    filter. A variant with no XY males is dropped, since no sample can carry it. Other loci pass.
 
     Args:
         mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
