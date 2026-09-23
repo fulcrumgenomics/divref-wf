@@ -91,7 +91,7 @@ def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) ->
 
     chrY genotypes are unimputed, so missing male calls shrink AN and inflate the local AF. The rate
     pools all XY males in `mt`, so the result depends on which populations survive the column
-    filter. A variant with no XY males is dropped, since no sample can carry it. Other loci pass.
+    filter. If `mt` has no XY males, 0/0 is NaN and every chrY non-PAR row drops. Other loci pass.
 
     Args:
         mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
@@ -104,7 +104,6 @@ def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) ->
     male_call_rate = hl.agg.count_where(is_male & hl.is_defined(mt.GT)) / hl.agg.count_where(
         is_male
     )
-    # No XY males gives 0/0 = NaN, which fails the comparison, so the row drops.
     return mt.filter_rows(~mt.locus.in_y_nonpar() | (male_call_rate >= min_male_call_rate))
 
 
@@ -691,14 +690,17 @@ def compute_haplotypes(
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`.
         min_chry_male_call_rate: Minimum fraction of XY males with a genotype call to keep a chrY
-            non-PAR variant. Other contigs are not filtered. 0 keeps every chrY variant with an XY
-            male.
+            non-PAR variant. Other contigs are not filtered. 0 keeps every chrY non-PAR variant.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
         min_partitions: Minimum partitions for `import_vcf`. Higher values give finer map-side
             granularity, reducing per-task memory in the downstream entries->blocks shuffle.
             Default 64 (the prior hard-coded value).
+
+    Raises:
+        ValueError: If `min_chry_male_call_rate` is outside [0, 1], a Spark memory setting is
+            below 1GB, or no variants pass `variant_freq_threshold`.
     """
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)

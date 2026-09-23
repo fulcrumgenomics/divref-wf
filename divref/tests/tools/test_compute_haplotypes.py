@@ -1579,7 +1579,7 @@ _XX_CALLED = ("XX", True)
             [_XX_MISSING] * 3,
             0.0,
             False,
-            id="chry_no_males_dropped_as_it_has_no_carriers",
+            id="chry_no_males_in_mt_drops_row",
         ),
         pytest.param("chrY", 1_000_000, [_XY_MISSING] * 4, 0.8, True, id="chry_par1_not_filtered"),
         pytest.param(
