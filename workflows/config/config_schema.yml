@@ -144,8 +144,8 @@ properties:
     maximum: 1
     description: |
       Minimum fraction of XY males with a genotype call to keep a chrY non-PAR variant in
-      `divref compute-haplotypes`. chrY genotypes are unimputed, and missing male calls inflate
-      the local allele frequency. Other contigs are not filtered. 0 disables the filter.
+      `divref compute-haplotypes`. Other contigs are not filtered. 0 keeps every chrY variant
+      with an XY male.
     default: 0.8
 
   gnomad_variant_annotation_source:
