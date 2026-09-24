@@ -632,7 +632,7 @@ def compute_haplotypes(
     variant_freq_threshold: float,
     haplotype_freq_threshold: float,
     output_base: Path,
-    min_chry_male_call_rate: float = 0.8,
+    min_chry_male_call_rate: float | None = None,
     temp_dir: Path = Path("/tmp"),
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
@@ -687,7 +687,8 @@ def compute_haplotypes(
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`.
         min_chry_male_call_rate: Minimum fraction of XY males with a genotype call to keep a chrY
-            non-PAR variant. Other contigs are not filtered. 0 keeps every chrY non-PAR variant.
+            non-PAR variant. Omit it to skip the filter. Pass it for chrY input only: other
+            contigs keep every row but still pay for the per-row call-rate count.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
@@ -703,7 +704,7 @@ def compute_haplotypes(
     assert_directory_exists(gnomad_va_file)
     assert_directory_exists(gnomad_sa_file)
 
-    if not 0 <= min_chry_male_call_rate <= 1:
+    if min_chry_male_call_rate is not None and not 0 <= min_chry_male_call_rate <= 1:
         raise ValueError(f"chrY male call rate must be in [0, 1]. Saw {min_chry_male_call_rate}.")
     if spark_driver_memory_gb < 1:
         raise ValueError(
@@ -757,8 +758,9 @@ def compute_haplotypes(
         pop_legend,
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
-    # Before the per-population AF entry filter, so the rate counts every XY male.
-    mt = _filter_chry_low_call_rate(mt, min_chry_male_call_rate)
+    if min_chry_male_call_rate is not None:
+        # Before the per-population AF entry filter, so the rate counts every XY male.
+        mt = _filter_chry_low_call_rate(mt, min_chry_male_call_rate)
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
 
