@@ -1,7 +1,7 @@
 """Tests for the compute_haplotypes tool."""
 
-import inspect
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 from unittest.mock import patch
@@ -15,7 +15,7 @@ from divref.tools.compute_haplotypes import _attach_component_info
 from divref.tools.compute_haplotypes import _carrier_strands
 from divref.tools.compute_haplotypes import _compute_metrics
 from divref.tools.compute_haplotypes import _enumerate_subfragments
-from divref.tools.compute_haplotypes import _filter_chry_low_call_rate
+from divref.tools.compute_haplotypes import _filter_low_call_rate
 from divref.tools.compute_haplotypes import _form_parent_blocks
 from divref.tools.compute_haplotypes import _haploid_adjusted_call
 from divref.tools.compute_haplotypes import compute_haplotypes
@@ -1096,17 +1096,18 @@ def test_compute_haplotypes_passes_min_partitions(
 
 
 @pytest.mark.parametrize(
-    "min_chry_male_call_rate,expected_filter_calls",
+    "min_call_rate,expected_filter_calls",
     [
         pytest.param(None, 0, id="no_cutoff_skips_call_rate_filter"),
-        pytest.param(0.8, 1, id="nonzero_cutoff_applies_call_rate_filter"),
+        pytest.param(0.0, 1, id="zero_cutoff_still_applies_call_rate_filter"),
+        pytest.param(0.8, 1, id="cutoff_given_applies_call_rate_filter"),
     ],
 )
 def test_compute_haplotypes_applies_call_rate_filter_only_when_given(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
     tmp_path: Path,
-    min_chry_male_call_rate: float | None,
+    min_call_rate: float | None,
     expected_filter_calls: int,
 ) -> None:
     """Without a cutoff the per-row call-rate aggregation is skipped entirely."""
@@ -1114,26 +1115,32 @@ def test_compute_haplotypes_applies_call_rate_filter_only_when_given(
     class _StopEarlyError(Exception):
         pass
 
+    run = partial(
+        compute_haplotypes,
+        vcfs_path=datadir / "chr1_100001_200000.vcf.gz",
+        gnomad_va_file=datadir / "chr1_100001_200000.gnomad_afs.ht",
+        gnomad_sa_file=datadir / "hgdp_1kg_sample_metadata.extract.ht",
+        window_size=5000,
+        variant_freq_threshold=0.0,
+        haplotype_freq_threshold=0.0,
+        output_base=tmp_path / "out",
+        temp_dir=tmp_path / "hail_tmp",
+    )
+
     with (
         patch("divref.tools.compute_haplotypes.hl.init"),
         patch(
-            "divref.tools.compute_haplotypes._filter_chry_low_call_rate",
-            wraps=_filter_chry_low_call_rate,
+            "divref.tools.compute_haplotypes._filter_low_call_rate",
+            wraps=_filter_low_call_rate,
         ) as call_rate_filter,
         patch("divref.tools.compute_haplotypes._compute_locus_groups", side_effect=_StopEarlyError),
         pytest.raises(_StopEarlyError),
     ):
-        compute_haplotypes(
-            vcfs_path=datadir / "chr1_100001_200000.vcf.gz",
-            gnomad_va_file=datadir / "chr1_100001_200000.gnomad_afs.ht",
-            gnomad_sa_file=datadir / "hgdp_1kg_sample_metadata.extract.ht",
-            window_size=5000,
-            variant_freq_threshold=0.0,
-            haplotype_freq_threshold=0.0,
-            output_base=tmp_path / "out",
-            temp_dir=tmp_path / "hail_tmp",
-            min_chry_male_call_rate=min_chry_male_call_rate,
-        )
+        # The None case omits the argument, so it also covers the default.
+        if min_call_rate is None:
+            run()
+        else:
+            run(min_call_rate=min_call_rate)
 
     assert call_rate_filter.call_count == expected_filter_calls
 
@@ -1218,26 +1225,20 @@ def test_compute_haplotypes(
     assert all(len(r.all_pop_freqs) > 0 for r in results)
 
 
-def test_compute_haplotypes_skips_chry_call_rate_filter_by_default() -> None:
-    """The caller opts in to the chrY call-rate filter; by default it does not run."""
-    default = inspect.signature(compute_haplotypes).parameters["min_chry_male_call_rate"].default
-    assert default is None
-
-
 @pytest.mark.parametrize(
-    "min_chry_male_call_rate,expected_error",
+    "min_call_rate,expected_error",
     [
-        pytest.param(-0.1, "chrY male call rate must be in", id="below_zero_rejected"),
-        pytest.param(1.1, "chrY male call rate must be in", id="above_one_rejected"),
+        pytest.param(-0.1, "Min call rate must be in", id="below_zero_rejected"),
+        pytest.param(1.1, "Min call rate must be in", id="above_one_rejected"),
         # Accepted values pass this check and stop at the next one (Spark memory is set to 0).
         pytest.param(0.0, "Spark driver memory", id="zero_accepted"),
         pytest.param(1.0, "Spark driver memory", id="one_accepted"),
     ],
 )
-def test_compute_haplotypes_validates_chry_call_rate_range(
-    tmp_path: Path, min_chry_male_call_rate: float, expected_error: str
+def test_compute_haplotypes_validates_min_call_rate_range(
+    tmp_path: Path, min_call_rate: float, expected_error: str
 ) -> None:
-    """The chrY male call-rate cutoff must be a fraction in [0, 1], ends included."""
+    """The call-rate cutoff must be a fraction in [0, 1], ends included."""
     vcf_path = tmp_path / "in.vcf.gz"
     vcf_path.touch()
     for ht in ("va.ht", "sa.ht"):
@@ -1251,7 +1252,7 @@ def test_compute_haplotypes_validates_chry_call_rate_range(
             variant_freq_threshold=0.005,
             haplotype_freq_threshold=0.005,
             output_base=tmp_path / "haplos",
-            min_chry_male_call_rate=min_chry_male_call_rate,
+            min_call_rate=min_call_rate,
             spark_driver_memory_gb=0,
         )
 
@@ -1328,7 +1329,7 @@ def test_compute_haplotypes_chrx_nonpar(
 
 
 @pytest.mark.parametrize(
-    "min_chry_male_call_rate,expected_lengths,expected_acs",
+    "min_call_rate,expected_lengths,expected_acs",
     [
         pytest.param(
             None,
@@ -1350,7 +1351,7 @@ def test_compute_haplotypes_chry_nonpar(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
     tmp_path: Path,
-    min_chry_male_call_rate: float | None,
+    min_call_rate: float | None,
     expected_lengths: list[int],
     expected_acs: list[int],
 ) -> None:
@@ -1374,7 +1375,7 @@ def test_compute_haplotypes_chry_nonpar(
             haplotype_freq_threshold=0.005,
             output_base=output_base,
             temp_dir=tmp_path / "hail_tmp",
-            min_chry_male_call_rate=min_chry_male_call_rate,
+            min_call_rate=min_call_rate,
         )
     result = hl.read_table(f"{output_base}.ht").collect()
 
@@ -1569,7 +1570,7 @@ _XX_CALLED = ("XX", True)
 
 
 @pytest.mark.parametrize(
-    "contig,position,samples,min_male_call_rate,expected_kept",
+    "contig,position,samples,min_call_rate,expected_kept",
     [
         pytest.param(
             "chrY", 10_000_000, [_XY_CALLED] * 4, 0.8, True, id="chry_all_males_called_kept"
@@ -1622,32 +1623,56 @@ _XX_CALLED = ("XX", True)
             False,
             id="chry_no_males_in_mt_drops_row",
         ),
-        pytest.param("chrY", 1_000_000, [_XY_MISSING] * 4, 0.8, True, id="chry_par1_not_filtered"),
+        # Off chrY non-PAR every sample counts: 3 of 5 called is below 0.8, while a males-only
+        # denominator would give 3 of 3 and keep the row.
+        pytest.param(
+            "chrY",
+            1_000_000,
+            [_XY_CALLED] * 3 + [_XX_MISSING] * 2,
+            0.8,
+            False,
+            id="chry_par1_counts_all_samples",
+        ),
         pytest.param(
             "chrX",
             50_000_000,
-            [_XY_MISSING] * 4,
+            [_XY_CALLED] * 3 + [_XX_MISSING] * 2,
+            0.8,
+            False,
+            id="chrx_nonpar_counts_all_samples",
+        ),
+        pytest.param(
+            "chr1",
+            1_000_000,
+            [_XY_CALLED] * 3 + [_XX_MISSING] * 2,
+            0.8,
+            False,
+            id="autosome_counts_all_samples",
+        ),
+        pytest.param(
+            "chr1",
+            1_000_000,
+            [_XY_CALLED] * 2 + [_XX_CALLED] * 2 + [_XX_MISSING],
             0.8,
             True,
-            id="chrx_nonpar_not_filtered",
+            id="autosome_called_females_count",
         ),
-        pytest.param("chr1", 1_000_000, [_XY_MISSING] * 4, 0.8, True, id="autosome_not_filtered"),
     ],
 )
-def test_filter_chry_low_call_rate(
+def test_filter_low_call_rate(
     hail_context: None,  # noqa: ARG001
     contig: str,
     position: int,
     samples: list[tuple[str, bool]],
-    min_male_call_rate: float,
+    min_call_rate: float,
     expected_kept: bool,
 ) -> None:
-    """ChrY non-PAR variants are dropped when too few XY males have a call; others pass."""
+    """Rows drop when too few samples able to carry the locus have a call."""
     mt = hl.utils.range_matrix_table(n_rows=1, n_cols=len(samples))
     karyotypes = hl.literal([karyotype for karyotype, _ in samples])
     called = hl.literal([is_called for _, is_called in samples])
     mt = mt.annotate_cols(sex_karyotype=karyotypes[mt.col_idx])
     mt = mt.annotate_rows(locus=hl.locus(contig, position, reference_genome="GRCh38"))
     mt = mt.annotate_entries(GT=hl.or_missing(called[mt.col_idx], hl.call(0)))
-    result = _filter_chry_low_call_rate(mt, min_male_call_rate)
+    result = _filter_low_call_rate(mt, min_call_rate)
     assert (result.count_rows() == 1) == expected_kept

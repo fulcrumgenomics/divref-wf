@@ -98,26 +98,24 @@ def _carrier_strands(
     return is_left, is_right
 
 
-def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) -> hl.MatrixTable:
+def _filter_low_call_rate(mt: hl.MatrixTable, min_call_rate: float) -> hl.MatrixTable:
     """
-    Drop chrY non-PAR variants where too few XY males have a genotype call.
+    Drop rows where too few of the samples able to carry the locus have a genotype call.
 
-    chrY genotypes are unimputed, so missing male calls shrink AN and inflate the local AF. The rate
-    pools all XY males in `mt`. With no XY males, 0/0 is NaN and every chrY non-PAR row drops.
-    Other loci pass.
+    Missing calls shrink AN and inflate the local AF. The denominator is every sample in `mt`,
+    except on chrY non-PAR, where only XY males count (see `_is_excluded_on_chry`). A chrY non-PAR
+    row with no XY males gives 0/0, which is NaN, so it drops.
 
     Args:
         mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
-        min_male_call_rate: Minimum fraction of XY males with a call to keep a chrY variant.
+        min_call_rate: Minimum fraction of those samples with a call to keep a row.
 
     Returns:
-        `mt` without the chrY non-PAR rows below `min_male_call_rate`.
+        `mt` without the rows below `min_call_rate`.
     """
-    is_male = mt.sex_karyotype == "XY"
-    male_call_rate = hl.agg.count_where(is_male & hl.is_defined(mt.GT)) / hl.agg.count_where(
-        is_male
-    )
-    return mt.filter_rows(~mt.locus.in_y_nonpar() | (male_call_rate >= min_male_call_rate))
+    can_carry = ~_is_excluded_on_chry(mt.locus, mt.sex_karyotype)
+    call_rate = hl.agg.count_where(can_carry & hl.is_defined(mt.GT)) / hl.agg.count_where(can_carry)
+    return mt.filter_rows(call_rate >= min_call_rate)
 
 
 def _compute_locus_groups(
@@ -645,7 +643,7 @@ def compute_haplotypes(
     variant_freq_threshold: float,
     haplotype_freq_threshold: float,
     output_base: Path,
-    min_chry_male_call_rate: float | None = None,
+    min_call_rate: float | None = None,
     temp_dir: Path = Path("/tmp"),
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
@@ -699,9 +697,9 @@ def compute_haplotypes(
             `{output_base}.variants.ht`, `.blocks.ht`, `.parents.ht`, and `.hap_ac.ht`
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`.
-        min_chry_male_call_rate: Minimum fraction of XY males with a genotype call to keep a chrY
-            non-PAR variant. Omit it to skip the filter. Pass it for chrY input only: other
-            contigs keep every row but still pay for the per-row call-rate count.
+        min_call_rate: Minimum fraction of samples with a genotype call to keep a variant. On chrY
+            non-PAR only XY males count. Omit it to skip the filter. Imputed genotypes have no
+            missing calls, so the filter only matters for unimputed input such as chrY.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
@@ -710,15 +708,15 @@ def compute_haplotypes(
             Default 64 (the prior hard-coded value).
 
     Raises:
-        ValueError: If `min_chry_male_call_rate` is outside [0, 1], a Spark memory setting is
+        ValueError: If `min_call_rate` is outside [0, 1], a Spark memory setting is
             below 1GB, or no variants pass `variant_freq_threshold`.
     """
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
     assert_directory_exists(gnomad_sa_file)
 
-    if min_chry_male_call_rate is not None and not 0 <= min_chry_male_call_rate <= 1:
-        raise ValueError(f"chrY male call rate must be in [0, 1]. Saw {min_chry_male_call_rate}.")
+    if min_call_rate is not None and not 0 <= min_call_rate <= 1:
+        raise ValueError(f"Min call rate must be in [0, 1]. Saw {min_call_rate}.")
     if spark_driver_memory_gb < 1:
         raise ValueError(
             f"Spark driver memory must be at least 1GB. Saw {spark_driver_memory_gb}GB."
@@ -771,9 +769,9 @@ def compute_haplotypes(
         pop_legend,
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
-    if min_chry_male_call_rate is not None:
-        # Before the per-population AF entry filter, so the rate counts every XY male.
-        mt = _filter_chry_low_call_rate(mt, min_chry_male_call_rate)
+    if min_call_rate is not None:
+        # Before the per-population AF entry filter, so the rate counts every eligible sample.
+        mt = _filter_low_call_rate(mt, min_call_rate)
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
 
