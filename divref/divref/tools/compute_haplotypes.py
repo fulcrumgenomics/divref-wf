@@ -13,6 +13,22 @@ from divref import defaults
 logger = logging.getLogger(__name__)
 
 
+def _is_excluded_on_chry(
+    locus: hl.LocusExpression, sex_karyotype: hl.StringExpression
+) -> hl.BooleanExpression:
+    """
+    True for a non-XY sample (XX, aneuploid, or undefined karyotype) at a chrY non-PAR locus.
+
+    Args:
+        locus: The variant locus expression.
+        sex_karyotype: The sample's sex-karyotype string expression.
+
+    Returns:
+        A defined boolean expression; an undefined karyotype counts as excluded.
+    """
+    return locus.in_y_nonpar() & hl.coalesce(sex_karyotype != "XY", True)
+
+
 def _haploid_adjusted_call(
     locus: hl.LocusExpression,
     gt: hl.CallExpression,
@@ -46,10 +62,9 @@ def _haploid_adjusted_call(
     is_male = sex_karyotype == "XY"
     is_y_nonpar = locus.in_y_nonpar()
     is_haploid_male = (locus.in_x_nonpar() | is_y_nonpar) & is_male
-    exclude_on_y = is_y_nonpar & hl.coalesce(~is_male, True)
     return (
         hl.case(missing_false=True)
-        .when(exclude_on_y, hl.missing(hl.tcall))
+        .when(_is_excluded_on_chry(locus, sex_karyotype), hl.missing(hl.tcall))
         .when(is_haploid_male, hl.call(gt[0]))
         .default(gt)
     )
@@ -77,10 +92,8 @@ def _carrier_strands(
     """
     is_male = sex_karyotype == "XY"
     is_y_nonpar = locus.in_y_nonpar()
-    # Shared with `_haploid_adjusted_call`'s `exclude_on_y`; keep the two predicates in sync.
-    exclude_on_y = is_y_nonpar & hl.coalesce(~is_male, True)
     is_haploid_locus = (locus.in_x_nonpar() & is_male) | is_y_nonpar
-    is_left = (gt[0] != 0) & ~exclude_on_y
+    is_left = (gt[0] != 0) & ~_is_excluded_on_chry(locus, sex_karyotype)
     is_right = hl.if_else(gt.ploidy > 1, gt[1] != 0, False) & ~is_haploid_locus
     return is_left, is_right
 
