@@ -90,8 +90,8 @@ def _filter_chry_low_call_rate(mt: hl.MatrixTable, min_male_call_rate: float) ->
     Drop chrY non-PAR variants where too few XY males have a genotype call.
 
     chrY genotypes are unimputed, so missing male calls shrink AN and inflate the local AF. The rate
-    pools all XY males in `mt`, so the result depends on which populations survive the column
-    filter. If `mt` has no XY males, 0/0 is NaN and every chrY non-PAR row drops. Other loci pass.
+    pools all XY males in `mt`. With no XY males, 0/0 is NaN and every chrY non-PAR row drops.
+    Other loci pass.
 
     Args:
         mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
@@ -671,9 +671,6 @@ def compute_haplotypes(
     carrier strand), and XY males are counted haploid via the left strand only, the same
     single-strand treatment as chrX non-PAR males. Autosomes and PAR1/PAR2 are unaffected.
 
-    chrY non-PAR variants with a male call rate below `min_chry_male_call_rate` are dropped before
-    haplotype formation (see `_filter_chry_low_call_rate`).
-
     Args:
         vcfs_path: Path or glob pattern to input VCF files.
         gnomad_va_file: Path to the gnomAD variant annotations Hail table
@@ -760,8 +757,7 @@ def compute_haplotypes(
         pop_legend,
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
-    # Before the entry filter, so the rate covers all XY males, not only those in populations above
-    # the AF threshold (filtered entries leave both the numerator and the denominator).
+    # Before the per-population AF entry filter, so the rate counts every XY male.
     mt = _filter_chry_low_call_rate(mt, min_chry_male_call_rate)
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)

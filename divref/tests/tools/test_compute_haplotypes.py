@@ -1293,8 +1293,8 @@ def test_compute_haplotypes_chrx_nonpar(
             [1, 1, 1, 1, 2, 2, 3, 5, 7, 50],
             id="no_call_rate_filter",
         ),
-        # 11 of the fixture's 106 variants have a male call rate < 0.8. Three haplotypes contain one
-        # (chrY:2915697 A>C, 2915693 CA>C, 2920654 CCTT>C) and drop; the other seven are unchanged.
+        # The three haplotypes with a variant below 0.8 male call rate drop (chrY:2915693, 2915697,
+        # 2920654); the other seven are unchanged.
         pytest.param(
             0.8,
             [2, 2, 2, 2, 2, 2, 3],
@@ -1313,8 +1313,6 @@ def test_compute_haplotypes_chry_nonpar(
 ) -> None:
     """
     ChrY non-PAR haplotypes form with haploid carrier counts and fraction_phased ~ 1.0.
-
-    Runs with the male call-rate filter off (0.0) and at the 0.8 default.
 
     This covers chrY haplotype formation only. The downstream index/FASTA leg is contig-agnostic
     (a plain contig+position reference lookup), so the chr1 DuckDB-index e2e tests cover chrY there.
