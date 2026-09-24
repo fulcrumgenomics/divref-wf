@@ -62,7 +62,7 @@ chrY non-PAR haplotypes come from the unphased chrY release VCF and cover `XY` m
 - Individuals are annotated with continental ancestry using [gnomAD labels](https://gnomad.broadinstitute.org/data).
 - Only variants in the HGDP+1KG subset of gnomAD 3.1.2 are considered for inclusion. For the autosomes and chrX this is because variants only present in the full genomes dataset have no associated phased genotypes; chrY genotypes come from the HGDP+1KG chrY release VCF.
 - Variants with less than 0.5%AF in the full gnomAD 3.1.2 genomes (n=76,156) dataset in all of the populations are removed.
-- chrY non-PAR variants where too few `XY` males in the configured `hgdp_1kg_populations` have a genotype call are removed (`hgdp_1kg_min_chry_male_call_rate`, default 80%), because chrY genotypes are unimputed and missing calls inflate the local AF.
+- chrY non-PAR variants where too few `XY` males in the configured `hgdp_1kg_populations` have a genotype call are removed (`hgdp_1kg_min_chry_call_rate`, default 80%; `null` turns the filter off), because chrY genotypes are unimputed and missing calls inflate the local AF.
   A change to the population set therefore changes which chrY variants are kept.
   The call rate pools all `XY` males, so one population can still have few calls at a kept variant.
   chrY empirical AFs come from fewer samples than on the other contigs (about 240 to 545 `XY` males per population, before missing calls), so they are noisier.
