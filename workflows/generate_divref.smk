@@ -347,7 +347,12 @@ rule compute_haplotypes:
         window_size=SEQUENCE_WINDOW_SIZE,
         variant_freq_threshold=HGDP_1KG_MIN_POP_VARIANT_AF,
         haplotype_freq_threshold=HGDP_1KG_MIN_POP_HAPLOTYPE_AF,
-        min_chry_male_call_rate=HGDP_1KG_MIN_CHRY_MALE_CALL_RATE,
+        # The call-rate filter applies to chrY only; other contigs skip its per-row count.
+        call_rate_arg=lambda wildcards: (
+            f"--min-chry-male-call-rate {HGDP_1KG_MIN_CHRY_MALE_CALL_RATE}"
+            if wildcards.chrom == "chrY"
+            else ""
+        ),
         output_base=f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{{chrom}}",
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
@@ -362,7 +367,7 @@ rule compute_haplotypes:
                 --window-size {params.window_size} \
                 --variant-freq-threshold {params.variant_freq_threshold} \
                 --haplotype-freq-threshold {params.haplotype_freq_threshold} \
-                --min-chry-male-call-rate {params.min_chry_male_call_rate} \
+                {params.call_rate_arg} \
                 --output-base {params.output_base} \
                 --spark-driver-memory-gb {params.spark_driver_memory_gb} \
                 --spark-executor-memory-gb {params.spark_executor_memory_gb} \
