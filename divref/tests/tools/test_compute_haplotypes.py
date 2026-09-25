@@ -1337,6 +1337,10 @@ def test_compute_haplotypes_chrx_nonpar(
 
     result = hl.read_table(f"{output_base}.ht")
     assert result.count() == expected_count
+    # The cases use different variant and haplotype thresholds, so a swapped field fails here.
+    recorded = hl.eval(result.index_globals().build_parameters)
+    assert recorded.variant_freq_threshold == variant_freq_threshold
+    assert recorded.haplotype_freq_threshold == haplotype_freq_threshold
 
     results: list[hl.Struct] = result.collect()
     assert all(len(r.haplotype) >= 2 for r in results)
