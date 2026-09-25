@@ -346,6 +346,7 @@ _UNRECORDED_PARAMETERS = HaplotypeBuildParameters(
     ("haplotype_build_parameters", "expected_rows"),
     [
         pytest.param(None, None, id="no_parameters_creates_no_table"),
+        pytest.param({}, [], id="no_haplotype_contigs_creates_empty_table"),
         pytest.param(
             {"chrY": _CHRY_PARAMETERS, "chr22": _UNRECORDED_PARAMETERS},
             [("chr22", None, None, None, None), ("chrY", 0.01, 0.002, 37, 0.8)],
