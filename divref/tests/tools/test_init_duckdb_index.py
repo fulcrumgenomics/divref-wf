@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import duckdb
+import hail as hl
 import pytest
 
 from divref.duckdb_index import read_legend
@@ -138,3 +139,86 @@ def test_matching_legends_pass() -> None:
     first = ["afr", "amr", "eas", "sas", "nfe"]
     second = ["afr", "amr", "eas", "sas", "nfe"]
     assert first == second
+
+
+@pytest.mark.parametrize(
+    ("build_parameters", "expected_row", "expect_warning"),
+    [
+        pytest.param(
+            hl.Struct(
+                variant_freq_threshold=0.01,
+                haplotype_freq_threshold=0.002,
+                window_size=37,
+                min_call_rate=0.8,
+            ),
+            ("chr1", 0.01, 0.002, 37, 0.8),
+            False,
+            id="recorded_parameters_copied",
+        ),
+        pytest.param(
+            hl.Struct(
+                variant_freq_threshold=0.01,
+                haplotype_freq_threshold=0.002,
+                window_size=37,
+                min_call_rate=None,
+            ),
+            ("chr1", 0.01, 0.002, 37, None),
+            False,
+            id="no_call_rate_filter_records_null",
+        ),
+        pytest.param(
+            None,
+            ("chr1", None, None, None, None),
+            True,
+            id="table_without_parameters_records_nulls_and_warns",
+        ),
+    ],
+)
+def test_init_records_haplotype_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    build_parameters: hl.Struct | None,
+    expected_row: tuple[object, ...],
+    expect_warning: bool,
+) -> None:
+    """Each haplotype contig gets one row; the sites-only chrX gets none."""
+    haplotype_table = datadir / "chr1_100001_200000_haplotypes.ht"
+    if build_parameters is not None:
+        annotated = tmp_path / "haplotypes.ht"
+        parameters_type = hl.tstruct(
+            variant_freq_threshold=hl.tfloat64,
+            haplotype_freq_threshold=hl.tfloat64,
+            window_size=hl.tint32,
+            min_call_rate=hl.tfloat64,
+        )
+        hl.read_table(str(haplotype_table)).annotate_globals(
+            build_parameters=hl.literal(build_parameters, dtype=parameters_type)
+        ).write(str(annotated))
+        haplotype_table = annotated
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "table_pairs.tsv",
+        rows=[
+            ("chr1", str(haplotype_table), str(datadir / "chr1_100001_200000.gnomad_afs.ht")),
+            ("chrX", "", str(datadir / "chrX_50000000_50025000.gnomad_afs.ht")),
+        ],
+    )
+    output_base = tmp_path / "idx"
+
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+
+    db = Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
+    with duckdb.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT contig, variant_freq_threshold, haplotype_freq_threshold, "
+            "haplotype_window_size, min_call_rate FROM haplotype_build_parameters"
+        ).fetchall()
+    assert rows == [expected_row]
+    assert ("has no build_parameters global" in caplog.text) == expect_warning

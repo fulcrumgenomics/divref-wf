@@ -6,11 +6,13 @@ import duckdb
 import polars
 import pytest
 
+from divref.duckdb_index import HaplotypeBuildParameters
 from divref.duckdb_index import _stream_tsv_into_sequences
 from divref.duckdb_index import create_sequence_id_index
 from divref.duckdb_index import sequences_tsv_columns
 from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.duckdb_index import with_compatibility_flag
+from divref.duckdb_index import write_metadata_tables
 
 
 @pytest.mark.parametrize(
@@ -324,3 +326,61 @@ def test_with_compatibility_flag_empty_frame() -> None:
     out = with_compatibility_flag(df)
     assert out.height == 0
     assert out.schema["haplotype_filter"] == polars.String
+
+
+_CHRY_PARAMETERS = HaplotypeBuildParameters(
+    variant_freq_threshold=0.01,
+    haplotype_freq_threshold=0.002,
+    haplotype_window_size=37,
+    min_call_rate=0.8,
+)
+_UNRECORDED_PARAMETERS = HaplotypeBuildParameters(
+    variant_freq_threshold=None,
+    haplotype_freq_threshold=None,
+    haplotype_window_size=None,
+    min_call_rate=None,
+)
+
+
+@pytest.mark.parametrize(
+    ("haplotype_build_parameters", "expected_rows"),
+    [
+        pytest.param(None, None, id="no_parameters_creates_no_table"),
+        pytest.param(
+            {"chrY": _CHRY_PARAMETERS, "chr22": _UNRECORDED_PARAMETERS},
+            [("chr22", None, None, None, None), ("chrY", 0.01, 0.002, 37, 0.8)],
+            id="one_row_per_haplotype_contig",
+        ),
+    ],
+)
+def test_write_metadata_tables_haplotype_build_parameters(
+    tmp_path: Path,
+    haplotype_build_parameters: dict[str, HaplotypeBuildParameters] | None,
+    expected_rows: list[tuple[object, ...]] | None,
+) -> None:
+    """`haplotype_build_parameters` is written only when given, one row per contig."""
+    with duckdb.connect(str(tmp_path / "idx.duckdb")) as conn:
+        write_metadata_tables(
+            conn,
+            window_size=25,
+            haplotype_pops_legend=["afr"],
+            variant_pops_legend=["afr"],
+            joint_pops_legend=["afr"],
+            annotation_af_prefix="gnomAD",
+            version="9.9",
+            haplotype_build_parameters=haplotype_build_parameters,
+        )
+        has_table = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'haplotype_build_parameters'"
+        ).fetchone()
+        rows = (
+            conn.execute(
+                "SELECT contig, variant_freq_threshold, haplotype_freq_threshold, "
+                "haplotype_window_size, min_call_rate FROM haplotype_build_parameters "
+                "ORDER BY contig"
+            ).fetchall()
+            if has_table
+            else None
+        )
+    assert rows == expected_rows

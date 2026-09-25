@@ -3,6 +3,8 @@
 import json
 import logging
 from collections.abc import Iterator
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
@@ -31,6 +33,28 @@ def sequences_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class HaplotypeBuildParameters:
+    """
+    The `compute_haplotypes` parameters that built one contig's haplotype table.
+
+    A field is None when the parameter was not recorded (a haplotype table built before the
+    parameters were recorded) or, for `min_call_rate`, when the call-rate filter did not run.
+
+    Attributes:
+        variant_freq_threshold: Minimum gnomAD population AF to retain a variant.
+        haplotype_freq_threshold: Minimum estimated gnomAD haplotype AF to retain a haplotype.
+        haplotype_window_size: Adjacency-gap threshold in bp for parent-block formation. Not the
+            index's flanking-context `window_size`, although the workflow uses one value for both.
+        min_call_rate: Minimum fraction of callable samples with a genotype call.
+    """
+
+    variant_freq_threshold: float | None
+    haplotype_freq_threshold: float | None
+    haplotype_window_size: int | None
+    min_call_rate: float | None
+
+
 def write_metadata_tables(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -40,9 +64,13 @@ def write_metadata_tables(
     joint_pops_legend: list[str],
     annotation_af_prefix: str,
     version: str,
+    haplotype_build_parameters: Mapping[str, HaplotypeBuildParameters] | None = None,
 ) -> None:
     """
     Write the window_size, three *_pops_legend, annotation_af_prefix, and VERSION metadata tables.
+
+    With `haplotype_build_parameters`, also write a `haplotype_build_parameters` table with one row
+    per haplotype contig, keyed by `contig`.
 
     Args:
         conn: Open DuckDB connection to the index being initialized.
@@ -54,8 +82,10 @@ def write_metadata_tables(
         joint_pops_legend: Joint population codes stored as JSON in `joint_pops_legend`.
         annotation_af_prefix: Annotation-AF column prefix stored in `annotation_af_prefix`.
         version: Version identifier stored in the `VERSION` table.
+        haplotype_build_parameters: Per-contig `compute_haplotypes` parameters, or None to skip
+            the table (an index with no haplotype source).
     """
-    # Write the six tables in one transaction so an interrupted init leaves no partially
+    # Write the tables in one transaction so an interrupted init leaves no partially
     # populated index (which a later append/finalize would then read as corrupt metadata).
     conn.execute("BEGIN TRANSACTION")
     try:
@@ -77,6 +107,23 @@ def write_metadata_tables(
             [annotation_af_prefix],
         )
         conn.execute("CREATE TABLE VERSION AS SELECT ? AS version", [version])
+        if haplotype_build_parameters is not None:
+            conn.execute(
+                "CREATE TABLE haplotype_build_parameters (contig VARCHAR PRIMARY KEY, "
+                "variant_freq_threshold DOUBLE, haplotype_freq_threshold DOUBLE, "
+                "haplotype_window_size INTEGER, min_call_rate DOUBLE)"
+            )
+            for contig, parameters in haplotype_build_parameters.items():
+                conn.execute(
+                    "INSERT INTO haplotype_build_parameters VALUES (?, ?, ?, ?, ?)",
+                    [
+                        contig,
+                        parameters.variant_freq_threshold,
+                        parameters.haplotype_freq_threshold,
+                        parameters.haplotype_window_size,
+                        parameters.min_call_rate,
+                    ],
+                )
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
