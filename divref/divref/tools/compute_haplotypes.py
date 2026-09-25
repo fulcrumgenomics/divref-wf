@@ -13,6 +13,22 @@ from divref import defaults
 logger = logging.getLogger(__name__)
 
 
+def _is_excluded_on_chry(
+    locus: hl.LocusExpression, sex_karyotype: hl.StringExpression
+) -> hl.BooleanExpression:
+    """
+    True for a non-XY sample (XX, aneuploid, or undefined karyotype) at a chrY non-PAR locus.
+
+    Args:
+        locus: The variant locus expression.
+        sex_karyotype: The sample's sex-karyotype string expression.
+
+    Returns:
+        A defined boolean expression; an undefined karyotype counts as excluded.
+    """
+    return locus.in_y_nonpar() & hl.coalesce(sex_karyotype != "XY", True)
+
+
 def _haploid_adjusted_call(
     locus: hl.LocusExpression,
     gt: hl.CallExpression,
@@ -46,10 +62,9 @@ def _haploid_adjusted_call(
     is_male = sex_karyotype == "XY"
     is_y_nonpar = locus.in_y_nonpar()
     is_haploid_male = (locus.in_x_nonpar() | is_y_nonpar) & is_male
-    exclude_on_y = is_y_nonpar & hl.coalesce(~is_male, True)
     return (
         hl.case(missing_false=True)
-        .when(exclude_on_y, hl.missing(hl.tcall))
+        .when(_is_excluded_on_chry(locus, sex_karyotype), hl.missing(hl.tcall))
         .when(is_haploid_male, hl.call(gt[0]))
         .default(gt)
     )
@@ -77,12 +92,32 @@ def _carrier_strands(
     """
     is_male = sex_karyotype == "XY"
     is_y_nonpar = locus.in_y_nonpar()
-    # Shared with `_haploid_adjusted_call`'s `exclude_on_y`; keep the two predicates in sync.
-    exclude_on_y = is_y_nonpar & hl.coalesce(~is_male, True)
     is_haploid_locus = (locus.in_x_nonpar() & is_male) | is_y_nonpar
-    is_left = (gt[0] != 0) & ~exclude_on_y
+    is_left = (gt[0] != 0) & ~_is_excluded_on_chry(locus, sex_karyotype)
     is_right = hl.if_else(gt.ploidy > 1, gt[1] != 0, False) & ~is_haploid_locus
     return is_left, is_right
+
+
+def _filter_low_call_rate(mt: hl.MatrixTable, min_call_rate: float) -> hl.MatrixTable:
+    """
+    Drop rows where too few of the callable samples at the locus have a genotype call.
+
+    Missing calls shrink AN and inflate the local AF. The denominator is every sample in `mt`,
+    except on chrY non-PAR, where only XY males count (see `_is_excluded_on_chry`). A chrY non-PAR
+    row with no XY males gives 0/0, which is NaN, so it drops.
+
+    Args:
+        mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
+        min_call_rate: Minimum fraction of those samples with a call to keep a row.
+
+    Returns:
+        `mt` without the rows below `min_call_rate`.
+    """
+    is_callable = ~_is_excluded_on_chry(mt.locus, mt.sex_karyotype)
+    call_rate = hl.agg.count_where(is_callable & hl.is_defined(mt.GT)) / hl.agg.count_where(
+        is_callable
+    )
+    return mt.filter_rows(call_rate >= min_call_rate)
 
 
 def _compute_locus_groups(
@@ -610,6 +645,7 @@ def compute_haplotypes(
     variant_freq_threshold: float,
     haplotype_freq_threshold: float,
     output_base: Path,
+    min_call_rate: float | None = None,
     temp_dir: Path = Path("/tmp"),
     spark_driver_memory_gb: int = 1,
     spark_executor_memory_gb: int = 1,
@@ -648,6 +684,9 @@ def compute_haplotypes(
     carrier strand), and XY males are counted haploid via the left strand only, the same
     single-strand treatment as chrX non-PAR males. Autosomes and PAR1/PAR2 are unaffected.
 
+    With `min_call_rate`, low call-rate variants are dropped before the per-population AF filter
+    (see `_filter_low_call_rate`).
+
     Args:
         vcfs_path: Path or glob pattern to input VCF files.
         gnomad_va_file: Path to the gnomAD variant annotations Hail table
@@ -663,17 +702,27 @@ def compute_haplotypes(
             `{output_base}.variants.ht`, `.blocks.ht`, `.parents.ht`, and `.hap_ac.ht`
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`.
+        min_call_rate: Minimum fraction of pop-assigned samples with a genotype call to keep a
+            variant. On chrY non-PAR only XY males count. Omit it to skip the filter. Imputed
+            genotypes have no missing calls, so the filter only matters for unimputed input such
+            as chrY.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
         min_partitions: Minimum partitions for `import_vcf`. Higher values give finer map-side
             granularity, reducing per-task memory in the downstream entries->blocks shuffle.
             Default 64 (the prior hard-coded value).
+
+    Raises:
+        ValueError: If `min_call_rate` is outside [0, 1], a Spark memory setting is
+            below 1GB, or no variants pass `variant_freq_threshold` (and `min_call_rate`, if given).
     """
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
     assert_directory_exists(gnomad_sa_file)
 
+    if min_call_rate is not None and not 0 <= min_call_rate <= 1:
+        raise ValueError(f"Min call rate must be in [0, 1]. Saw {min_call_rate}.")
     if spark_driver_memory_gb < 1:
         raise ValueError(
             f"Spark driver memory must be at least 1GB. Saw {spark_driver_memory_gb}GB."
@@ -726,6 +775,9 @@ def compute_haplotypes(
         pop_legend,
     )
     mt = mt.filter_cols(hl.is_defined(mt.pop_int))
+    if min_call_rate is not None:
+        # Before the per-population AF entry filter, so the rate counts every eligible sample.
+        mt = _filter_low_call_rate(mt, min_call_rate)
     mt = mt.add_row_index().add_col_index()
     mt = mt.filter_entries(mt.freq[mt.pop_int].AF >= variant_freq_threshold)
 
@@ -743,7 +795,13 @@ def compute_haplotypes(
     variants_ht = variants_ht.checkpoint(f"{str(output_base)}.variants.ht", overwrite=True)
 
     if variants_ht.head(1).count() == 0:
-        raise ValueError(f"No variants found with minimum population AF {variant_freq_threshold}.")
+        call_rate_clause = (
+            "" if min_call_rate is None else f" and minimum call rate {min_call_rate}"
+        )
+        raise ValueError(
+            f"No variants found with minimum population AF {variant_freq_threshold}"
+            f"{call_rate_clause}."
+        )
 
     group_of = _compute_locus_groups(variants_ht, window_size)
     group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))

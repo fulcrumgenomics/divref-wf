@@ -87,6 +87,7 @@ HGDP_1KG_CHRY_VCF: str = config["hgdp_1kg_chrY_vcf"]
 HGDP_1KG_POPS: list[str] = config["hgdp_1kg_populations"]
 HGDP_1KG_MIN_POP_VARIANT_AF: float = config["hgdp_1kg_min_pop_variant_allele_freq"]
 HGDP_1KG_MIN_POP_HAPLOTYPE_AF: float = config["hgdp_1kg_min_estimated_gnomad_haplotype_allele_freq"]
+HGDP_1KG_MIN_CHRY_CALL_RATE: float | None = config["hgdp_1kg_min_chry_call_rate"]
 
 # gnomAD variants can be from a different source than the haplotypes; the cloud is
 # derived from the workflow-level `cloud` so all inputs come from the same provider.
@@ -346,6 +347,12 @@ rule compute_haplotypes:
         window_size=SEQUENCE_WINDOW_SIZE,
         variant_freq_threshold=HGDP_1KG_MIN_POP_VARIANT_AF,
         haplotype_freq_threshold=HGDP_1KG_MIN_POP_HAPLOTYPE_AF,
+        # Only chrY genotypes are unimputed, so only chrY gets the call-rate filter.
+        call_rate_arg=lambda wildcards: (
+            f"--min-call-rate {HGDP_1KG_MIN_CHRY_CALL_RATE}"
+            if wildcards.chrom == "chrY" and HGDP_1KG_MIN_CHRY_CALL_RATE is not None
+            else ""
+        ),
         output_base=f"{WORK_DIR}/haplotypes/hgdp_1kg.haplotypes.{{chrom}}",
         spark_driver_memory_gb=SPARK_DRIVER_MEMORY_GB,
         spark_executor_memory_gb=SPARK_EXECUTOR_MEMORY_GB,
@@ -360,6 +367,7 @@ rule compute_haplotypes:
                 --window-size {params.window_size} \
                 --variant-freq-threshold {params.variant_freq_threshold} \
                 --haplotype-freq-threshold {params.haplotype_freq_threshold} \
+                {params.call_rate_arg} \
                 --output-base {params.output_base} \
                 --spark-driver-memory-gb {params.spark_driver_memory_gb} \
                 --spark-executor-memory-gb {params.spark_executor_memory_gb} \
