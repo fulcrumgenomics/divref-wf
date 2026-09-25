@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple
+from unittest.mock import ANY
+from unittest.mock import call
 from unittest.mock import patch
 
 import hail as hl
@@ -1096,11 +1098,11 @@ def test_compute_haplotypes_passes_min_partitions(
 
 
 @pytest.mark.parametrize(
-    "min_call_rate,expected_filter_calls",
+    "min_call_rate",
     [
-        pytest.param(None, 0, id="no_cutoff_skips_call_rate_filter"),
-        pytest.param(0.0, 1, id="zero_cutoff_still_applies_call_rate_filter"),
-        pytest.param(0.8, 1, id="cutoff_given_applies_call_rate_filter"),
+        pytest.param(None, id="no_cutoff_skips_call_rate_filter"),
+        pytest.param(0.0, id="zero_cutoff_still_applies_call_rate_filter"),
+        pytest.param(0.8, id="cutoff_given_applies_call_rate_filter"),
     ],
 )
 def test_compute_haplotypes_applies_call_rate_filter_only_when_given(
@@ -1108,9 +1110,8 @@ def test_compute_haplotypes_applies_call_rate_filter_only_when_given(
     datadir: Path,
     tmp_path: Path,
     min_call_rate: float | None,
-    expected_filter_calls: int,
 ) -> None:
-    """Without a cutoff the per-row call-rate aggregation is skipped entirely."""
+    """The call-rate filter runs once with the given cutoff (0.0 included), never when omitted."""
 
     class _StopEarlyError(Exception):
         pass
@@ -1142,7 +1143,8 @@ def test_compute_haplotypes_applies_call_rate_filter_only_when_given(
         else:
             run(min_call_rate=min_call_rate)
 
-    assert call_rate_filter.call_count == expected_filter_calls
+    expected_calls = [] if min_call_rate is None else [call(ANY, min_call_rate)]
+    assert call_rate_filter.call_args_list == expected_calls
 
 
 def test_form_parent_blocks_multiple_samples(hail_context: None) -> None:  # noqa: ARG001
@@ -1230,6 +1232,7 @@ def test_compute_haplotypes(
     [
         pytest.param(-0.1, "Min call rate must be in", id="below_zero_rejected"),
         pytest.param(1.1, "Min call rate must be in", id="above_one_rejected"),
+        pytest.param(float("nan"), "Min call rate must be in", id="nan_rejected"),
         # Accepted values pass this check and stop at the next one (Spark memory is set to 0).
         pytest.param(0.0, "Spark driver memory", id="zero_accepted"),
         pytest.param(1.0, "Spark driver memory", id="one_accepted"),
@@ -1357,6 +1360,8 @@ def test_compute_haplotypes_chry_nonpar(
 ) -> None:
     """
     ChrY non-PAR haplotypes form with haploid carrier counts and fraction_phased ~ 1.0.
+
+    At `min_call_rate=0.8`, haplotypes that contain a low male call-rate variant drop.
 
     This covers chrY haplotype formation only. The downstream index/FASTA leg is contig-agnostic
     (a plain contig+position reference lookup), so the chr1 DuckDB-index e2e tests cover chrY there.
@@ -1652,7 +1657,7 @@ _XX_CALLED = ("XX", True)
         pytest.param(
             "chr1",
             1_000_000,
-            [_XY_CALLED] * 2 + [_XX_CALLED] * 2 + [_XX_MISSING],
+            [_XY_CALLED] + [_XX_CALLED] * 3 + [_XY_MISSING],
             0.8,
             True,
             id="autosome_called_females_count",
