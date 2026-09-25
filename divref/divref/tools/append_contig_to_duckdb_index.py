@@ -13,6 +13,7 @@ from hail.context import Env
 
 from divref import defaults
 from divref.duckdb_index import contig_already_appended
+from divref.duckdb_index import haplotype_build_parameters_table_exists
 from divref.duckdb_index import read_legend
 from divref.duckdb_index import read_stored_haplotype_build_parameters
 from divref.duckdb_index import read_window_size
@@ -423,6 +424,11 @@ def _check_haplotype_build_parameters(
             )
         return
     if stored is None:
+        if not haplotype_build_parameters_table_exists(conn):
+            raise ValueError(
+                f"The index was initialized before haplotype build parameters were recorded, so "
+                f"{table_pair.contig} cannot be checked; rebuild it with init_duckdb_index --force."
+            )
         raise ValueError(
             f"There is no haplotype_build_parameters row for {table_pair.contig}; re-run "
             f"init_duckdb_index with the same table pairs."

@@ -65,7 +65,7 @@ def write_metadata_tables(
     joint_pops_legend: list[str],
     annotation_af_prefix: str,
     version: str,
-    haplotype_build_parameters: Mapping[str, HaplotypeBuildParameters] | None = None,
+    haplotype_build_parameters: Mapping[str, HaplotypeBuildParameters] | None,
 ) -> None:
     """
     Write the window_size, three *_pops_legend, annotation_af_prefix, and VERSION metadata tables.
@@ -152,6 +152,25 @@ def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     return list(json.loads(row[0]))
 
 
+def haplotype_build_parameters_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
+    """
+    Return whether the index has a `haplotype_build_parameters` table.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+
+    Returns:
+        True if the table is present.
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'haplotype_build_parameters'"
+        ).fetchone()
+        is not None
+    )
+
+
 def read_stored_haplotype_build_parameters(
     conn: duckdb.DuckDBPyConnection, contig: str
 ) -> HaplotypeBuildParameters | None:
@@ -165,10 +184,7 @@ def read_stored_haplotype_build_parameters(
     Returns:
         The stored parameters, or None when the table or the contig's row is absent.
     """
-    has_table = conn.execute(
-        "SELECT 1 FROM information_schema.tables WHERE table_name = 'haplotype_build_parameters'"
-    ).fetchone()
-    if has_table is None:
+    if not haplotype_build_parameters_table_exists(conn):
         return None
     row = conn.execute(
         "SELECT variant_freq_threshold, haplotype_freq_threshold, haplotype_window_size, "
