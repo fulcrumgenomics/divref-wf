@@ -46,7 +46,8 @@ class HaplotypeBuildParameters:
         haplotype_freq_threshold: Minimum estimated gnomAD haplotype AF to retain a haplotype.
         haplotype_window_size: Adjacency-gap threshold in bp for parent-block formation. Not the
             index's flanking-context `window_size`, although the workflow uses one value for both.
-        min_call_rate: Minimum fraction of callable samples with a genotype call.
+        min_call_rate: Minimum fraction of pop-assigned samples (on chrY non-PAR, XY males only)
+            with a genotype call.
     """
 
     variant_freq_threshold: float | None
@@ -83,7 +84,7 @@ def write_metadata_tables(
         annotation_af_prefix: Annotation-AF column prefix stored in `annotation_af_prefix`.
         version: Version identifier stored in the `VERSION` table.
         haplotype_build_parameters: Per-contig `compute_haplotypes` parameters, or None to skip
-            the table (an index with no haplotype source).
+            the table (a TSV-built index). An empty mapping writes an empty table.
     """
     # Write the tables in one transaction so an interrupted init leaves no partially
     # populated index (which a later append/finalize would then read as corrupt metadata).
