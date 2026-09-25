@@ -49,8 +49,8 @@ def init_duckdb_index(
 
     Raises:
         FileExistsError: If the output DuckDB already exists and `force` is False.
-        ValueError: If `in_table_pairs_tsv` contains no table pairs, or if the contigs' gnomAD or
-            HGDP population legends disagree.
+        ValueError: If `in_table_pairs_tsv` contains no table pairs or lists a contig twice, or if
+            the contigs' gnomAD or HGDP population legends disagree.
     """
     assert_path_is_readable(in_table_pairs_tsv)
 
@@ -66,6 +66,11 @@ def init_duckdb_index(
     table_pairs: list[TablePair] = list(TablePair.read(in_table_pairs_tsv))
     if not table_pairs:
         raise ValueError(f"No table pairs found in {in_table_pairs_tsv}.")
+    seen_contigs: set[str] = set()
+    for table_pair in table_pairs:
+        if table_pair.contig in seen_contigs:
+            raise ValueError(f"Duplicate contig {table_pair.contig} in {in_table_pairs_tsv}.")
+        seen_contigs.add(table_pair.contig)
 
     # fail fast on input Hail tables; haplotype_table_path is optional per row
     for table_pair in table_pairs:

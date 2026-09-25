@@ -116,6 +116,28 @@ def test_init_raises_without_force_when_db_exists(
         )
 
 
+def test_init_rejects_duplicate_contigs(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """A contig listed twice is rejected: init and append would otherwise pick different rows."""
+    row = (
+        "chr1",
+        str(datadir / "chr1_100001_200000_haplotypes.ht"),
+        str(datadir / "chr1_100001_200000.gnomad_afs.ht"),
+    )
+    table_pairs_tsv = _write_table_pairs_tsv(tmp_path / "table_pairs.tsv", rows=[row, row])
+    with pytest.raises(ValueError, match="Duplicate contig chr1"):
+        init_duckdb_index(
+            in_table_pairs_tsv=table_pairs_tsv,
+            output_base=tmp_path / "idx",
+            version="9.9",
+            window_size=25,
+            force=True,
+        )
+
+
 # The committed fixtures all share the same gnomAD/HGDP legend, so there is no differing-legend
 # data file to drive the cross-contig mismatch path through `init_duckdb_index` directly. Per the
 # plan, the validation logic is unit-tested on synthetic legend lists instead.
