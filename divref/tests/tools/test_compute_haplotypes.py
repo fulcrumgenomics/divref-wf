@@ -1684,7 +1684,7 @@ def test_filter_low_call_rate(
     min_call_rate: float,
     expected_kept: bool,
 ) -> None:
-    """Rows drop when too few samples able to carry the locus have a call."""
+    """Rows drop when too few callable samples at the locus have a call."""
     mt = hl.utils.range_matrix_table(n_rows=1, n_cols=len(samples))
     karyotypes = hl.literal([karyotype for karyotype, _ in samples])
     called = hl.literal([is_called for _, is_called in samples])

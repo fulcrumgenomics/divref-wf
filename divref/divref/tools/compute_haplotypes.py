@@ -100,7 +100,7 @@ def _carrier_strands(
 
 def _filter_low_call_rate(mt: hl.MatrixTable, min_call_rate: float) -> hl.MatrixTable:
     """
-    Drop rows where too few of the samples able to carry the locus have a genotype call.
+    Drop rows where too few of the callable samples at the locus have a genotype call.
 
     Missing calls shrink AN and inflate the local AF. The denominator is every sample in `mt`,
     except on chrY non-PAR, where only XY males count (see `_is_excluded_on_chry`). A chrY non-PAR
@@ -113,8 +113,10 @@ def _filter_low_call_rate(mt: hl.MatrixTable, min_call_rate: float) -> hl.Matrix
     Returns:
         `mt` without the rows below `min_call_rate`.
     """
-    can_carry = ~_is_excluded_on_chry(mt.locus, mt.sex_karyotype)
-    call_rate = hl.agg.count_where(can_carry & hl.is_defined(mt.GT)) / hl.agg.count_where(can_carry)
+    is_callable = ~_is_excluded_on_chry(mt.locus, mt.sex_karyotype)
+    call_rate = hl.agg.count_where(is_callable & hl.is_defined(mt.GT)) / hl.agg.count_where(
+        is_callable
+    )
     return mt.filter_rows(call_rate >= min_call_rate)
 
 
