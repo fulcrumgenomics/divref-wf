@@ -709,7 +709,7 @@ def compute_haplotypes(
 
     Raises:
         ValueError: If `min_call_rate` is outside [0, 1], a Spark memory setting is
-            below 1GB, or no variants pass `variant_freq_threshold`.
+            below 1GB, or no variants pass `variant_freq_threshold` (and `min_call_rate`, if given).
     """
     assert_path_is_readable(vcfs_path)
     assert_directory_exists(gnomad_va_file)
@@ -789,7 +789,13 @@ def compute_haplotypes(
     variants_ht = variants_ht.checkpoint(f"{str(output_base)}.variants.ht", overwrite=True)
 
     if variants_ht.head(1).count() == 0:
-        raise ValueError(f"No variants found with minimum population AF {variant_freq_threshold}.")
+        call_rate_clause = (
+            "" if min_call_rate is None else f" and minimum call rate {min_call_rate}"
+        )
+        raise ValueError(
+            f"No variants found with minimum population AF {variant_freq_threshold}"
+            f"{call_rate_clause}."
+        )
 
     group_of = _compute_locus_groups(variants_ht, window_size)
     group_lit = hl.literal(group_of, dtype=hl.tdict(hl.tint64, hl.tint32))

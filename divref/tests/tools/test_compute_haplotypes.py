@@ -1260,12 +1260,23 @@ def test_compute_haplotypes_validates_min_call_rate_range(
         )
 
 
+@pytest.mark.parametrize(
+    "min_call_rate,expected_message",
+    [
+        pytest.param(None, r"minimum population AF 1\.$", id="af_filter_only"),
+        pytest.param(
+            0.5, r"minimum population AF 1 and minimum call rate 0\.5\.$", id="with_call_rate"
+        ),
+    ],
+)
 def test_compute_haplotypes_no_variants(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
     tmp_path: Path,
+    min_call_rate: float | None,
+    expected_message: str,
 ) -> None:
-    """All variants are filtered out."""
+    """All variants are filtered out; the error names every filter that was applied."""
     # --- act ---
     in_sites = datadir / "chr1_100001_200000.gnomad_afs.ht"
     in_samples = datadir / "hgdp_1kg_sample_metadata.extract.ht"
@@ -1274,7 +1285,7 @@ def test_compute_haplotypes_no_variants(
 
     with (
         patch("divref.tools.compute_haplotypes.hl.init"),
-        pytest.raises(ValueError, match="No variants found with minimum population AF"),
+        pytest.raises(ValueError, match=expected_message),
     ):
         compute_haplotypes(
             vcfs_path=vcf_path,
@@ -1285,6 +1296,7 @@ def test_compute_haplotypes_no_variants(
             haplotype_freq_threshold=0,
             output_base=output_base,
             temp_dir=tmp_path / "hail_tmp",
+            min_call_rate=min_call_rate,
         )
 
 
