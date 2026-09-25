@@ -473,7 +473,7 @@ def test_append_rolls_back_on_streaming_failure(
 _PARAMETERS_TYPE = hl.tstruct(
     variant_freq_threshold=hl.tfloat64,
     haplotype_freq_threshold=hl.tfloat64,
-    window_size=hl.tint32,
+    haplotype_window_size=hl.tint32,
     min_call_rate=hl.tfloat64,
 )
 
@@ -483,7 +483,7 @@ def _haplotypes_with_parameters(datadir: Path, out: Path, variant_freq_threshold
     parameters = hl.Struct(
         variant_freq_threshold=variant_freq_threshold,
         haplotype_freq_threshold=0.002,
-        window_size=37,
+        haplotype_window_size=37,
         min_call_rate=None,
     )
     hl.read_table(str(datadir / "chr1_100001_200000_haplotypes.ht")).annotate_globals(

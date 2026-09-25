@@ -76,7 +76,7 @@ def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuil
     return HaplotypeBuildParameters(
         variant_freq_threshold=recorded.variant_freq_threshold,
         haplotype_freq_threshold=recorded.haplotype_freq_threshold,
-        haplotype_window_size=recorded.window_size,
+        haplotype_window_size=recorded.haplotype_window_size,
         min_call_rate=recorded.min_call_rate,
     )
 

@@ -170,7 +170,7 @@ def test_matching_legends_pass() -> None:
             hl.Struct(
                 variant_freq_threshold=0.01,
                 haplotype_freq_threshold=0.002,
-                window_size=37,
+                haplotype_window_size=37,
                 min_call_rate=0.8,
             ),
             ("chr1", 0.01, 0.002, 37, 0.8),
@@ -181,7 +181,7 @@ def test_matching_legends_pass() -> None:
             hl.Struct(
                 variant_freq_threshold=0.01,
                 haplotype_freq_threshold=0.002,
-                window_size=37,
+                haplotype_window_size=37,
                 min_call_rate=None,
             ),
             ("chr1", 0.01, 0.002, 37, None),
@@ -212,7 +212,7 @@ def test_init_records_haplotype_build_parameters(
         parameters_type = hl.tstruct(
             variant_freq_threshold=hl.tfloat64,
             haplotype_freq_threshold=hl.tfloat64,
-            window_size=hl.tint32,
+            haplotype_window_size=hl.tint32,
             min_call_rate=hl.tfloat64,
         )
         hl.read_table(str(haplotype_table)).annotate_globals(

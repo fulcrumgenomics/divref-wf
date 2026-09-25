@@ -1404,7 +1404,7 @@ def test_compute_haplotypes_chry_nonpar(
     assert hl.eval(out_ht.index_globals().build_parameters) == hl.Struct(
         variant_freq_threshold=0.005,
         haplotype_freq_threshold=0.005,
-        window_size=5000,
+        haplotype_window_size=5000,
         min_call_rate=min_call_rate,
     )
 
