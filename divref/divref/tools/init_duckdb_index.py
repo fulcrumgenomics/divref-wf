@@ -16,6 +16,7 @@ from divref.gnomad_index_source import TablePair
 from divref.gnomad_index_source import compute_joint_legend
 from divref.gnomad_index_source import read_and_validate_pops_legends
 from divref.gnomad_index_source import read_haplotype_build_parameters
+from divref.gnomad_index_source import read_variant_build_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,10 @@ def init_duckdb_index(
         for table_pair in table_pairs
         if table_pair.haplotype_table_path is not None
     }
+    variant_build_parameters = {
+        table_pair.contig: read_variant_build_parameters(table_pair.sites_table_path)
+        for table_pair in table_pairs
+    }
 
     with duckdb.connect(str(out_duckdb_file)) as conn:
         write_metadata_tables(
@@ -105,6 +110,7 @@ def init_duckdb_index(
             annotation_af_prefix="gnomAD",
             version=version,
             haplotype_build_parameters=haplotype_build_parameters,
+            variant_build_parameters=variant_build_parameters,
         )
 
     logger.info(

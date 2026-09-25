@@ -57,6 +57,25 @@ class HaplotypeBuildParameters:
     min_call_rate: float | None
 
 
+@dataclass(frozen=True)
+class VariantBuildParameters:
+    """
+    The `extract_gnomad_single_afs` parameters that built one contig's sites table.
+
+    A field is None when the parameter was not recorded (a sites table built before the
+    parameters were recorded).
+
+    Attributes:
+        gnomad_version: gnomAD sites table the single variants came from.
+        freq_threshold: Minimum population AF to retain a variant.
+        apply_filters: Whether the variant filters (e.g. VQSR, AC0) were applied.
+    """
+
+    gnomad_version: str | None
+    freq_threshold: float | None
+    apply_filters: bool | None
+
+
 def write_metadata_tables(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -67,12 +86,14 @@ def write_metadata_tables(
     annotation_af_prefix: str,
     version: str,
     haplotype_build_parameters: Mapping[str, HaplotypeBuildParameters] | None,
+    variant_build_parameters: Mapping[str, VariantBuildParameters] | None,
 ) -> None:
     """
     Write the window_size, three *_pops_legend, annotation_af_prefix, and VERSION metadata tables.
 
     With `haplotype_build_parameters`, also write a `haplotype_build_parameters` table with one row
-    per haplotype contig, keyed by `contig`.
+    per haplotype contig, keyed by `contig`. With `variant_build_parameters`, likewise write a
+    `variant_build_parameters` table with one row per contig.
 
     Args:
         conn: Open DuckDB connection to the index being initialized.
@@ -86,6 +107,8 @@ def write_metadata_tables(
         version: Version identifier stored in the `VERSION` table.
         haplotype_build_parameters: Per-contig `compute_haplotypes` parameters, or None to skip
             the table (a TSV-built index). An empty mapping writes an empty table.
+        variant_build_parameters: Per-contig `extract_gnomad_single_afs` parameters, or None to
+            skip the table (a TSV-built index).
     """
     # Write the tables in one transaction so an interrupted init leaves no partially
     # populated index (which a later append/finalize would then read as corrupt metadata).
@@ -124,6 +147,21 @@ def write_metadata_tables(
                         parameters.haplotype_freq_threshold,
                         parameters.haplotype_window_size,
                         parameters.min_call_rate,
+                    ],
+                )
+        if variant_build_parameters is not None:
+            conn.execute(
+                "CREATE TABLE variant_build_parameters (contig VARCHAR PRIMARY KEY, "
+                "gnomad_version VARCHAR, freq_threshold DOUBLE, apply_filters BOOLEAN)"
+            )
+            for contig, variant_parameters in variant_build_parameters.items():
+                conn.execute(
+                    "INSERT INTO variant_build_parameters VALUES (?, ?, ?, ?)",
+                    [
+                        contig,
+                        variant_parameters.gnomad_version,
+                        variant_parameters.freq_threshold,
+                        variant_parameters.apply_filters,
                     ],
                 )
         conn.execute("COMMIT")

@@ -7,6 +7,7 @@ import polars
 import pytest
 
 from divref.duckdb_index import HaplotypeBuildParameters
+from divref.duckdb_index import VariantBuildParameters
 from divref.duckdb_index import _stream_tsv_into_sequences
 from divref.duckdb_index import create_sequence_id_index
 from divref.duckdb_index import read_stored_haplotype_build_parameters
@@ -371,6 +372,7 @@ def test_write_metadata_tables_haplotype_build_parameters(
             annotation_af_prefix="gnomAD",
             version="9.9",
             haplotype_build_parameters=haplotype_build_parameters,
+            variant_build_parameters=None,
         )
         has_table = conn.execute(
             "SELECT 1 FROM information_schema.tables "
@@ -400,6 +402,58 @@ def test_haplotype_build_parameters_round_trip(tmp_path: Path) -> None:
             annotation_af_prefix="gnomAD",
             version="9.9",
             haplotype_build_parameters={"chrY": _CHRY_PARAMETERS},
+            variant_build_parameters=None,
         )
         assert read_stored_haplotype_build_parameters(conn, "chrY") == _CHRY_PARAMETERS
         assert read_stored_haplotype_build_parameters(conn, "chr22") is None
+
+
+@pytest.mark.parametrize(
+    ("variant_build_parameters", "expected_rows"),
+    [
+        pytest.param(None, None, id="no_parameters_creates_no_table"),
+        pytest.param({}, [], id="no_contigs_creates_empty_table"),
+        pytest.param(
+            {
+                "chr22": VariantBuildParameters(
+                    gnomad_version="JOINT_41", freq_threshold=0.005, apply_filters=True
+                ),
+                "chrY": VariantBuildParameters(
+                    gnomad_version=None, freq_threshold=None, apply_filters=None
+                ),
+            },
+            [("chr22", "JOINT_41", 0.005, True), ("chrY", None, None, None)],
+            id="one_row_per_contig",
+        ),
+    ],
+)
+def test_write_metadata_tables_variant_build_parameters(
+    tmp_path: Path,
+    variant_build_parameters: dict[str, VariantBuildParameters] | None,
+    expected_rows: list[tuple[object, ...]] | None,
+) -> None:
+    """`variant_build_parameters` is written only when given, one row per contig."""
+    with duckdb.connect(str(tmp_path / "idx.duckdb")) as conn:
+        write_metadata_tables(
+            conn,
+            window_size=25,
+            haplotype_pops_legend=["afr"],
+            variant_pops_legend=["afr"],
+            joint_pops_legend=["afr"],
+            annotation_af_prefix="gnomAD",
+            version="9.9",
+            haplotype_build_parameters=None,
+            variant_build_parameters=variant_build_parameters,
+        )
+        has_table = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'variant_build_parameters'"
+        ).fetchone()
+        rows = (
+            conn.execute(
+                "SELECT contig, gnomad_version, freq_threshold, apply_filters "
+                "FROM variant_build_parameters ORDER BY contig"
+            ).fetchall()
+            if has_table
+            else None
+        )
+    assert rows == expected_rows

@@ -7,6 +7,7 @@ import hail as hl
 from fgmetric import Metric
 
 from divref.duckdb_index import HaplotypeBuildParameters
+from divref.duckdb_index import VariantBuildParameters
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,35 @@ def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuil
         haplotype_freq_threshold=recorded.haplotype_freq_threshold,
         haplotype_window_size=recorded.haplotype_window_size,
         min_call_rate=recorded.min_call_rate,
+    )
+
+
+def read_variant_build_parameters(sites_table_path: Path) -> VariantBuildParameters:
+    """
+    Read the `build_parameters` global that `extract_gnomad_single_afs` writes on its output table.
+
+    Reads only the table's globals file. A table built before the global existed yields
+    all-None parameters and a warning.
+
+    Args:
+        sites_table_path: Path to a gnomAD sites Hail table.
+
+    Returns:
+        The recorded parameters, or all None when the table has no `build_parameters` global.
+    """
+    table_globals = hl.read_table(str(sites_table_path)).index_globals()
+    if "build_parameters" not in table_globals:
+        logger.warning(
+            "Sites table %s has no build_parameters global, so its build parameters are unknown "
+            "(NULL). Re-run extract_gnomad_single_afs to record them.",
+            sites_table_path,
+        )
+        return VariantBuildParameters(gnomad_version=None, freq_threshold=None, apply_filters=None)
+    recorded = hl.eval(table_globals.build_parameters)
+    return VariantBuildParameters(
+        gnomad_version=recorded.gnomad_version,
+        freq_threshold=recorded.freq_threshold,
+        apply_filters=recorded.apply_filters,
     )
 
 

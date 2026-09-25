@@ -243,4 +243,47 @@ def test_init_records_haplotype_build_parameters(
             "haplotype_window_size, min_call_rate FROM haplotype_build_parameters"
         ).fetchall()
     assert rows == [expected_row]
-    assert ("has no build_parameters global" in caplog.text) == expect_warning
+    haplotype_warning = (
+        "Haplotype table" in caplog.text and "has no build_parameters" in caplog.text
+    )
+    assert haplotype_warning == expect_warning
+
+
+def test_init_records_variant_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every contig gets a row from its sites table; a table without the global records NULLs."""
+    recorded_sites = tmp_path / "chr1_sites.ht"
+    hl.read_table(str(datadir / "chr1_100001_200000.gnomad_afs.ht")).annotate_globals(
+        build_parameters=hl.struct(
+            gnomad_version="JOINT_41", freq_threshold=hl.float64(0.005), apply_filters=True
+        )
+    ).write(str(recorded_sites))
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "table_pairs.tsv",
+        rows=[
+            ("chr1", str(datadir / "chr1_100001_200000_haplotypes.ht"), str(recorded_sites)),
+            ("chrX", "", str(datadir / "chrX_50000000_50025000.gnomad_afs.ht")),
+        ],
+    )
+    output_base = tmp_path / "idx"
+
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+
+    db = Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
+    with duckdb.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT contig, gnomad_version, freq_threshold, apply_filters "
+            "FROM variant_build_parameters ORDER BY contig"
+        ).fetchall()
+    assert rows == [("chr1", "JOINT_41", 0.005, True), ("chrX", None, None, None)]
+    assert "chrX_50000000_50025000.gnomad_afs.ht has no build_parameters global" in caplog.text
