@@ -54,6 +54,10 @@ Its other columns are `variant_freq_threshold`, `haplotype_freq_threshold`, `hap
 `min_call_rate` is NULL where the call-rate filter did not run, and every parameter is NULL for a haplotype table built before the parameters were recorded.
 `append_contig_to_duckdb_index` refuses a contig whose recorded haplotype build parameters differ from those stored at init; it does not detect other changes to the inputs.
 
+It also has a `variant_build_parameters` table, with one row per contig, keyed by `contig`.
+Its other columns are `gnomad_version`, `freq_threshold`, and `apply_filters`: the `extract_gnomad_single_afs` parameters that built that contig's single-variant track.
+Every parameter is NULL for a sites table built before the parameters were recorded.
+
 ## HGDP_haplotype
 
 Haplotypes are derived from the [gnomAD 3.1.2 HGDP+1KG individual-level phased genotypes](https://gnomad.broadinstitute.org/news/2021-10-gnomad-v3-1-2-minor-release/).
