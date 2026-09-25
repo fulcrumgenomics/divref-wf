@@ -151,6 +151,39 @@ def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     return list(json.loads(row[0]))
 
 
+def read_stored_haplotype_build_parameters(
+    conn: duckdb.DuckDBPyConnection, contig: str
+) -> HaplotypeBuildParameters | None:
+    """
+    Read one contig's row from `haplotype_build_parameters`.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+        contig: The contig to look up.
+
+    Returns:
+        The stored parameters, or None when the table or the contig's row is absent.
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'haplotype_build_parameters'"
+    ).fetchone()
+    if has_table is None:
+        return None
+    row = conn.execute(
+        "SELECT variant_freq_threshold, haplotype_freq_threshold, haplotype_window_size, "
+        "min_call_rate FROM haplotype_build_parameters WHERE contig = ?",
+        [contig],
+    ).fetchone()
+    if row is None:
+        return None
+    return HaplotypeBuildParameters(
+        variant_freq_threshold=row[0],
+        haplotype_freq_threshold=row[1],
+        haplotype_window_size=row[2],
+        min_call_rate=row[3],
+    )
+
+
 def read_window_size(conn: duckdb.DuckDBPyConnection) -> int:
     """Read the stored window_size metadata value."""
     row = conn.execute("SELECT window_size FROM window_size").fetchone()
