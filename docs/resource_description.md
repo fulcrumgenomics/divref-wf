@@ -48,10 +48,6 @@ The `empirical_AC_{POP}` and `empirical_AF_{POP}` columns reference `joint_pops_
 `annotation_af_prefix` stores the annotation-AF column prefix, `gnomAD` for the gnomAD-built index.
 `VERSION` stores the version identifier.
 
-A gnomAD-built index with haplotypes also has a `haplotype_build_parameters` table, with one row per haplotype contig.
-Its columns are `contig`, `variant_freq_threshold`, `haplotype_freq_threshold`, `window_size`, and `min_call_rate`: the `compute_haplotypes` parameters that built that contig.
-`min_call_rate` is NULL where the call-rate filter did not run, and every parameter is NULL for a haplotype table built before the parameters were recorded.
-
 ## HGDP_haplotype
 
 Haplotypes are derived from the [gnomAD 3.1.2 HGDP+1KG individual-level phased genotypes](https://gnomad.broadinstitute.org/news/2021-10-gnomad-v3-1-2-minor-release/).

@@ -12,9 +12,7 @@ from fgpyo.io import assert_path_is_readable
 from hail.context import Env
 
 from divref import defaults
-from divref.duckdb_index import HaplotypeBuildParameters
 from divref.duckdb_index import contig_already_appended
-from divref.duckdb_index import insert_haplotype_build_parameters
 from divref.duckdb_index import read_legend
 from divref.duckdb_index import read_window_size
 from divref.duckdb_index import sequences_row_count
@@ -400,40 +398,6 @@ def _resolve_legends_and_remaps(
     return joint_pops_legend, remaps
 
 
-def _read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuildParameters:
-    """
-    Read the `build_parameters` global that `compute_haplotypes` writes on its output table.
-
-    A table built before the global existed yields all-None parameters and a warning.
-
-    Args:
-        haplotype_table_path: Path to the contig's haplotype Hail table.
-
-    Returns:
-        The recorded parameters, or all None when the table has no `build_parameters` global.
-    """
-    ht = hl.read_table(str(haplotype_table_path))
-    if "build_parameters" not in ht.globals:
-        logger.warning(
-            "Haplotype table %s has no build_parameters global; recording NULL build parameters. "
-            "Re-run compute_haplotypes to record them.",
-            haplotype_table_path,
-        )
-        return HaplotypeBuildParameters(
-            variant_freq_threshold=None,
-            haplotype_freq_threshold=None,
-            window_size=None,
-            min_call_rate=None,
-        )
-    recorded = ht.globals.build_parameters.collect()[0]
-    return HaplotypeBuildParameters(
-        variant_freq_threshold=recorded.variant_freq_threshold,
-        haplotype_freq_threshold=recorded.haplotype_freq_threshold,
-        window_size=recorded.window_size,
-        min_call_rate=recorded.min_call_rate,
-    )
-
-
 def _export_and_stream_contig(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -442,8 +406,6 @@ def _export_and_stream_contig(
     joint_pops_legend: list[str],
     chunk_size: int,
     retain_tsv: bool,
-    contig: str,
-    build_parameters: HaplotypeBuildParameters | None,
 ) -> int:
     """
     Export a contig's sequences to a TSV and stream it into `sequences` within one transaction.
@@ -460,9 +422,6 @@ def _export_and_stream_contig(
         joint_pops_legend: Ordered joint pop legend used to type the streamed columns.
         chunk_size: Maximum number of rows per polars read batch.
         retain_tsv: If True, leave the per-contig TSV in place after streaming.
-        contig: The contig being appended.
-        build_parameters: The contig's haplotype build parameters, written to
-            `haplotype_build_parameters` in the same transaction; None for a sites-only contig.
 
     Returns:
         The number of rows appended for this contig.
@@ -478,13 +437,6 @@ def _export_and_stream_contig(
             tsv=contig_tsv,
             joint_pops_legend=joint_pops_legend,
             chunk_size=chunk_size,
-            before_commit=(
-                None
-                if build_parameters is None
-                else lambda conn: insert_haplotype_build_parameters(
-                    conn, contig=contig, parameters=build_parameters
-                )
-            ),
         )
     finally:
         if not retain_tsv and contig_tsv.exists():
@@ -516,10 +468,6 @@ def append_contig_to_duckdb_index(
     appends `INSERT INTO` it. Sequence IDs continue the global offset given by the current
     `sequences` row count, so running contigs in canonical order reproduces a contiguous
     `DR-{version}-N` numbering across processes.
-
-    For a contig with a haplotype table, the `compute_haplotypes` parameters from that table's
-    `build_parameters` global go to `haplotype_build_parameters` (NULLs, with a warning, when the
-    table predates the global).
 
     Each contig is written in a single transaction, so a crash mid-stream rolls back and leaves the
     index unchanged. Appends are expected to run once per contig, in order; re-appending a contig
@@ -639,12 +587,6 @@ def append_contig_to_duckdb_index(
             joint_pops_legend=joint_pops_legend,
             chunk_size=polars_chunk_size,
             retain_tsv=retain_per_contig_tsvs,
-            contig=contig,
-            build_parameters=(
-                None
-                if table_pair.haplotype_table_path is None
-                else _read_haplotype_build_parameters(table_pair.haplotype_table_path)
-            ),
         )
 
     logger.info(
