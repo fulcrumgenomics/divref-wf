@@ -1394,7 +1394,15 @@ def test_compute_haplotypes_chry_nonpar(
             temp_dir=tmp_path / "hail_tmp",
             min_call_rate=min_call_rate,
         )
-    result = hl.read_table(f"{output_base}.ht").collect()
+    out_ht = hl.read_table(f"{output_base}.ht")
+    result = out_ht.collect()
+
+    assert out_ht.globals.build_parameters.collect()[0] == hl.Struct(
+        variant_freq_threshold=0.005,
+        haplotype_freq_threshold=0.005,
+        window_size=5000,
+        min_call_rate=min_call_rate,
+    )
 
     # Exact regression lock on the committed chrY fixture. Counting a male's single chrY twice would
     # double every empirical AC, so pinning the whole multiset guards the haploid convention.
