@@ -682,6 +682,9 @@ def compute_haplotypes(
     carrier strand), and XY males are counted haploid via the left strand only, the same
     single-strand treatment as chrX non-PAR males. Autosomes and PAR1/PAR2 are unaffected.
 
+    With `min_call_rate`, low call-rate variants are dropped before the per-population AF filter
+    (see `_filter_low_call_rate`).
+
     Args:
         vcfs_path: Path or glob pattern to input VCF files.
         gnomad_va_file: Path to the gnomAD variant annotations Hail table
@@ -697,9 +700,10 @@ def compute_haplotypes(
             `{output_base}.variants.ht`, `.blocks.ht`, `.parents.ht`, and `.hap_ac.ht`
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`.
-        min_call_rate: Minimum fraction of samples with a genotype call to keep a variant. On chrY
-            non-PAR only XY males count. Omit it to skip the filter. Imputed genotypes have no
-            missing calls, so the filter only matters for unimputed input such as chrY.
+        min_call_rate: Minimum fraction of pop-assigned samples with a genotype call to keep a
+            variant. On chrY non-PAR only XY males count. Omit it to skip the filter. Imputed
+            genotypes have no missing calls, so the filter only matters for unimputed input such
+            as chrY.
         temp_dir: Local directory for Hail temporary files.
         spark_driver_memory_gb: Memory in GB to allocate to the Spark driver.
         spark_executor_memory_gb: Memory in GB to allocate to the Spark executor.
