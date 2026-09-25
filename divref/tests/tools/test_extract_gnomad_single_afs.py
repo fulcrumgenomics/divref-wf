@@ -11,6 +11,7 @@ from divref.tools.extract_gnomad_single_afs import _GNOMAD_TABLE_URI
 from divref.tools.extract_gnomad_single_afs import GnomadCloud
 from divref.tools.extract_gnomad_single_afs import GnomadVersion
 from divref.tools.extract_gnomad_single_afs import _apply_filters
+from divref.tools.extract_gnomad_single_afs import _select_output_globals
 from divref.tools.extract_gnomad_single_afs import extract_gnomad_single_afs
 
 
@@ -204,3 +205,35 @@ def test_extract_gnomad_single_afs_propagates_hail_init_failure(
             gnomad_cloud=GnomadCloud.GCS,
             out_sites_hail_table=tmp_path / "out.ht",
         )
+
+
+@pytest.mark.parametrize(
+    "gnomad_version,freq_threshold,apply_filters",
+    [
+        pytest.param(GnomadVersion.JOINT_41, 0.005, True, id="joint_41_filtered"),
+        pytest.param(GnomadVersion.HGDP_1KG_312, 0.0, False, id="hgdp_1kg_unfiltered"),
+    ],
+)
+def test_select_output_globals_records_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    gnomad_version: GnomadVersion,
+    freq_threshold: float,
+    apply_filters: bool,
+) -> None:
+    """The output keeps only `pops` and a `build_parameters` global of the run's settings."""
+    va = hl.utils.range_table(1).annotate_globals(unrelated="dropped")
+    out = _select_output_globals(
+        va,
+        populations=["afr", "nfe"],
+        gnomad_version=gnomad_version,
+        freq_threshold=freq_threshold,
+        apply_filters=apply_filters,
+    )
+    assert hl.eval(out.index_globals()) == hl.Struct(
+        pops=["afr", "nfe"],
+        build_parameters=hl.Struct(
+            gnomad_version=str(gnomad_version),
+            freq_threshold=freq_threshold,
+            apply_filters=apply_filters,
+        ),
+    )

@@ -132,6 +132,37 @@ def _apply_filters(va: hl.Table, gnomad_version: GnomadVersion) -> hl.Table:
         return va.filter(hl.coalesce(hl.len(va.filters) == 0, True))
 
 
+def _select_output_globals(
+    va: hl.Table,
+    *,
+    populations: list[str],
+    gnomad_version: GnomadVersion,
+    freq_threshold: float,
+    apply_filters: bool,
+) -> hl.Table:
+    """
+    Replace the sites table's globals with `pops` and a `build_parameters` record of this run.
+
+    Args:
+        va: gnomAD sites Hail table.
+        populations: Population codes, in output order.
+        gnomad_version: gnomAD sites table the variants came from.
+        freq_threshold: Minimum population AF used to retain a variant.
+        apply_filters: Whether the variant filters (e.g. VQSR, AC0) were applied.
+
+    Returns:
+        `va` with only the `pops` and `build_parameters` globals.
+    """
+    return va.select_globals(
+        pops=populations,
+        build_parameters=hl.struct(
+            gnomad_version=str(gnomad_version),
+            freq_threshold=hl.float64(freq_threshold),
+            apply_filters=apply_filters,
+        ),
+    )
+
+
 def extract_gnomad_single_afs(
     *,
     gnomad_version: GnomadVersion,
@@ -153,7 +184,8 @@ def extract_gnomad_single_afs(
     Reads a gnomAD sites table and filters to variants above the frequency threshold in at least one
     population. Writes up to two outputs: a Hail table at `out_sites_hail_table` for downstream
     pipeline tools, and a flat TSV at `out_sites_tsv` with columns `variant` (contig:pos:ref:alt),
-    one allele-frequency column per population, `popmax_A[CFN]`, and `maxpop`.
+    one allele-frequency column per population, `popmax_A[CFN]`, and `maxpop`. The Hail table's
+    `build_parameters` global records `gnomad_version`, `freq_threshold`, and `apply_filters`.
 
     At least one of `out_sites_hail_table` or `out_sites_tsv` must be defined.
 
@@ -217,7 +249,13 @@ def extract_gnomad_single_afs(
     if not no_apply_filters:
         va = _apply_filters(va, gnomad_version)
 
-    va = va.select_globals(pops=populations)
+    va = _select_output_globals(
+        va,
+        populations=populations,
+        gnomad_version=gnomad_version,
+        freq_threshold=freq_threshold,
+        apply_filters=not no_apply_filters,
+    )
     row_freq = operator.attrgetter(schema.row_freq_field)(va)
     va = va.select(
         pop_freqs=hl.literal(pop_indices).map(lambda i: row_freq[i]),
