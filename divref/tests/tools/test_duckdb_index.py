@@ -6,8 +6,10 @@ import duckdb
 import polars
 import pytest
 
+from divref.duckdb_index import HaplotypeBuildParameters
 from divref.duckdb_index import _stream_tsv_into_sequences
 from divref.duckdb_index import create_sequence_id_index
+from divref.duckdb_index import insert_haplotype_build_parameters
 from divref.duckdb_index import sequences_tsv_columns
 from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.duckdb_index import with_compatibility_flag
@@ -324,3 +326,29 @@ def test_with_compatibility_flag_empty_frame() -> None:
     out = with_compatibility_flag(df)
     assert out.height == 0
     assert out.schema["haplotype_filter"] == polars.String
+
+
+def test_insert_haplotype_build_parameters_creates_table_and_appends_rows(tmp_path: Path) -> None:
+    """The first insert creates the table; later inserts append one row per contig."""
+    recorded = HaplotypeBuildParameters(
+        variant_freq_threshold=0.005,
+        haplotype_freq_threshold=0.005,
+        window_size=25,
+        min_call_rate=0.8,
+    )
+    unrecorded = HaplotypeBuildParameters(
+        variant_freq_threshold=None,
+        haplotype_freq_threshold=None,
+        window_size=None,
+        min_call_rate=None,
+    )
+    with duckdb.connect(str(tmp_path / "idx.duckdb")) as conn:
+        insert_haplotype_build_parameters(conn, contig="chrY", parameters=recorded)
+        insert_haplotype_build_parameters(conn, contig="chr22", parameters=unrecorded)
+        rows = conn.execute(
+            "SELECT contig, variant_freq_threshold, haplotype_freq_threshold, window_size, "
+            "min_call_rate FROM haplotype_build_parameters ORDER BY contig"
+        ).fetchall()
+
+    assert rows == [("chr22", None, None, None, None), ("chrY", 0.005, 0.005, 25, 0.8)]
+
