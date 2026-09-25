@@ -1337,6 +1337,10 @@ def test_compute_haplotypes_chrx_nonpar(
 
     result = hl.read_table(f"{output_base}.ht")
     assert result.count() == expected_count
+    # Two cases use different variant and haplotype thresholds, so a swapped field fails here.
+    recorded = hl.eval(result.index_globals().build_parameters)
+    assert recorded.variant_freq_threshold == variant_freq_threshold
+    assert recorded.haplotype_freq_threshold == haplotype_freq_threshold
 
     results: list[hl.Struct] = result.collect()
     assert all(len(r.haplotype) >= 2 for r in results)
@@ -1394,7 +1398,15 @@ def test_compute_haplotypes_chry_nonpar(
             temp_dir=tmp_path / "hail_tmp",
             min_call_rate=min_call_rate,
         )
-    result = hl.read_table(f"{output_base}.ht").collect()
+    out_ht = hl.read_table(f"{output_base}.ht")
+    result = out_ht.collect()
+
+    assert hl.eval(out_ht.index_globals().build_parameters) == hl.Struct(
+        variant_freq_threshold=0.005,
+        haplotype_freq_threshold=0.005,
+        haplotype_window_size=5000,
+        min_call_rate=min_call_rate,
+    )
 
     # Exact regression lock on the committed chrY fixture. Counting a male's single chrY twice would
     # double every empirical AC, so pinning the whole multiset guards the haploid convention.
