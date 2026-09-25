@@ -352,3 +352,52 @@ def test_insert_haplotype_build_parameters_creates_table_and_appends_rows(tmp_pa
 
     assert rows == [("chr22", None, None, None, None), ("chrY", 0.005, 0.005, 25, 0.8)]
 
+
+@pytest.mark.parametrize(
+    ("hook_raises", "expected_rows"),
+    [
+        pytest.param(False, 1, id="hook_write_commits_with_streamed_rows"),
+        pytest.param(True, 0, id="hook_failure_rolls_back_streamed_rows"),
+    ],
+)
+def test_stream_sequences_before_commit_hook_shares_transaction(
+    monkeypatch: pytest.MonkeyPatch, hook_raises: bool, expected_rows: int
+) -> None:
+    """`before_commit` runs inside the streaming transaction, so both commit or roll back."""
+    conn = duckdb.connect()
+    conn.execute("CREATE TABLE sequences (sequence_id VARCHAR)")
+    conn.execute("CREATE TABLE marker (value VARCHAR)")
+
+    def _insert_one(conn: duckdb.DuckDBPyConnection, **_: object) -> int:
+        conn.execute("INSERT INTO sequences VALUES ('streamed')")
+        return 1
+
+    def _hook(conn: duckdb.DuckDBPyConnection) -> None:
+        conn.execute("INSERT INTO marker VALUES ('hook')")
+        if hook_raises:
+            raise RuntimeError("hook failure")
+
+    monkeypatch.setattr("divref.duckdb_index._stream_tsv_into_sequences", _insert_one)
+
+    if hook_raises:
+        with pytest.raises(RuntimeError, match="hook failure"):
+            stream_sequences_tsv_into_duckdb(
+                conn,
+                tsv=Path("unused.tsv"),
+                joint_pops_legend=["afr"],
+                chunk_size=10,
+                before_commit=_hook,
+            )
+    else:
+        stream_sequences_tsv_into_duckdb(
+            conn,
+            tsv=Path("unused.tsv"),
+            joint_pops_legend=["afr"],
+            chunk_size=10,
+            before_commit=_hook,
+        )
+
+    for table in ("sequences", "marker"):
+        count = conn.execute(f"SELECT count(*) FROM {table}").fetchone()
+        assert count is not None and count[0] == expected_rows
+    conn.close()
