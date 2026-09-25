@@ -15,6 +15,7 @@ from divref.duckdb_index import write_metadata_tables
 from divref.gnomad_index_source import TablePair
 from divref.gnomad_index_source import compute_joint_legend
 from divref.gnomad_index_source import read_and_validate_pops_legends
+from divref.gnomad_index_source import read_haplotype_build_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,13 @@ def init_duckdb_index(
     """
     Create the DuckDB index file and write its population-legend + version metadata.
 
-    Reads only the `globals.pops` of each input Hail table (no row scan), validates that every
-    contig shares the same gnomAD and HGDP population legends, computes the joint legend, and
-    writes the `window_size`, `haplotype_pops_legend`, `variant_pops_legend`,
-    `joint_pops_legend`, `annotation_af_prefix`, and `VERSION` tables. Does not create `sequences`
-    — the first `append_contig_to_duckdb_index` does that.
+    Reads only the globals of each input Hail table (no row scan), validates that every contig
+    shares the same gnomAD and HGDP population legends, computes the joint legend, and writes the
+    `window_size`, `haplotype_pops_legend`, `variant_pops_legend`, `joint_pops_legend`,
+    `annotation_af_prefix`, and `VERSION` tables. It also writes `haplotype_build_parameters`, one
+    row per haplotype contig, from each haplotype table's `build_parameters` global (NULLs, with a
+    warning, for a table built before that global existed). Does not create `sequences` — the
+    first `append_contig_to_duckdb_index` does that.
 
     Args:
         in_table_pairs_tsv: TSV with 'contig', 'haplotype_table_path' (optional), and
@@ -46,8 +49,8 @@ def init_duckdb_index(
 
     Raises:
         FileExistsError: If the output DuckDB already exists and `force` is False.
-        ValueError: If `in_table_pairs_tsv` contains no table pairs, or if the contigs' gnomAD or
-            HGDP population legends disagree.
+        ValueError: If `in_table_pairs_tsv` contains no table pairs or lists a contig twice, or if
+            the contigs' gnomAD or HGDP population legends disagree.
     """
     assert_path_is_readable(in_table_pairs_tsv)
 
@@ -63,6 +66,11 @@ def init_duckdb_index(
     table_pairs: list[TablePair] = list(TablePair.read(in_table_pairs_tsv))
     if not table_pairs:
         raise ValueError(f"No table pairs found in {in_table_pairs_tsv}.")
+    seen_contigs: set[str] = set()
+    for table_pair in table_pairs:
+        if table_pair.contig in seen_contigs:
+            raise ValueError(f"Duplicate contig {table_pair.contig} in {in_table_pairs_tsv}.")
+        seen_contigs.add(table_pair.contig)
 
     # fail fast on input Hail tables; haplotype_table_path is optional per row
     for table_pair in table_pairs:
@@ -81,6 +89,11 @@ def init_duckdb_index(
     # Read each table's globals-only pop legend and validate cross-contig consistency.
     gnomad_pops_legend, hgdp_pops_legend = read_and_validate_pops_legends(table_pairs)
     joint_pops_legend: list[str] = compute_joint_legend(gnomad_pops_legend, hgdp_pops_legend)
+    haplotype_build_parameters = {
+        table_pair.contig: read_haplotype_build_parameters(table_pair.haplotype_table_path)
+        for table_pair in table_pairs
+        if table_pair.haplotype_table_path is not None
+    }
 
     with duckdb.connect(str(out_duckdb_file)) as conn:
         write_metadata_tables(
@@ -91,6 +104,7 @@ def init_duckdb_index(
             joint_pops_legend=joint_pops_legend,
             annotation_af_prefix="gnomAD",
             version=version,
+            haplotype_build_parameters=haplotype_build_parameters,
         )
 
     logger.info(
