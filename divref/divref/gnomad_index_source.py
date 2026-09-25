@@ -62,8 +62,8 @@ def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuil
     table_globals = hl.read_table(str(haplotype_table_path)).index_globals()
     if "build_parameters" not in table_globals:
         logger.warning(
-            "Haplotype table %s has no build_parameters global; recording NULL build parameters. "
-            "Re-run compute_haplotypes to record them.",
+            "Haplotype table %s has no build_parameters global, so its build parameters are "
+            "unknown (NULL). Re-run compute_haplotypes to record them.",
             haplotype_table_path,
         )
         return HaplotypeBuildParameters(
