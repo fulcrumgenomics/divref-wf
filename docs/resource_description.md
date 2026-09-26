@@ -58,6 +58,7 @@ It also has a `variant_build_parameters` table, with one row per contig, keyed b
 Its other columns are `gnomad_version`, `freq_threshold`, and `apply_filters`: the `extract_gnomad_single_afs` parameters that built that contig's single-variant track.
 Every parameter is NULL for a sites table built before the parameters were recorded.
 `init_duckdb_index` requires the recorded values to agree across contigs; a NULL row does not conflict with a recorded one.
+`append_contig_to_duckdb_index` refuses a contig whose recorded variant build parameters differ from those stored at init.
 
 ## HGDP_haplotype
 

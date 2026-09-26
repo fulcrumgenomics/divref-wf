@@ -596,3 +596,107 @@ def test_append_accepts_matching_haplotype_build_parameters(
     )
     with duckdb.connect(str(_db_path(output_base))) as conn:
         assert sequences_row_count(conn) > 0
+
+
+def _sites_with_parameters(datadir: Path, out: Path, freq_threshold: float) -> Path:
+    """Copy the chr1 sites fixture with a `build_parameters` global of non-NULL values."""
+    hl.read_table(str(datadir / "chr1_100001_200000.gnomad_afs.ht")).annotate_globals(
+        build_parameters=hl.struct(
+            gnomad_version="JOINT_41",
+            freq_threshold=hl.float64(freq_threshold),
+            apply_filters=False,
+        )
+    ).write(str(out))
+    return out
+
+
+def _init_with_sites(datadir: Path, tmp_path: Path, sites: Path) -> tuple[Path, Path]:
+    """Init an index whose chr1 pair uses `sites`; return (table pairs TSV, output base)."""
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "init_pairs.tsv",
+        rows=[("chr1", str(datadir / "chr1_100001_200000_haplotypes.ht"), str(sites))],
+    )
+    output_base = tmp_path / "idx"
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+    return table_pairs_tsv, output_base
+
+
+@pytest.mark.parametrize(
+    ("drift", "match"),
+    [
+        pytest.param(
+            "sites_table_changed",
+            "chr1 variant build parameters",
+            id="parameters_differ_from_init_raises",
+        ),
+        pytest.param(
+            "stored_row_deleted",
+            "no variant_build_parameters row for chr1",
+            id="contig_without_stored_row_raises",
+        ),
+        pytest.param(
+            "index_predates_table",
+            "initialized before variant build parameters were recorded",
+            id="index_without_parameters_table_raises",
+        ),
+    ],
+)
+def test_append_rejects_variant_build_parameter_drift(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    drift: str,
+    match: str,
+) -> None:
+    """Append refuses a contig whose sites table no longer matches what init recorded."""
+    sites = _sites_with_parameters(datadir, tmp_path / "init_sites.ht", 0.005)
+    append_pairs, output_base = _init_with_sites(datadir, tmp_path, sites)
+    if drift == "sites_table_changed":
+        changed = _sites_with_parameters(datadir, tmp_path / "changed_sites.ht", 0.01)
+        append_pairs = _write_table_pairs_tsv(
+            tmp_path / "append_pairs.tsv",
+            rows=[("chr1", str(datadir / "chr1_100001_200000_haplotypes.ht"), str(changed))],
+        )
+    else:
+        statement = {
+            "stored_row_deleted": "DELETE FROM variant_build_parameters WHERE contig = 'chr1'",
+            "index_predates_table": "DROP TABLE variant_build_parameters",
+        }[drift]
+        with duckdb.connect(str(_db_path(output_base))) as conn:
+            conn.execute(statement)
+
+    with pytest.raises(ValueError, match=match):
+        append_contig_to_duckdb_index(
+            in_table_pairs_tsv=append_pairs,
+            contig="chr1",
+            output_base=output_base,
+            reference_fasta=_reference_fasta(datadir),
+            window_size=25,
+            version="9.9",
+        )
+
+
+def test_append_accepts_matching_variant_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """A contig whose sites-table parameters are unchanged since init appends normally."""
+    sites = _sites_with_parameters(datadir, tmp_path / "sites.ht", 0.005)
+    table_pairs_tsv, output_base = _init_with_sites(datadir, tmp_path, sites)
+    append_contig_to_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        contig="chr1",
+        output_base=output_base,
+        reference_fasta=_reference_fasta(datadir),
+        window_size=25,
+        version="9.9",
+    )
+    with duckdb.connect(str(_db_path(output_base))) as conn:
+        assert sequences_row_count(conn) > 0
