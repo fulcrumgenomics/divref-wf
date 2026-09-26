@@ -701,7 +701,9 @@ def compute_haplotypes(
         output_base: Base output path. Writes intermediate checkpoints
             `{output_base}.variants.ht`, `.blocks.ht`, `.parents.ht`, and `.hap_ac.ht`
             (the tool does not delete them; the Snakemake rule removes them post-run) and
-            the final `{output_base}.ht`.
+            the final `{output_base}.ht`. The final table's `build_parameters` global records
+            `variant_freq_threshold`, `haplotype_freq_threshold`, `haplotype_window_size` (the
+            `window_size` argument), and `min_call_rate` (missing when omitted).
         min_call_rate: Minimum fraction of pop-assigned samples with a genotype call to keep a
             variant. On chrY non-PAR only XY males count. Omit it to skip the filter. Imputed
             genotypes have no missing calls, so the filter only matters for unimputed input such
@@ -865,7 +867,17 @@ def compute_haplotypes(
     )
 
     logger.info("Writing final %s.ht ...", output_base)
-    hap_table = hap_table.annotate_globals(pops=hl.literal(pop_legend))
+    hap_table = hap_table.annotate_globals(
+        pops=hl.literal(pop_legend),
+        build_parameters=hl.struct(
+            variant_freq_threshold=hl.float64(variant_freq_threshold),
+            haplotype_freq_threshold=hl.float64(haplotype_freq_threshold),
+            haplotype_window_size=hl.int32(window_size),
+            min_call_rate=(
+                hl.missing(hl.tfloat64) if min_call_rate is None else hl.float64(min_call_rate)
+            ),
+        ),
+    )
     # Coalesce to a fixed output partition count (independent of the input-side `min_partitions`)
     # to bound the number of part-files written for the final table.
     hap_table.key_by("haplotype").naive_coalesce(64).write(f"{str(output_base)}.ht", overwrite=True)
