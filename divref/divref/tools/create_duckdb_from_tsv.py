@@ -540,6 +540,7 @@ def create_duckdb_from_tsv(
             # Drives the `<source>_AF_<pop>` annotation-column names.
             annotation_af_prefix=meta.source_name,
             version=meta.version,
+            haplotype_build_parameters=None,
         )
 
         known_contigs = set(contigs)
