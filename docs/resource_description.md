@@ -52,6 +52,7 @@ A gnomAD-built index also has a `haplotype_build_parameters` table, with one row
 Its other columns are `variant_freq_threshold`, `haplotype_freq_threshold`, `haplotype_window_size`, and `min_call_rate`: the `compute_haplotypes` parameters that built that contig.
 `haplotype_window_size` is the adjacency gap for forming haplotypes, not the flanking-context `window_size` above, although the workflow uses one value for both.
 `min_call_rate` is NULL where the call-rate filter did not run, and every parameter is NULL for a haplotype table built before the parameters were recorded.
+`append_contig_to_duckdb_index` refuses a contig whose recorded haplotype build parameters differ from those stored at init; it does not detect other changes to the inputs.
 
 ## HGDP_haplotype
 

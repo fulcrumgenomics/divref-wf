@@ -468,3 +468,131 @@ def test_append_rolls_back_on_streaming_failure(
     # and the row-count helper reports zero rather than a half-written contig.
     with duckdb.connect(str(_db_path(output_base))) as conn:
         assert sequences_row_count(conn) == 0
+
+
+_PARAMETERS_TYPE = hl.tstruct(
+    variant_freq_threshold=hl.tfloat64,
+    haplotype_freq_threshold=hl.tfloat64,
+    haplotype_window_size=hl.tint32,
+    min_call_rate=hl.tfloat64,
+)
+
+
+def _haplotypes_with_parameters(datadir: Path, out: Path, variant_freq_threshold: float) -> Path:
+    """Copy the chr1 haplotype fixture with a `build_parameters` global of distinct values."""
+    parameters = hl.Struct(
+        variant_freq_threshold=variant_freq_threshold,
+        haplotype_freq_threshold=0.002,
+        haplotype_window_size=37,
+        min_call_rate=0.8,
+    )
+    hl.read_table(str(datadir / "chr1_100001_200000_haplotypes.ht")).annotate_globals(
+        build_parameters=hl.literal(parameters, dtype=_PARAMETERS_TYPE)
+    ).write(str(out))
+    return out
+
+
+@pytest.mark.parametrize(
+    ("drift", "match"),
+    [
+        pytest.param(
+            "haplotype_table_changed",
+            "chr1 haplotype build parameters",
+            id="parameters_differ_from_init_raises",
+        ),
+        pytest.param(
+            "stored_row_deleted",
+            "no haplotype_build_parameters row for chr1",
+            id="haplotype_contig_without_stored_row_raises",
+        ),
+        pytest.param(
+            "contig_now_sites_only",
+            "chr1 has stored haplotype build parameters",
+            id="stored_row_for_sites_only_contig_raises",
+        ),
+        pytest.param(
+            "index_predates_table",
+            "initialized before haplotype build parameters were recorded",
+            id="index_without_parameters_table_raises",
+        ),
+    ],
+)
+def test_append_rejects_haplotype_build_parameter_drift(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    drift: str,
+    match: str,
+) -> None:
+    """Append refuses a contig whose inputs no longer match what init recorded."""
+    sites = str(datadir / "chr1_100001_200000.gnomad_afs.ht")
+    init_haplotypes = _haplotypes_with_parameters(datadir, tmp_path / "init.ht", 0.01)
+    init_pairs = _write_table_pairs_tsv(
+        tmp_path / "init_pairs.tsv", rows=[("chr1", str(init_haplotypes), sites)]
+    )
+    output_base = tmp_path / "idx"
+    init_duckdb_index(
+        in_table_pairs_tsv=init_pairs,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+
+    append_pairs = init_pairs
+    if drift == "haplotype_table_changed":
+        changed = _haplotypes_with_parameters(datadir, tmp_path / "changed.ht", 0.02)
+        append_pairs = _write_table_pairs_tsv(
+            tmp_path / "append_pairs.tsv", rows=[("chr1", str(changed), sites)]
+        )
+    elif drift == "stored_row_deleted":
+        with duckdb.connect(str(_db_path(output_base))) as conn:
+            conn.execute("DELETE FROM haplotype_build_parameters WHERE contig = 'chr1'")
+    elif drift == "index_predates_table":
+        with duckdb.connect(str(_db_path(output_base))) as conn:
+            conn.execute("DROP TABLE haplotype_build_parameters")
+    else:
+        append_pairs = _write_table_pairs_tsv(
+            tmp_path / "append_pairs.tsv", rows=[("chr1", "", sites)]
+        )
+
+    with pytest.raises(ValueError, match=match):
+        append_contig_to_duckdb_index(
+            in_table_pairs_tsv=append_pairs,
+            contig="chr1",
+            output_base=output_base,
+            reference_fasta=_reference_fasta(datadir),
+            window_size=25,
+            version="9.9",
+        )
+
+
+def test_append_accepts_matching_haplotype_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """A contig whose recorded parameters are unchanged since init appends normally."""
+    haplotypes = _haplotypes_with_parameters(datadir, tmp_path / "haplotypes.ht", 0.01)
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "table_pairs.tsv",
+        rows=[("chr1", str(haplotypes), str(datadir / "chr1_100001_200000.gnomad_afs.ht"))],
+    )
+    output_base = tmp_path / "idx"
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+    append_contig_to_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        contig="chr1",
+        output_base=output_base,
+        reference_fasta=_reference_fasta(datadir),
+        window_size=25,
+        version="9.9",
+    )
+    with duckdb.connect(str(_db_path(output_base))) as conn:
+        assert sequences_row_count(conn) > 0
