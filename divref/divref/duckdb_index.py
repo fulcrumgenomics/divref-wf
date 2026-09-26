@@ -231,6 +231,51 @@ def read_stored_haplotype_build_parameters(
     )
 
 
+def variant_build_parameters_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
+    """
+    Return whether the index has a `variant_build_parameters` table.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+
+    Returns:
+        True if the table is present.
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'variant_build_parameters'"
+        ).fetchone()
+        is not None
+    )
+
+
+def read_stored_variant_build_parameters(
+    conn: duckdb.DuckDBPyConnection, contig: str
+) -> VariantBuildParameters | None:
+    """
+    Read one contig's row from `variant_build_parameters`.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+        contig: The contig to look up.
+
+    Returns:
+        The stored parameters, or None when the table or the contig's row is absent.
+    """
+    if not variant_build_parameters_table_exists(conn):
+        return None
+    row = conn.execute(
+        "SELECT gnomad_version, freq_threshold, apply_filters FROM variant_build_parameters "
+        "WHERE contig = ?",
+        [contig],
+    ).fetchone()
+    if row is None:
+        return None
+    return VariantBuildParameters(
+        gnomad_version=row[0], freq_threshold=row[1], apply_filters=row[2]
+    )
+
+
 def read_window_size(conn: duckdb.DuckDBPyConnection) -> int:
     """Read the stored window_size metadata value."""
     row = conn.execute("SELECT window_size FROM window_size").fetchone()
