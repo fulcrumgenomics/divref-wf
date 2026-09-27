@@ -208,7 +208,7 @@ def test_extract_gnomad_single_afs_propagates_hail_init_failure(
 
 
 @pytest.mark.parametrize(
-    "gnomad_version,freq_threshold,apply_filters",
+    ("gnomad_version", "freq_threshold", "apply_filters"),
     [
         pytest.param(GnomadVersion.JOINT_41, 0.005, True, id="joint_41_filtered"),
         pytest.param(GnomadVersion.HGDP_1KG_312, 0.0, False, id="hgdp_1kg_unfiltered"),
