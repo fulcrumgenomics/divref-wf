@@ -243,10 +243,8 @@ def test_init_records_haplotype_build_parameters(
             "haplotype_window_size, min_call_rate FROM haplotype_build_parameters"
         ).fetchall()
     assert rows == [expected_row]
-    haplotype_warning = (
-        "Haplotype table" in caplog.text and "has no build_parameters" in caplog.text
-    )
-    assert haplotype_warning == expect_warning
+    expected_warning = f"Haplotype table {haplotype_table} has no build_parameters global"
+    assert (expected_warning in caplog.text) == expect_warning
 
 
 def test_init_records_variant_build_parameters(
@@ -287,3 +285,80 @@ def test_init_records_variant_build_parameters(
         ).fetchall()
     assert rows == [("chr1", "JOINT_41", 0.005, True), ("chrX", None, None, None)]
     assert "chrX_50000000_50025000.gnomad_afs.ht has no build_parameters global" in caplog.text
+    assert "chr1_sites.ht has no build_parameters global" not in caplog.text
+
+
+_JOINT_41_PARAMETERS = hl.Struct(
+    gnomad_version="JOINT_41", freq_threshold=0.005, apply_filters=True
+)
+
+
+@pytest.mark.parametrize(
+    ("chrx_parameters", "match"),
+    [
+        pytest.param(
+            _JOINT_41_PARAMETERS.annotate(gnomad_version="GENOMES_312"),
+            "gnomad_version",
+            id="mixed_gnomad_versions_rejected",
+        ),
+        pytest.param(
+            _JOINT_41_PARAMETERS.annotate(freq_threshold=0.01),
+            "freq_threshold",
+            id="mixed_freq_thresholds_rejected",
+        ),
+        pytest.param(
+            _JOINT_41_PARAMETERS.annotate(apply_filters=False),
+            "apply_filters",
+            id="mixed_apply_filters_rejected",
+        ),
+        pytest.param(None, None, id="unrecorded_contig_does_not_conflict"),
+    ],
+)
+def test_init_rejects_mixed_variant_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    chrx_parameters: hl.Struct | None,
+    match: str | None,
+) -> None:
+    """All contigs share one single-variant source; recorded values must agree across contigs."""
+    parameters_type = hl.tstruct(
+        gnomad_version=hl.tstr, freq_threshold=hl.tfloat64, apply_filters=hl.tbool
+    )
+
+    def sites_with(source: Path, out: Path, parameters: hl.Struct | None) -> Path:
+        if parameters is None:
+            return source
+        hl.read_table(str(source)).annotate_globals(
+            build_parameters=hl.literal(parameters, dtype=parameters_type)
+        ).write(str(out))
+        return out
+
+    chr1_sites = sites_with(
+        datadir / "chr1_100001_200000.gnomad_afs.ht", tmp_path / "chr1.ht", _JOINT_41_PARAMETERS
+    )
+    chrx_sites = sites_with(
+        datadir / "chrX_50000000_50025000.gnomad_afs.ht", tmp_path / "chrX.ht", chrx_parameters
+    )
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "table_pairs.tsv",
+        rows=[
+            ("chr1", str(datadir / "chr1_100001_200000_haplotypes.ht"), str(chr1_sites)),
+            ("chrX", "", str(chrx_sites)),
+        ],
+    )
+
+    def run() -> None:
+        init_duckdb_index(
+            in_table_pairs_tsv=table_pairs_tsv,
+            output_base=tmp_path / "idx",
+            version="9.9",
+            window_size=25,
+            force=True,
+        )
+
+    if match is None:
+        run()
+    else:
+        with pytest.raises(ValueError, match=f"disagree on {match}"):
+            run()

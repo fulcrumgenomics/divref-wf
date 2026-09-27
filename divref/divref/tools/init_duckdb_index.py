@@ -2,6 +2,8 @@
 
 import logging
 import os
+from collections.abc import Mapping
+from dataclasses import fields
 from pathlib import Path
 
 import duckdb
@@ -11,6 +13,7 @@ from fgpyo.io import assert_path_is_readable
 from fgpyo.io import assert_path_is_writable
 from hail.context import Env
 
+from divref.duckdb_index import VariantBuildParameters
 from divref.duckdb_index import write_metadata_tables
 from divref.gnomad_index_source import TablePair
 from divref.gnomad_index_source import compute_joint_legend
@@ -19,6 +22,31 @@ from divref.gnomad_index_source import read_haplotype_build_parameters
 from divref.gnomad_index_source import read_variant_build_parameters
 
 logger = logging.getLogger(__name__)
+
+
+def _check_consistent_variant_build_parameters(
+    variant_build_parameters: Mapping[str, VariantBuildParameters],
+) -> None:
+    """
+    Check that every contig's single-variant track came from the same source and settings.
+
+    The index has one `annotation_af_prefix` and one variant legend, so the single-variant AF
+    columns must mean the same thing on every contig. A NULL (unrecorded) value never conflicts.
+
+    Args:
+        variant_build_parameters: Per-contig `extract_gnomad_single_afs` parameters.
+
+    Raises:
+        ValueError: If two contigs record different non-NULL values for a parameter.
+    """
+    for field in fields(VariantBuildParameters):
+        values = {
+            contig: getattr(parameters, field.name)
+            for contig, parameters in variant_build_parameters.items()
+            if getattr(parameters, field.name) is not None
+        }
+        if len(set(values.values())) > 1:
+            raise ValueError(f"Contigs disagree on {field.name}: {values}.")
 
 
 def init_duckdb_index(
@@ -37,8 +65,10 @@ def init_duckdb_index(
     `window_size`, `haplotype_pops_legend`, `variant_pops_legend`, `joint_pops_legend`,
     `annotation_af_prefix`, and `VERSION` tables. It also writes `haplotype_build_parameters`, one
     row per haplotype contig, from each haplotype table's `build_parameters` global (NULLs, with a
-    warning, for a table built before that global existed). Does not create `sequences` — the
-    first `append_contig_to_duckdb_index` does that.
+    warning, for a table built before that global existed). It also writes
+    `variant_build_parameters`, one row per contig, from each sites table's `build_parameters`
+    global, with the same NULL handling; those values must agree across contigs. Does not create
+    `sequences` — the first `append_contig_to_duckdb_index` does that.
 
     Args:
         in_table_pairs_tsv: TSV with 'contig', 'haplotype_table_path' (optional), and
@@ -50,8 +80,9 @@ def init_duckdb_index(
 
     Raises:
         FileExistsError: If the output DuckDB already exists and `force` is False.
-        ValueError: If `in_table_pairs_tsv` contains no table pairs or lists a contig twice, or if
-            the contigs' gnomAD or HGDP population legends disagree.
+        ValueError: If `in_table_pairs_tsv` contains no table pairs or lists a contig twice, if
+            the contigs' gnomAD or HGDP population legends disagree, or if their recorded
+            single-variant build parameters disagree.
     """
     assert_path_is_readable(in_table_pairs_tsv)
 
@@ -99,6 +130,7 @@ def init_duckdb_index(
         table_pair.contig: read_variant_build_parameters(table_pair.sites_table_path)
         for table_pair in table_pairs
     }
+    _check_consistent_variant_build_parameters(variant_build_parameters)
 
     with duckdb.connect(str(out_duckdb_file)) as conn:
         write_metadata_tables(
