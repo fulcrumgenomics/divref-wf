@@ -237,3 +237,84 @@ def test_select_output_globals_records_build_parameters(
             apply_filters=apply_filters,
         ),
     )
+
+
+def _make_joint41_sites_ht() -> hl.Table:
+    """
+    Build a two-variant JOINT_41-shaped sites table with the fields the tool reads.
+
+    Both variants pass the AF threshold; the second fails the genome filter, so it survives only
+    when the filters are not applied.
+    """
+    freq = hl.tarray(
+        hl.tstruct(AC=hl.tint32, AF=hl.tfloat64, AN=hl.tint32, homozygote_count=hl.tint32)
+    )
+    grpmax = hl.tstruct(AC=hl.tint32, AF=hl.tfloat64, AN=hl.tint32, gen_anc=hl.tstr)
+    schema = hl.tstruct(
+        locus=hl.tlocus("GRCh38"),
+        alleles=hl.tarray(hl.tstr),
+        joint=hl.tstruct(freq=freq, grpmax=grpmax),
+        exomes=hl.tstruct(filters=hl.tset(hl.tstr)),
+        genomes=hl.tstruct(filters=hl.tset(hl.tstr)),
+    )
+    pop_freqs = [
+        {"AC": 10, "AF": 0.1, "AN": 100, "homozygote_count": 0},
+        {"AC": 20, "AF": 0.2, "AN": 100, "homozygote_count": 0},
+    ]
+    rows = [
+        {
+            "locus": hl.Locus("chr22", position, reference_genome="GRCh38"),
+            "alleles": ["A", "T"],
+            "joint": {
+                "freq": pop_freqs,
+                "grpmax": {"AC": 20, "AF": 0.2, "AN": 100, "gen_anc": "nfe"},
+            },
+            "exomes": {"filters": set()},
+            "genomes": {"filters": genome_filters},
+        }
+        for position, genome_filters in [(20_000_000, set()), (20_000_100, {"AS_VQSR"})]
+    ]
+    ht = hl.Table.parallelize(rows, schema=schema, key=["locus", "alleles"])
+    return ht.annotate_globals(
+        joint_globals=hl.struct(
+            freq_meta=[{"group": "adj", "gen_anc": "afr"}, {"group": "adj", "gen_anc": "nfe"}]
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("no_apply_filters", "expected_rows"),
+    [
+        pytest.param(False, 1, id="filters_applied_and_recorded"),
+        pytest.param(True, 2, id="filters_skipped_and_recorded"),
+    ],
+)
+def test_extract_gnomad_single_afs_records_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    no_apply_filters: bool,
+    expected_rows: int,
+) -> None:
+    """The written sites table records the run's settings, and `apply_filters` matches the rows."""
+    monkeypatch.setattr("divref.tools.extract_gnomad_single_afs.hail_init", lambda **_: None)
+    monkeypatch.setattr(
+        "divref.tools.extract_gnomad_single_afs.hl.read_table",
+        lambda _uri: _make_joint41_sites_ht(),
+    )
+    out = tmp_path / "sites.ht"
+    extract_gnomad_single_afs(
+        gnomad_version=GnomadVersion.JOINT_41,
+        contig="chr22",
+        freq_threshold=0.05,
+        no_apply_filters=no_apply_filters,
+        populations=["afr", "nfe"],
+        out_sites_hail_table=out,
+    )
+    # The stub replaced `hl.read_table` on the shared hail module; restore it to read the output.
+    monkeypatch.undo()
+    written = hl.read_table(str(out))
+    assert hl.eval(written.index_globals().build_parameters) == hl.Struct(
+        gnomad_version="JOINT_41", freq_threshold=0.05, apply_filters=not no_apply_filters
+    )
+    assert written.count() == expected_rows

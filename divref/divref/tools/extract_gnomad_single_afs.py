@@ -246,7 +246,6 @@ def extract_gnomad_single_afs(
             raise ValueError(f"Population {pop!r} not found in gnomAD frequency metadata")
         pop_indices.append(idx)
 
-    # One flag drives both the filtering and the recorded `apply_filters`, so they cannot disagree.
     apply_filters = not no_apply_filters
     if apply_filters:
         va = _apply_filters(va, gnomad_version)
