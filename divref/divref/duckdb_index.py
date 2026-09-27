@@ -108,7 +108,7 @@ def write_metadata_tables(
         haplotype_build_parameters: Per-contig `compute_haplotypes` parameters, or None to skip
             the table (a TSV-built index). An empty mapping writes an empty table.
         variant_build_parameters: Per-contig `extract_gnomad_single_afs` parameters, or None to
-            skip the table (a TSV-built index).
+            skip the table (a TSV-built index). An empty mapping writes an empty table.
     """
     # Write the tables in one transaction so an interrupted init leaves no partially
     # populated index (which a later append/finalize would then read as corrupt metadata).
