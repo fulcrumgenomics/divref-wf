@@ -36,6 +36,9 @@ def test_extract_gnomad_afs(
     pops = hl.eval(va.globals.pops)
     assert pops == defaults.POPULATIONS
 
+    # The pre-filter threshold is recorded for compute_haplotypes to pass on.
+    assert hl.eval(va.index_globals().prefilter_parameters) == hl.Struct(freq_threshold=0.001)
+
     # Each row should have pop_freqs with one entry per population
     first_row = va.head(1).collect()[0]
     assert len(first_row.pop_freqs) == len(defaults.POPULATIONS)
