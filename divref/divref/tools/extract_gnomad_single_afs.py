@@ -132,37 +132,6 @@ def _apply_filters(va: hl.Table, gnomad_version: GnomadVersion) -> hl.Table:
         return va.filter(hl.coalesce(hl.len(va.filters) == 0, True))
 
 
-def _select_output_globals(
-    va: hl.Table,
-    *,
-    populations: list[str],
-    gnomad_version: GnomadVersion,
-    freq_threshold: float,
-    apply_filters: bool,
-) -> hl.Table:
-    """
-    Replace the sites table's globals with `pops` and a `build_parameters` record of this run.
-
-    Args:
-        va: gnomAD sites Hail table.
-        populations: Population codes, in output order.
-        gnomad_version: gnomAD sites table the variants came from.
-        freq_threshold: Minimum population AF used to retain a variant.
-        apply_filters: Whether the variant filters (e.g. VQSR, AC0) were applied.
-
-    Returns:
-        `va` with only the `pops` and `build_parameters` globals.
-    """
-    return va.select_globals(
-        pops=populations,
-        build_parameters=hl.struct(
-            gnomad_version=str(gnomad_version),
-            freq_threshold=hl.float64(freq_threshold),
-            apply_filters=apply_filters,
-        ),
-    )
-
-
 def extract_gnomad_single_afs(
     *,
     gnomad_version: GnomadVersion,
@@ -250,12 +219,13 @@ def extract_gnomad_single_afs(
     if apply_filters:
         va = _apply_filters(va, gnomad_version)
 
-    va = _select_output_globals(
-        va,
-        populations=populations,
-        gnomad_version=gnomad_version,
-        freq_threshold=freq_threshold,
-        apply_filters=apply_filters,
+    va = va.select_globals(
+        pops=populations,
+        build_parameters=hl.struct(
+            gnomad_version=str(gnomad_version),
+            freq_threshold=hl.float64(freq_threshold),
+            apply_filters=apply_filters,
+        ),
     )
     row_freq = operator.attrgetter(schema.row_freq_field)(va)
     va = va.select(
