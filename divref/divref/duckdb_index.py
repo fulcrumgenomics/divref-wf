@@ -50,12 +50,16 @@ class HaplotypeBuildParameters:
             index's flanking-context `window_size`, although the workflow uses one value for both.
         min_call_rate: Minimum fraction of pop-assigned samples (on chrY non-PAR, XY males only)
             with a genotype call.
+        sites_freq_threshold: The `extract_gnomad_afs` pre-filter threshold on the input sites
+            table. The effective variant cutoff is the larger of this and
+            `variant_freq_threshold`.
     """
 
     variant_freq_threshold: float | None
     haplotype_freq_threshold: float | None
     haplotype_window_size: int | None
     min_call_rate: float | None
+    sites_freq_threshold: float | None
 
 
 @dataclass(frozen=True)
@@ -163,7 +167,8 @@ def write_metadata_tables(
                 table_name="haplotype_build_parameters",
                 columns_ddl=(
                     "variant_freq_threshold DOUBLE, haplotype_freq_threshold DOUBLE, "
-                    "haplotype_window_size INTEGER, min_call_rate DOUBLE"
+                    "haplotype_window_size INTEGER, min_call_rate DOUBLE, "
+                    "sites_freq_threshold DOUBLE"
                 ),
                 parameters_by_contig=haplotype_build_parameters,
             )
@@ -218,7 +223,7 @@ def read_stored_haplotype_build_parameters(
         return None
     row = conn.execute(
         "SELECT variant_freq_threshold, haplotype_freq_threshold, haplotype_window_size, "
-        "min_call_rate FROM haplotype_build_parameters WHERE contig = ?",
+        "min_call_rate, sites_freq_threshold FROM haplotype_build_parameters WHERE contig = ?",
         [contig],
     ).fetchone()
     if row is None:
@@ -228,6 +233,7 @@ def read_stored_haplotype_build_parameters(
         haplotype_freq_threshold=row[1],
         haplotype_window_size=row[2],
         min_call_rate=row[3],
+        sites_freq_threshold=row[4],
     )
 
 

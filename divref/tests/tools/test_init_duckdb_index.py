@@ -174,8 +174,9 @@ def test_matching_legends_pass() -> None:
                 haplotype_freq_threshold=0.002,
                 haplotype_window_size=37,
                 min_call_rate=0.8,
+                sites_freq_threshold=0.003,
             ),
-            ("chr1", 0.01, 0.002, 37, 0.8),
+            ("chr1", 0.01, 0.002, 37, 0.8, 0.003),
             False,
             id="recorded_parameters_copied",
         ),
@@ -185,14 +186,15 @@ def test_matching_legends_pass() -> None:
                 haplotype_freq_threshold=0.002,
                 haplotype_window_size=37,
                 min_call_rate=None,
+                sites_freq_threshold=0.003,
             ),
-            ("chr1", 0.01, 0.002, 37, None),
+            ("chr1", 0.01, 0.002, 37, None, 0.003),
             False,
             id="no_call_rate_filter_records_null",
         ),
         pytest.param(
             None,
-            ("chr1", None, None, None, None),
+            ("chr1", None, None, None, None, None),
             True,
             id="table_without_parameters_records_nulls_and_warns",
         ),
@@ -216,6 +218,7 @@ def test_init_records_haplotype_build_parameters(
             haplotype_freq_threshold=hl.tfloat64,
             haplotype_window_size=hl.tint32,
             min_call_rate=hl.tfloat64,
+            sites_freq_threshold=hl.tfloat64,
         )
         hl.read_table(str(haplotype_table)).annotate_globals(
             build_parameters=hl.literal(build_parameters, dtype=parameters_type)
@@ -242,7 +245,8 @@ def test_init_records_haplotype_build_parameters(
     with duckdb.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT contig, variant_freq_threshold, haplotype_freq_threshold, "
-            "haplotype_window_size, min_call_rate FROM haplotype_build_parameters"
+            "haplotype_window_size, min_call_rate, sites_freq_threshold "
+            "FROM haplotype_build_parameters"
         ).fetchall()
     assert rows == [expected_row]
     expected_warning = f"Haplotype table {haplotype_table} has no build_parameters global"

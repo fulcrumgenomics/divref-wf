@@ -1406,6 +1406,7 @@ def test_compute_haplotypes_chry_nonpar(
         haplotype_freq_threshold=0.005,
         haplotype_window_size=5000,
         min_call_rate=min_call_rate,
+        sites_freq_threshold=None,
     )
 
     # Exact regression lock on the committed chrY fixture. Counting a male's single chrY twice would
@@ -1705,3 +1706,29 @@ def test_filter_low_call_rate(
     mt = mt.annotate_entries(GT=hl.or_missing(called[mt.col_idx], hl.call(0)))
     result = _filter_low_call_rate(mt, min_call_rate)
     assert (result.count_rows() == 1) is expected_kept
+
+
+def test_compute_haplotypes_records_sites_prefilter_threshold(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """The input sites table's `prefilter_parameters.freq_threshold` is carried into the global."""
+    sites = tmp_path / "sites.ht"
+    hl.read_table(str(datadir / "chrY_2900000_2925000.gnomad_afs.ht")).annotate_globals(
+        prefilter_parameters=hl.struct(freq_threshold=hl.float64(0.002))
+    ).write(str(sites))
+    output_base = tmp_path / "haplos"
+    with patch("divref.tools.compute_haplotypes.hl.init"):
+        compute_haplotypes(
+            vcfs_path=datadir / "chrY_2900000_2925000.vcf.gz",
+            gnomad_va_file=sites,
+            gnomad_sa_file=datadir / "hgdp_1kg_sample_metadata.extract.ht",
+            window_size=5000,
+            variant_freq_threshold=0.005,
+            haplotype_freq_threshold=0.005,
+            output_base=output_base,
+            temp_dir=tmp_path / "hail_tmp",
+        )
+    recorded = hl.eval(hl.read_table(f"{output_base}.ht").index_globals().build_parameters)
+    assert recorded.sites_freq_threshold == 0.002

@@ -475,6 +475,7 @@ _PARAMETERS_TYPE = hl.tstruct(
     haplotype_freq_threshold=hl.tfloat64,
     haplotype_window_size=hl.tint32,
     min_call_rate=hl.tfloat64,
+    sites_freq_threshold=hl.tfloat64,
 )
 
 
@@ -485,6 +486,7 @@ def _haplotypes_with_parameters(datadir: Path, out: Path, variant_freq_threshold
         haplotype_freq_threshold=0.002,
         haplotype_window_size=37,
         min_call_rate=0.8,
+        sites_freq_threshold=0.003,
     )
     hl.read_table(str(datadir / "chr1_100001_200000_haplotypes.ht")).annotate_globals(
         build_parameters=hl.literal(parameters, dtype=_PARAMETERS_TYPE)
