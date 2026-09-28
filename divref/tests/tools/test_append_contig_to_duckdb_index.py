@@ -532,7 +532,7 @@ def _init_with_pair(tmp_path: Path, *, haplotypes: Path, sites: Path) -> tuple[P
         ),
         pytest.param(
             "index_predates_table",
-            "initialized before haplotype build parameters were recorded",
+            "haplotype_build_parameters table is missing or predates its current columns",
             id="index_without_parameters_table_raises",
         ),
         pytest.param(
@@ -542,7 +542,7 @@ def _init_with_pair(tmp_path: Path, *, haplotypes: Path, sites: Path) -> tuple[P
         ),
         pytest.param(
             "index_predates_sites_column",
-            "initialized before haplotype build parameters were recorded",
+            "haplotype_build_parameters table is missing or predates its current columns",
             id="index_without_sites_threshold_column_raises",
         ),
     ],

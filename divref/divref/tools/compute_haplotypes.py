@@ -760,7 +760,8 @@ def compute_haplotypes(
         )
     else:
         logger.info(
-            "Effective variant AF cutoff is %s (sites pre-filter %s, variant_freq_threshold %s).",
+            "Any-population variant AF cutoff is %s (sites pre-filter %s, variant_freq_threshold "
+            "%s); per-population carriers are still gated by variant_freq_threshold.",
             max(sites_freq_threshold, variant_freq_threshold),
             sites_freq_threshold,
             variant_freq_threshold,

@@ -429,8 +429,9 @@ def _check_haplotype_build_parameters(
     if stored is None:
         if not haplotype_build_parameters_table_is_current(conn):
             raise ValueError(
-                f"The index was initialized before haplotype build parameters were recorded, so "
-                f"{table_pair.contig} cannot be checked; rebuild it with init_duckdb_index --force."
+                f"The index's haplotype_build_parameters table is missing or predates its current "
+                f"columns, so {table_pair.contig} cannot be checked; rebuild it with "
+                f"init_duckdb_index --force."
             )
         raise ValueError(
             f"There is no haplotype_build_parameters row for {table_pair.contig}; re-run "

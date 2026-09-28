@@ -52,8 +52,9 @@ class HaplotypeBuildParameters:
         min_call_rate: Minimum fraction of pop-assigned samples (on chrY non-PAR, XY males only)
             with a genotype call.
         sites_freq_threshold: The `extract_gnomad_afs` pre-filter threshold on the input sites
-            table. The effective variant cutoff is the larger of this and
-            `variant_freq_threshold`.
+            table. It raises only the any-population gate: a variant needs AF at least the larger
+            of this and `variant_freq_threshold` in some population. Per-population carriers are
+            still gated by `variant_freq_threshold` alone.
     """
 
     variant_freq_threshold: float | None

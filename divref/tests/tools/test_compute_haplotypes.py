@@ -1,5 +1,6 @@
 """Tests for the compute_haplotypes tool."""
 
+import logging
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -1716,19 +1717,29 @@ def test_filter_low_call_rate(
 
 
 @pytest.mark.parametrize(
-    "prefilter_threshold",
+    ("prefilter_threshold", "expected_missing_warnings", "expected_cutoff_logs"),
     [
-        pytest.param(0.002, id="prefilter_global_carried_into_build_parameters"),
-        pytest.param(None, id="no_prefilter_global_records_missing"),
+        # The logged cutoff is max(0.002 pre-filter, 0.005 variant_freq_threshold).
+        pytest.param(
+            0.002,
+            0,
+            ["Any-population variant AF cutoff is 0.005"],
+            id="prefilter_global_carried_into_build_parameters",
+        ),
+        pytest.param(None, 1, [], id="no_prefilter_global_records_missing_and_warns"),
     ],
 )
 def test_compute_haplotypes_records_sites_prefilter_threshold(
     hail_context: None,  # noqa: ARG001
     datadir: Path,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
     prefilter_threshold: float | None,
+    expected_missing_warnings: int,
+    expected_cutoff_logs: list[str],
 ) -> None:
     """The input sites table's `prefilter_parameters.freq_threshold` is carried into the global."""
+    caplog.set_level(logging.INFO, logger="divref.tools.compute_haplotypes")
     sites_ht = hl.read_table(str(datadir / "chrY_2900000_2925000.gnomad_afs.ht")).select_globals(
         "pops"
     )
@@ -1752,3 +1763,11 @@ def test_compute_haplotypes_records_sites_prefilter_threshold(
         )
     recorded = hl.eval(hl.read_table(f"{output_base}.ht").index_globals().build_parameters)
     assert recorded.sites_freq_threshold == prefilter_threshold
+
+    messages = [record.getMessage() for record in caplog.records]
+    missing_warnings = [m for m in messages if m.startswith(f"Sites table {sites} has no")]
+    assert len(missing_warnings) == expected_missing_warnings
+    cutoff_logs = [
+        m.split(" (")[0] for m in messages if m.startswith("Any-population variant AF cutoff is")
+    ]
+    assert cutoff_logs == expected_cutoff_logs
