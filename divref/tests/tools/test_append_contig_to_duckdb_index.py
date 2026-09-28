@@ -545,6 +545,11 @@ def _init_with_pair(tmp_path: Path, *, haplotypes: Path, sites: Path) -> tuple[P
             "haplotype_build_parameters table is missing or predates its current columns",
             id="index_without_sites_threshold_column_raises",
         ),
+        pytest.param(
+            "sites_only_append_to_stale_index",
+            "haplotype_build_parameters table is missing or predates its current columns",
+            id="sites_only_append_to_stale_index_raises",
+        ),
     ],
 )
 def test_append_rejects_haplotype_build_parameter_drift(
@@ -577,6 +582,13 @@ def test_append_rejects_haplotype_build_parameter_drift(
     elif drift == "index_predates_sites_column":
         with duckdb.connect(str(_db_path(output_base))) as conn:
             conn.execute("ALTER TABLE haplotype_build_parameters DROP COLUMN sites_freq_threshold")
+    elif drift == "sites_only_append_to_stale_index":
+        # chr1 had a haplotype table at init; the stale index must refuse it as sites-only too.
+        with duckdb.connect(str(_db_path(output_base))) as conn:
+            conn.execute("ALTER TABLE haplotype_build_parameters DROP COLUMN sites_freq_threshold")
+        append_pairs = _write_table_pairs_tsv(
+            tmp_path / "append_pairs.tsv", rows=[("chr1", "", sites)]
+        )
     else:
         append_pairs = _write_table_pairs_tsv(
             tmp_path / "append_pairs.tsv", rows=[("chr1", "", str(sites))]

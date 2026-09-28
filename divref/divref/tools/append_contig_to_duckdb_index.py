@@ -13,6 +13,7 @@ from hail.context import Env
 
 from divref import defaults
 from divref.duckdb_index import contig_already_appended
+from divref.duckdb_index import haplotype_build_parameters_table_exists
 from divref.duckdb_index import haplotype_build_parameters_table_is_current
 from divref.duckdb_index import read_legend
 from divref.duckdb_index import read_stored_haplotype_build_parameters
@@ -415,9 +416,19 @@ def _check_haplotype_build_parameters(
         table_pair: The single contig's haplotype + gnomAD sites table pair.
 
     Raises:
-        ValueError: If a haplotype contig has no stored row or different parameters, or a
-            sites-only contig has a stored row.
+        ValueError: If the table predates its current columns, a haplotype contig has no stored
+            row or different parameters, or a sites-only contig has a stored row.
     """
+    stale_index = (
+        f"The index's haplotype_build_parameters table is missing or predates its current "
+        f"columns, so {table_pair.contig} cannot be checked; rebuild it with "
+        f"init_duckdb_index --force."
+    )
+    # A table that exists without the current columns cannot be read, for any contig.
+    if haplotype_build_parameters_table_exists(conn) and not (
+        haplotype_build_parameters_table_is_current(conn)
+    ):
+        raise ValueError(stale_index)
     stored = read_stored_haplotype_build_parameters(conn, table_pair.contig)
     if table_pair.haplotype_table_path is None:
         if stored is not None:
@@ -427,12 +438,8 @@ def _check_haplotype_build_parameters(
             )
         return
     if stored is None:
-        if not haplotype_build_parameters_table_is_current(conn):
-            raise ValueError(
-                f"The index's haplotype_build_parameters table is missing or predates its current "
-                f"columns, so {table_pair.contig} cannot be checked; rebuild it with "
-                f"init_duckdb_index --force."
-            )
+        if not haplotype_build_parameters_table_exists(conn):
+            raise ValueError(stale_index)
         raise ValueError(
             f"There is no haplotype_build_parameters row for {table_pair.contig}; re-run "
             f"init_duckdb_index with the same table pairs."

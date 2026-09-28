@@ -1719,12 +1719,18 @@ def test_filter_low_call_rate(
 @pytest.mark.parametrize(
     ("prefilter_threshold", "expected_missing_warnings", "expected_cutoff_logs"),
     [
-        # The logged cutoff is max(0.002 pre-filter, 0.005 variant_freq_threshold).
+        # The logged cutoff is max(pre-filter, 0.005 variant_freq_threshold).
         pytest.param(
             0.002,
             0,
             ["Any-population variant AF cutoff is 0.005"],
             id="prefilter_global_carried_into_build_parameters",
+        ),
+        pytest.param(
+            0.01,
+            0,
+            ["Any-population variant AF cutoff is 0.01"],
+            id="prefilter_above_variant_threshold_sets_cutoff",
         ),
         pytest.param(None, 1, [], id="no_prefilter_global_records_missing_and_warns"),
     ],

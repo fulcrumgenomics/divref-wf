@@ -208,6 +208,25 @@ def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     return list(json.loads(row[0]))
 
 
+def haplotype_build_parameters_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
+    """
+    Return whether the index has a `haplotype_build_parameters` table, current or not.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+
+    Returns:
+        True if the table is present.
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'haplotype_build_parameters'"
+        ).fetchone()
+        is not None
+    )
+
+
 def haplotype_build_parameters_table_is_current(conn: duckdb.DuckDBPyConnection) -> bool:
     """
     Return whether the index has a `haplotype_build_parameters` table with every current column.
