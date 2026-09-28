@@ -51,6 +51,7 @@ The `empirical_AC_{POP}` and `empirical_AF_{POP}` columns reference `joint_pops_
 A gnomAD-built index also has a `haplotype_build_parameters` table, with one row per haplotype contig, keyed by `contig` (empty when no contig has haplotypes).
 Its other columns are `variant_freq_threshold`, `haplotype_freq_threshold`, `haplotype_window_size`, `min_call_rate`, and `sites_freq_threshold`: the `compute_haplotypes` parameters that built that contig.
 `sites_freq_threshold` is the `extract_gnomad_afs` pre-filter on the input sites table, so the effective variant cutoff is the larger of it and `variant_freq_threshold`; it is NULL when the input table did not record it.
+The workflow passes `hgdp_1kg_min_pop_variant_allele_freq` to both, so a NULL or lower `sites_freq_threshold` does not mean a looser build.
 `haplotype_window_size` is the adjacency gap for forming haplotypes, not the flanking-context `window_size` above, although the workflow uses one value for both.
 `min_call_rate` is NULL where the call-rate filter did not run, and every parameter is NULL for a haplotype table built before the parameters were recorded.
 `append_contig_to_duckdb_index` refuses a contig whose recorded haplotype build parameters differ from those stored at init; it does not detect other changes to the inputs.
