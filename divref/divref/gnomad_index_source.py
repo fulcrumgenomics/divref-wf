@@ -59,7 +59,8 @@ def _read_build_parameters[ParametersT: (HaplotypeBuildParameters, VariantBuildP
     Read a table's `build_parameters` global into `parameters_type`.
 
     Reads only the table's globals file. A table built before the global existed yields
-    all-None parameters and a warning.
+    all-None parameters and a warning. A `build_parameters` without a field (built before that
+    field existed) yields None for it and a warning.
 
     Args:
         table_path: Path to a Hail table.
@@ -82,7 +83,17 @@ def _read_build_parameters[ParametersT: (HaplotypeBuildParameters, VariantBuildP
         )
         return parameters_type(**dict.fromkeys(names))
     recorded = hl.eval(table_globals.build_parameters)
-    return parameters_type(**{name: recorded[name] for name in names})
+    missing = [name for name in names if name not in recorded]
+    if missing:
+        logger.warning(
+            "%s table %s build_parameters has no %s, so those parameters are unknown (NULL). "
+            "Re-run %s to record them.",
+            table_kind,
+            table_path,
+            ", ".join(missing),
+            tool_name,
+        )
+    return parameters_type(**{name: recorded.get(name) for name in names})
 
 
 def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuildParameters:

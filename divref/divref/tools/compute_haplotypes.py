@@ -752,6 +752,19 @@ def compute_haplotypes(
         if "prefilter_parameters" in va_globals
         else None
     )
+    if sites_freq_threshold is None:
+        logger.warning(
+            "Sites table %s has no prefilter_parameters global, so its pre-filter threshold is "
+            "unknown (NULL). Re-run extract_gnomad_afs to record it.",
+            gnomad_va_file,
+        )
+    else:
+        logger.info(
+            "Effective variant AF cutoff is %s (sites pre-filter %s, variant_freq_threshold %s).",
+            max(sites_freq_threshold, variant_freq_threshold),
+            sites_freq_threshold,
+            variant_freq_threshold,
+        )
     gnomad_va = gnomad_va.filter(
         hl.max(gnomad_va.pop_freqs.map(lambda x: x.AF)) >= variant_freq_threshold
     )

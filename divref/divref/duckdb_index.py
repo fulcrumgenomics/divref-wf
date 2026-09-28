@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from dataclasses import astuple
 from dataclasses import dataclass
+from dataclasses import fields
 from pathlib import Path
 
 import duckdb
@@ -206,6 +207,28 @@ def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     return list(json.loads(row[0]))
 
 
+def haplotype_build_parameters_table_is_current(conn: duckdb.DuckDBPyConnection) -> bool:
+    """
+    Return whether the index has a `haplotype_build_parameters` table with every current column.
+
+    An index initialized before a column was added (e.g. `sites_freq_threshold`) is not current.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+
+    Returns:
+        True if the table is present with the current columns.
+    """
+    columns = {
+        row[0]
+        for row in conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'haplotype_build_parameters'"
+        ).fetchall()
+    }
+    return {field.name for field in fields(HaplotypeBuildParameters)} <= columns
+
+
 def read_stored_haplotype_build_parameters(
     conn: duckdb.DuckDBPyConnection, contig: str
 ) -> HaplotypeBuildParameters | None:
@@ -217,9 +240,10 @@ def read_stored_haplotype_build_parameters(
         contig: The contig to look up.
 
     Returns:
-        The stored parameters, or None when the table or the contig's row is absent.
+        The stored parameters, or None when the table is absent or not current, or the contig's
+        row is absent.
     """
-    if not table_exists(conn, "haplotype_build_parameters"):
+    if not haplotype_build_parameters_table_is_current(conn):
         return None
     row = conn.execute(
         "SELECT variant_freq_threshold, haplotype_freq_threshold, haplotype_window_size, "
