@@ -44,3 +44,23 @@ def test_extract_gnomad_afs(
     # All retained variants must exceed freq_threshold in at least one population
     min_max_af = va.aggregate(hl.agg.min(hl.max(va.pop_freqs.map(lambda x: x.AF))))
     assert min_max_af >= 0.001
+
+
+def test_extract_gnomad_afs_records_prefilter_threshold(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+) -> None:
+    """The pre-filter threshold is recorded for `compute_haplotypes` to pass on."""
+    out_va = tmp_path / "va.ht"
+    with patch("divref.tools.extract_gnomad_afs.hail_init"):
+        extract_gnomad_afs(
+            in_gnomad_sites_table=str(datadir / "chr1_100001_200000.ht"),
+            out_variant_annotation_table=out_va,
+            contig="chr1",
+            freq_threshold=0.01,
+            populations=defaults.POPULATIONS,
+            reference_genome=defaults.REFERENCE_GENOME,
+        )
+    recorded = hl.eval(hl.read_table(str(out_va)).index_globals().prefilter_parameters)
+    assert recorded == hl.Struct(freq_threshold=0.01)

@@ -28,7 +28,8 @@ def extract_gnomad_afs(
 
     Reads the gnomAD v3.1.2 HGDP/1KG subset, extracts per-population allele frequencies
     for the specified populations, filters to variants above the frequency threshold in at
-    least one population, and writes a compact variant annotation Hail table.
+    least one population, and writes a compact variant annotation Hail table. The table's
+    `prefilter_parameters` global records `freq_threshold`.
 
     Args:
         in_gnomad_sites_table: Path to the gnomAD HGDP/1KG sites table.
@@ -75,7 +76,10 @@ def extract_gnomad_afs(
     # Some filter sets are {} and some are NA; treat NA as passing.
     va = va.filter(hl.coalesce(hl.len(va.filters) == 0, True))
 
-    va = va.select_globals(pops=populations)
+    va = va.select_globals(
+        pops=populations,
+        prefilter_parameters=hl.struct(freq_threshold=hl.float64(freq_threshold)),
+    )
     va = va.select(pop_freqs=hl.literal(pop_indices).map(lambda i: va.gnomad_freq[i]))
     va = va.filter(hl.any(lambda x: x.AF >= freq_threshold, va.pop_freqs))
     va.naive_coalesce(64).write(str(out_variant_annotation_table), overwrite=True)
