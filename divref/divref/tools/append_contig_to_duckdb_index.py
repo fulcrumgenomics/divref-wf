@@ -13,7 +13,6 @@ from hail.context import Env
 
 from divref import defaults
 from divref.duckdb_index import contig_already_appended
-from divref.duckdb_index import haplotype_build_parameters_table_exists
 from divref.duckdb_index import haplotype_build_parameters_table_is_current
 from divref.duckdb_index import read_legend
 from divref.duckdb_index import read_stored_haplotype_build_parameters
@@ -425,7 +424,7 @@ def _check_haplotype_build_parameters(
         f"init_duckdb_index --force."
     )
     # A table that exists without the current columns cannot be read, for any contig.
-    if haplotype_build_parameters_table_exists(conn) and not (
+    if table_exists(conn, "haplotype_build_parameters") and not (
         haplotype_build_parameters_table_is_current(conn)
     ):
         raise ValueError(stale_index)
@@ -438,7 +437,7 @@ def _check_haplotype_build_parameters(
             )
         return
     if stored is None:
-        if not haplotype_build_parameters_table_exists(conn):
+        if not table_exists(conn, "haplotype_build_parameters"):
             raise ValueError(stale_index)
         raise ValueError(
             f"There is no haplotype_build_parameters row for {table_pair.contig}; re-run "
