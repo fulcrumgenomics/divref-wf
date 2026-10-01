@@ -138,6 +138,16 @@ properties:
       `divref compute-haplotypes`.
     default: 0.005
 
+  hgdp_1kg_min_chry_call_rate:
+    type: ["number", "null"]
+    minimum: 0
+    maximum: 1
+    description: |
+      Minimum fraction of XY males in `hgdp_1kg_populations`, pooled across populations, with a
+      genotype call to keep a chrY non-PAR variant. The workflow passes it to
+      `divref compute-haplotypes --min-call-rate` for chrY only. null turns the filter off.
+    default: 0.8
+
   gnomad_variant_annotation_source:
     type: string
     enum: ["JOINT_41", "GENOMES_312", "HGDP_1KG_312"]
