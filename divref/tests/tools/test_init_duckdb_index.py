@@ -1,5 +1,7 @@
 """Tests for the init_duckdb_index tool."""
 
+from contextlib import AbstractContextManager
+from contextlib import nullcontext
 from pathlib import Path
 
 import duckdb
@@ -294,24 +296,24 @@ _JOINT_41_PARAMETERS = hl.Struct(
 
 
 @pytest.mark.parametrize(
-    ("chrx_parameters", "match"),
+    ("chrx_parameters", "expectation"),
     [
         pytest.param(
             _JOINT_41_PARAMETERS.annotate(gnomad_version="GENOMES_312"),
-            "gnomad_version",
+            pytest.raises(ValueError, match="disagree on gnomad_version"),
             id="mixed_gnomad_versions_rejected",
         ),
         pytest.param(
             _JOINT_41_PARAMETERS.annotate(freq_threshold=0.01),
-            "freq_threshold",
+            pytest.raises(ValueError, match="disagree on freq_threshold"),
             id="mixed_freq_thresholds_rejected",
         ),
         pytest.param(
             _JOINT_41_PARAMETERS.annotate(apply_filters=False),
-            "apply_filters",
+            pytest.raises(ValueError, match="disagree on apply_filters"),
             id="mixed_apply_filters_rejected",
         ),
-        pytest.param(None, None, id="unrecorded_contig_does_not_conflict"),
+        pytest.param(None, nullcontext(), id="unrecorded_contig_does_not_conflict"),
     ],
 )
 def test_init_rejects_mixed_variant_build_parameters(
@@ -319,7 +321,7 @@ def test_init_rejects_mixed_variant_build_parameters(
     datadir: Path,
     tmp_path: Path,
     chrx_parameters: hl.Struct | None,
-    match: str | None,
+    expectation: AbstractContextManager[object],
 ) -> None:
     """All contigs share one single-variant source; recorded values must agree across contigs."""
     parameters_type = hl.tstruct(
@@ -348,7 +350,7 @@ def test_init_rejects_mixed_variant_build_parameters(
         ],
     )
 
-    def run() -> None:
+    with expectation:
         init_duckdb_index(
             in_table_pairs_tsv=table_pairs_tsv,
             output_base=tmp_path / "idx",
@@ -356,9 +358,3 @@ def test_init_rejects_mixed_variant_build_parameters(
             window_size=25,
             force=True,
         )
-
-    if match is None:
-        run()
-    else:
-        with pytest.raises(ValueError, match=f"disagree on {match}"):
-            run()
