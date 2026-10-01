@@ -703,7 +703,9 @@ def compute_haplotypes(
             (the tool does not delete them; the Snakemake rule removes them post-run) and
             the final `{output_base}.ht`. The final table's `build_parameters` global records
             `variant_freq_threshold`, `haplotype_freq_threshold`, `haplotype_window_size` (the
-            `window_size` argument), and `min_call_rate` (missing when omitted).
+            `window_size` argument), `min_call_rate` (missing when omitted), and
+            `sites_freq_threshold` (the input's `prefilter_parameters.freq_threshold`, missing when
+            the input has none).
         min_call_rate: Minimum fraction of pop-assigned samples with a genotype call to keep a
             variant. On chrY non-PAR only XY males count. Omit it to skip the filter. Imputed
             genotypes have no missing calls, so the filter only matters for unimputed input such
@@ -743,6 +745,27 @@ def compute_haplotypes(
 
     gnomad_sa = hl.read_table(str(gnomad_sa_file))
     gnomad_va = hl.read_table(str(gnomad_va_file))
+    # The sites table may already be pre-filtered by `extract_gnomad_afs`; record its threshold.
+    va_globals = gnomad_va.index_globals()
+    sites_freq_threshold: float | None = (
+        hl.eval(va_globals.prefilter_parameters.freq_threshold)
+        if "prefilter_parameters" in va_globals
+        else None
+    )
+    if sites_freq_threshold is None:
+        logger.warning(
+            "Sites table %s has no prefilter_parameters global, so its pre-filter threshold is "
+            "unknown (NULL). Re-run extract_gnomad_afs to record it.",
+            gnomad_va_file,
+        )
+    else:
+        logger.info(
+            "Any-population variant AF cutoff is %s (sites pre-filter %s, variant_freq_threshold "
+            "%s); per-population carriers are still gated by variant_freq_threshold.",
+            max(sites_freq_threshold, variant_freq_threshold),
+            sites_freq_threshold,
+            variant_freq_threshold,
+        )
     gnomad_va = gnomad_va.filter(
         hl.max(gnomad_va.pop_freqs.map(lambda x: x.AF)) >= variant_freq_threshold
     )
@@ -875,6 +898,11 @@ def compute_haplotypes(
             haplotype_window_size=hl.int32(window_size),
             min_call_rate=(
                 hl.missing(hl.tfloat64) if min_call_rate is None else hl.float64(min_call_rate)
+            ),
+            sites_freq_threshold=(
+                hl.missing(hl.tfloat64)
+                if sites_freq_threshold is None
+                else hl.float64(sites_freq_threshold)
             ),
         ),
     )

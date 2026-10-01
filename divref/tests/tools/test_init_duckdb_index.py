@@ -166,7 +166,7 @@ def test_matching_legends_pass() -> None:
 
 
 @pytest.mark.parametrize(
-    ("build_parameters", "expected_row", "expect_warning"),
+    ("build_parameters", "expected_row", "expected_warning"),
     [
         pytest.param(
             hl.Struct(
@@ -174,9 +174,10 @@ def test_matching_legends_pass() -> None:
                 haplotype_freq_threshold=0.002,
                 haplotype_window_size=37,
                 min_call_rate=0.8,
+                sites_freq_threshold=0.003,
             ),
-            ("chr1", 0.01, 0.002, 37, 0.8),
-            False,
+            ("chr1", 0.01, 0.002, 37, 0.8, 0.003),
+            None,
             id="recorded_parameters_copied",
         ),
         pytest.param(
@@ -185,15 +186,27 @@ def test_matching_legends_pass() -> None:
                 haplotype_freq_threshold=0.002,
                 haplotype_window_size=37,
                 min_call_rate=None,
+                sites_freq_threshold=0.003,
             ),
-            ("chr1", 0.01, 0.002, 37, None),
-            False,
+            ("chr1", 0.01, 0.002, 37, None, 0.003),
+            None,
             id="no_call_rate_filter_records_null",
         ),
         pytest.param(
+            hl.Struct(
+                variant_freq_threshold=0.01,
+                haplotype_freq_threshold=0.002,
+                haplotype_window_size=37,
+                min_call_rate=0.8,
+            ),
+            ("chr1", 0.01, 0.002, 37, 0.8, None),
+            "has no sites_freq_threshold",
+            id="parameters_without_sites_threshold_record_null_and_warn",
+        ),
+        pytest.param(
             None,
-            ("chr1", None, None, None, None),
-            True,
+            ("chr1", None, None, None, None, None),
+            "has no build_parameters global",
             id="table_without_parameters_records_nulls_and_warns",
         ),
     ],
@@ -205,18 +218,16 @@ def test_init_records_haplotype_build_parameters(
     caplog: pytest.LogCaptureFixture,
     build_parameters: hl.Struct | None,
     expected_row: tuple[object, ...],
-    expect_warning: bool,
+    expected_warning: str | None,
 ) -> None:
     """Each haplotype contig gets one row; the sites-only chrX gets none."""
     haplotype_table = datadir / "chr1_100001_200000_haplotypes.ht"
     if build_parameters is not None:
         annotated = tmp_path / "haplotypes.ht"
-        parameters_type = hl.tstruct(
-            variant_freq_threshold=hl.tfloat64,
-            haplotype_freq_threshold=hl.tfloat64,
-            haplotype_window_size=hl.tint32,
-            min_call_rate=hl.tfloat64,
-        )
+        parameters_type = hl.tstruct(**{
+            name: hl.tint32 if name == "haplotype_window_size" else hl.tfloat64
+            for name in build_parameters
+        })
         hl.read_table(str(haplotype_table)).annotate_globals(
             build_parameters=hl.literal(build_parameters, dtype=parameters_type)
         ).write(str(annotated))
@@ -242,11 +253,19 @@ def test_init_records_haplotype_build_parameters(
     with duckdb.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT contig, variant_freq_threshold, haplotype_freq_threshold, "
-            "haplotype_window_size, min_call_rate FROM haplotype_build_parameters"
+            "haplotype_window_size, min_call_rate, sites_freq_threshold "
+            "FROM haplotype_build_parameters"
         ).fetchall()
     assert rows == [expected_row]
-    expected_warning = f"Haplotype table {haplotype_table} has no build_parameters global"
-    assert (expected_warning in caplog.text) == expect_warning
+    haplotype_warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith(f"Haplotype table {haplotype_table}")
+    ]
+    if expected_warning is None:
+        assert haplotype_warnings == []
+    else:
+        assert len(haplotype_warnings) == 1 and expected_warning in haplotype_warnings[0]
 
 
 def test_init_records_variant_build_parameters(

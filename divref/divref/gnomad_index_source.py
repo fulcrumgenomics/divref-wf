@@ -53,22 +53,24 @@ def _read_build_parameters[ParametersT: (HaplotypeBuildParameters, VariantBuildP
     table_path: Path,
     parameters_type: type[ParametersT],
     table_kind: str,
-    tool_name: str,
+    rerun_tools: str,
 ) -> ParametersT:
     """
     Read a table's `build_parameters` global into `parameters_type`.
 
     Reads only the table's globals file. A table built before the global existed yields
-    all-None parameters and a warning.
+    all-None parameters and a warning. A `build_parameters` without a field (built before that
+    field existed) yields None for it and a warning.
 
     Args:
         table_path: Path to a Hail table.
         parameters_type: The build-parameters dataclass to fill.
         table_kind: Table description for the warning (e.g. "Haplotype").
-        tool_name: Tool that writes the global, named in the warning.
+        rerun_tools: Tools the warning says to re-run to record the parameters.
 
     Returns:
-        The recorded parameters, or all None when the table has no `build_parameters` global.
+        The recorded parameters: all None when the table has no `build_parameters` global, and
+        None for each field absent from it.
     """
     table_globals = hl.read_table(str(table_path)).index_globals()
     names = [field.name for field in fields(parameters_type)]
@@ -78,11 +80,21 @@ def _read_build_parameters[ParametersT: (HaplotypeBuildParameters, VariantBuildP
             "(NULL). Re-run %s to record them.",
             table_kind,
             table_path,
-            tool_name,
+            rerun_tools,
         )
         return parameters_type(**dict.fromkeys(names))
     recorded = hl.eval(table_globals.build_parameters)
-    return parameters_type(**{name: recorded[name] for name in names})
+    missing = [name for name in names if name not in recorded]
+    if missing:
+        logger.warning(
+            "%s table %s build_parameters has no %s, so those parameters are unknown (NULL). "
+            "Re-run %s to record them.",
+            table_kind,
+            table_path,
+            ", ".join(missing),
+            rerun_tools,
+        )
+    return parameters_type(**{name: recorded.get(name) for name in names})
 
 
 def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuildParameters:
@@ -93,13 +105,14 @@ def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuil
         haplotype_table_path: Path to a haplotype Hail table.
 
     Returns:
-        The recorded parameters, or all None when the table has no `build_parameters` global.
+        The recorded parameters: all None when the table has no `build_parameters` global, and
+        `sites_freq_threshold` None when that field is absent.
     """
     return _read_build_parameters(
         table_path=haplotype_table_path,
         parameters_type=HaplotypeBuildParameters,
         table_kind="Haplotype",
-        tool_name="compute_haplotypes",
+        rerun_tools="extract_gnomad_afs and compute_haplotypes",
     )
 
 
@@ -117,7 +130,7 @@ def read_variant_build_parameters(sites_table_path: Path) -> VariantBuildParamet
         table_path=sites_table_path,
         parameters_type=VariantBuildParameters,
         table_kind="Sites",
-        tool_name="extract_gnomad_single_afs",
+        rerun_tools="extract_gnomad_single_afs",
     )
 
 

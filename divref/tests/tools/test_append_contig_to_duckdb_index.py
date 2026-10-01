@@ -475,16 +475,20 @@ _PARAMETERS_TYPE = hl.tstruct(
     haplotype_freq_threshold=hl.tfloat64,
     haplotype_window_size=hl.tint32,
     min_call_rate=hl.tfloat64,
+    sites_freq_threshold=hl.tfloat64,
 )
 
 
-def _haplotypes_with_parameters(datadir: Path, out: Path, variant_freq_threshold: float) -> Path:
+def _haplotypes_with_parameters(
+    datadir: Path, out: Path, variant_freq_threshold: float, sites_freq_threshold: float = 0.003
+) -> Path:
     """Copy the chr1 haplotype fixture with a `build_parameters` global of distinct values."""
     parameters = hl.Struct(
         variant_freq_threshold=variant_freq_threshold,
         haplotype_freq_threshold=0.002,
         haplotype_window_size=37,
         min_call_rate=0.8,
+        sites_freq_threshold=sites_freq_threshold,
     )
     hl.read_table(str(datadir / "chr1_100001_200000_haplotypes.ht")).annotate_globals(
         build_parameters=hl.literal(parameters, dtype=_PARAMETERS_TYPE)
@@ -528,8 +532,23 @@ def _init_with_pair(tmp_path: Path, *, haplotypes: Path, sites: Path) -> tuple[P
         ),
         pytest.param(
             "index_predates_table",
-            "initialized before haplotype build parameters were recorded",
+            "haplotype_build_parameters table is missing or predates its current columns",
             id="index_without_parameters_table_raises",
+        ),
+        pytest.param(
+            "sites_threshold_changed",
+            "chr1 haplotype build parameters",
+            id="sites_threshold_differs_from_init_raises",
+        ),
+        pytest.param(
+            "index_predates_sites_column",
+            "haplotype_build_parameters table is missing or predates its current columns",
+            id="index_without_sites_threshold_column_raises",
+        ),
+        pytest.param(
+            "sites_only_append_to_stale_index",
+            "haplotype_build_parameters table is missing or predates its current columns",
+            id="sites_only_append_to_stale_index_raises",
         ),
     ],
 )
@@ -555,6 +574,21 @@ def test_append_rejects_haplotype_build_parameter_drift(
     elif drift == "index_predates_table":
         with duckdb.connect(str(_db_path(output_base))) as conn:
             conn.execute("DROP TABLE haplotype_build_parameters")
+    elif drift == "sites_threshold_changed":
+        changed = _haplotypes_with_parameters(datadir, tmp_path / "changed.ht", 0.01, 0.004)
+        append_pairs = _write_table_pairs_tsv(
+            tmp_path / "append_pairs.tsv", rows=[("chr1", str(changed), str(sites))]
+        )
+    elif drift == "index_predates_sites_column":
+        with duckdb.connect(str(_db_path(output_base))) as conn:
+            conn.execute("ALTER TABLE haplotype_build_parameters DROP COLUMN sites_freq_threshold")
+    elif drift == "sites_only_append_to_stale_index":
+        # chr1 had a haplotype table at init; the stale index must refuse it as sites-only too.
+        with duckdb.connect(str(_db_path(output_base))) as conn:
+            conn.execute("ALTER TABLE haplotype_build_parameters DROP COLUMN sites_freq_threshold")
+        append_pairs = _write_table_pairs_tsv(
+            tmp_path / "append_pairs.tsv", rows=[("chr1", "", str(sites))]
+        )
     else:
         append_pairs = _write_table_pairs_tsv(
             tmp_path / "append_pairs.tsv", rows=[("chr1", "", str(sites))]

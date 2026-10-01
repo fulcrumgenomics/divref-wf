@@ -336,12 +336,14 @@ _CHRY_PARAMETERS = HaplotypeBuildParameters(
     haplotype_freq_threshold=0.002,
     haplotype_window_size=37,
     min_call_rate=0.8,
+    sites_freq_threshold=0.003,
 )
 _UNRECORDED_PARAMETERS = HaplotypeBuildParameters(
     variant_freq_threshold=None,
     haplotype_freq_threshold=None,
     haplotype_window_size=None,
     min_call_rate=None,
+    sites_freq_threshold=None,
 )
 
 
@@ -352,7 +354,7 @@ _UNRECORDED_PARAMETERS = HaplotypeBuildParameters(
         pytest.param({}, [], id="no_haplotype_contigs_creates_empty_table"),
         pytest.param(
             {"chrY": _CHRY_PARAMETERS, "chr22": _UNRECORDED_PARAMETERS},
-            [("chr22", None, None, None, None), ("chrY", 0.01, 0.002, 37, 0.8)],
+            [("chr22", None, None, None, None, None), ("chrY", 0.01, 0.002, 37, 0.8, 0.003)],
             id="one_row_per_haplotype_contig",
         ),
     ],
@@ -382,7 +384,8 @@ def test_write_metadata_tables_haplotype_build_parameters(
         rows = (
             conn.execute(
                 "SELECT contig, variant_freq_threshold, haplotype_freq_threshold, "
-                "haplotype_window_size, min_call_rate FROM haplotype_build_parameters "
+                "haplotype_window_size, min_call_rate, sites_freq_threshold "
+                "FROM haplotype_build_parameters "
                 "ORDER BY contig"
             ).fetchall()
             if has_table

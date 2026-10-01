@@ -1,5 +1,6 @@
 """Tests for the compute_haplotypes tool."""
 
+import logging
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -1401,11 +1402,19 @@ def test_compute_haplotypes_chry_nonpar(
     out_ht = hl.read_table(f"{output_base}.ht")
     result = out_ht.collect()
 
+    # The committed sites fixture predates `prefilter_parameters`; read it rather than assume.
+    fixture_globals = hl.read_table(str(in_sites)).index_globals()
+    expected_sites_threshold = (
+        hl.eval(fixture_globals.prefilter_parameters.freq_threshold)
+        if "prefilter_parameters" in fixture_globals
+        else None
+    )
     assert hl.eval(out_ht.index_globals().build_parameters) == hl.Struct(
         variant_freq_threshold=0.005,
         haplotype_freq_threshold=0.005,
         haplotype_window_size=5000,
         min_call_rate=min_call_rate,
+        sites_freq_threshold=expected_sites_threshold,
     )
 
     # Exact regression lock on the committed chrY fixture. Counting a male's single chrY twice would
@@ -1705,3 +1714,66 @@ def test_filter_low_call_rate(
     mt = mt.annotate_entries(GT=hl.or_missing(called[mt.col_idx], hl.call(0)))
     result = _filter_low_call_rate(mt, min_call_rate)
     assert (result.count_rows() == 1) is expected_kept
+
+
+@pytest.mark.parametrize(
+    ("prefilter_threshold", "expected_missing_warnings", "expected_cutoff_logs"),
+    [
+        # The logged cutoff is max(pre-filter, 0.005 variant_freq_threshold).
+        pytest.param(
+            0.002,
+            0,
+            ["Any-population variant AF cutoff is 0.005"],
+            id="prefilter_global_carried_into_build_parameters",
+        ),
+        pytest.param(
+            0.01,
+            0,
+            ["Any-population variant AF cutoff is 0.01"],
+            id="prefilter_above_variant_threshold_sets_cutoff",
+        ),
+        pytest.param(None, 1, [], id="no_prefilter_global_records_missing_and_warns"),
+    ],
+)
+def test_compute_haplotypes_records_sites_prefilter_threshold(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    prefilter_threshold: float | None,
+    expected_missing_warnings: int,
+    expected_cutoff_logs: list[str],
+) -> None:
+    """The input sites table's `prefilter_parameters.freq_threshold` is carried into the global."""
+    caplog.set_level(logging.INFO, logger="divref.tools.compute_haplotypes")
+    sites_ht = hl.read_table(str(datadir / "chrY_2900000_2925000.gnomad_afs.ht")).select_globals(
+        "pops"
+    )
+    if prefilter_threshold is not None:
+        sites_ht = sites_ht.annotate_globals(
+            prefilter_parameters=hl.struct(freq_threshold=hl.float64(prefilter_threshold))
+        )
+    sites = tmp_path / "sites.ht"
+    sites_ht.write(str(sites))
+    output_base = tmp_path / "haplos"
+    with patch("divref.tools.compute_haplotypes.hl.init"):
+        compute_haplotypes(
+            vcfs_path=datadir / "chrY_2900000_2925000.vcf.gz",
+            gnomad_va_file=sites,
+            gnomad_sa_file=datadir / "hgdp_1kg_sample_metadata.extract.ht",
+            window_size=5000,
+            variant_freq_threshold=0.005,
+            haplotype_freq_threshold=0.005,
+            output_base=output_base,
+            temp_dir=tmp_path / "hail_tmp",
+        )
+    recorded = hl.eval(hl.read_table(f"{output_base}.ht").index_globals().build_parameters)
+    assert recorded.sites_freq_threshold == prefilter_threshold
+
+    messages = [record.getMessage() for record in caplog.records]
+    missing_warnings = [m for m in messages if m.startswith(f"Sites table {sites} has no")]
+    assert len(missing_warnings) == expected_missing_warnings
+    cutoff_logs = [
+        m.split(" (")[0] for m in messages if m.startswith("Any-population variant AF cutoff is")
+    ]
+    assert cutoff_logs == expected_cutoff_logs
