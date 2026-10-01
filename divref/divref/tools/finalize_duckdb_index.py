@@ -7,7 +7,7 @@ import duckdb
 from fgpyo.io import assert_path_is_readable
 
 from divref.duckdb_index import create_sequence_id_index
-from divref.duckdb_index import sequences_table_exists
+from divref.duckdb_index import table_exists
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def finalize_duckdb_index(
     assert_path_is_readable(out_duckdb_file)
 
     with duckdb.connect(str(out_duckdb_file)) as conn:
-        if not sequences_table_exists(conn):
+        if not table_exists(conn, "sequences"):
             raise ValueError(
                 f"DuckDB index {out_duckdb_file} has no 'sequences' table; "
                 f"run append_contig_to_duckdb_index before finalizing."
