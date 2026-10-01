@@ -1,5 +1,7 @@
 """Tests for the init_duckdb_index tool."""
 
+from contextlib import AbstractContextManager
+from contextlib import nullcontext
 from pathlib import Path
 
 import duckdb
@@ -243,4 +245,116 @@ def test_init_records_haplotype_build_parameters(
             "haplotype_window_size, min_call_rate FROM haplotype_build_parameters"
         ).fetchall()
     assert rows == [expected_row]
-    assert ("has no build_parameters global" in caplog.text) == expect_warning
+    expected_warning = f"Haplotype table {haplotype_table} has no build_parameters global"
+    assert (expected_warning in caplog.text) == expect_warning
+
+
+def test_init_records_variant_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every contig gets a row from its sites table; a table without the global records NULLs."""
+    recorded_sites = tmp_path / "chr1_sites.ht"
+    hl.read_table(str(datadir / "chr1_100001_200000.gnomad_afs.ht")).annotate_globals(
+        build_parameters=hl.struct(
+            gnomad_version="JOINT_41", freq_threshold=hl.float64(0.005), apply_filters=True
+        )
+    ).write(str(recorded_sites))
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "table_pairs.tsv",
+        rows=[
+            ("chr1", str(datadir / "chr1_100001_200000_haplotypes.ht"), str(recorded_sites)),
+            ("chrX", "", str(datadir / "chrX_50000000_50025000.gnomad_afs.ht")),
+        ],
+    )
+    output_base = tmp_path / "idx"
+
+    init_duckdb_index(
+        in_table_pairs_tsv=table_pairs_tsv,
+        output_base=output_base,
+        version="9.9",
+        window_size=25,
+        force=True,
+    )
+
+    db = Path(f"{output_base}.haplotypes_gnomad_merge.index.duckdb")
+    with duckdb.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT contig, gnomad_version, freq_threshold, apply_filters "
+            "FROM variant_build_parameters ORDER BY contig"
+        ).fetchall()
+    assert rows == [("chr1", "JOINT_41", 0.005, True), ("chrX", None, None, None)]
+    assert "chrX_50000000_50025000.gnomad_afs.ht has no build_parameters global" in caplog.text
+    assert "chr1_sites.ht has no build_parameters global" not in caplog.text
+
+
+_JOINT_41_PARAMETERS = hl.Struct(
+    gnomad_version="JOINT_41", freq_threshold=0.005, apply_filters=True
+)
+
+
+@pytest.mark.parametrize(
+    ("chrx_parameters", "expectation"),
+    [
+        pytest.param(
+            _JOINT_41_PARAMETERS.annotate(gnomad_version="GENOMES_312"),
+            pytest.raises(ValueError, match="disagree on gnomad_version"),
+            id="mixed_gnomad_versions_rejected",
+        ),
+        pytest.param(
+            _JOINT_41_PARAMETERS.annotate(freq_threshold=0.01),
+            pytest.raises(ValueError, match="disagree on freq_threshold"),
+            id="mixed_freq_thresholds_rejected",
+        ),
+        pytest.param(
+            _JOINT_41_PARAMETERS.annotate(apply_filters=False),
+            pytest.raises(ValueError, match="disagree on apply_filters"),
+            id="mixed_apply_filters_rejected",
+        ),
+        pytest.param(None, nullcontext(), id="unrecorded_contig_does_not_conflict"),
+    ],
+)
+def test_init_rejects_mixed_variant_build_parameters(
+    hail_context: None,  # noqa: ARG001
+    datadir: Path,
+    tmp_path: Path,
+    chrx_parameters: hl.Struct | None,
+    expectation: AbstractContextManager[object],
+) -> None:
+    """All contigs share one single-variant source; recorded values must agree across contigs."""
+    parameters_type = hl.tstruct(
+        gnomad_version=hl.tstr, freq_threshold=hl.tfloat64, apply_filters=hl.tbool
+    )
+
+    def sites_with(source: Path, out: Path, parameters: hl.Struct | None) -> Path:
+        if parameters is None:
+            return source
+        hl.read_table(str(source)).annotate_globals(
+            build_parameters=hl.literal(parameters, dtype=parameters_type)
+        ).write(str(out))
+        return out
+
+    chr1_sites = sites_with(
+        datadir / "chr1_100001_200000.gnomad_afs.ht", tmp_path / "chr1.ht", _JOINT_41_PARAMETERS
+    )
+    chrx_sites = sites_with(
+        datadir / "chrX_50000000_50025000.gnomad_afs.ht", tmp_path / "chrX.ht", chrx_parameters
+    )
+    table_pairs_tsv = _write_table_pairs_tsv(
+        tmp_path / "table_pairs.tsv",
+        rows=[
+            ("chr1", str(datadir / "chr1_100001_200000_haplotypes.ht"), str(chr1_sites)),
+            ("chrX", "", str(chrx_sites)),
+        ],
+    )
+
+    with expectation:
+        init_duckdb_index(
+            in_table_pairs_tsv=table_pairs_tsv,
+            output_base=tmp_path / "idx",
+            version="9.9",
+            window_size=25,
+            force=True,
+        )

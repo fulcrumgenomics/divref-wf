@@ -541,6 +541,7 @@ def create_duckdb_from_tsv(
             annotation_af_prefix=meta.source_name,
             version=meta.version,
             haplotype_build_parameters=None,
+            variant_build_parameters=None,
         )
 
         known_contigs = set(contigs)

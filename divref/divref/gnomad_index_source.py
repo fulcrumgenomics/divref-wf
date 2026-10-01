@@ -1,12 +1,14 @@
 """Hail/gnomAD-specific per-contig legend inputs for the DuckDB index build."""
 
 import logging
+from dataclasses import fields
 from pathlib import Path
 
 import hail as hl
 from fgmetric import Metric
 
 from divref.duckdb_index import HaplotypeBuildParameters
+from divref.duckdb_index import VariantBuildParameters
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +48,46 @@ def read_pops_legend(table_path: Path) -> list[str]:
     return list(hl.eval(hl.read_table(str(table_path)).index_globals().pops))
 
 
-def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuildParameters:
+def _read_build_parameters[ParametersT: (HaplotypeBuildParameters, VariantBuildParameters)](
+    *,
+    table_path: Path,
+    parameters_type: type[ParametersT],
+    table_kind: str,
+    tool_name: str,
+) -> ParametersT:
     """
-    Read the `build_parameters` global that `compute_haplotypes` writes on its output table.
+    Read a table's `build_parameters` global into `parameters_type`.
 
     Reads only the table's globals file. A table built before the global existed yields
     all-None parameters and a warning.
+
+    Args:
+        table_path: Path to a Hail table.
+        parameters_type: The build-parameters dataclass to fill.
+        table_kind: Table description for the warning (e.g. "Haplotype").
+        tool_name: Tool that writes the global, named in the warning.
+
+    Returns:
+        The recorded parameters, or all None when the table has no `build_parameters` global.
+    """
+    table_globals = hl.read_table(str(table_path)).index_globals()
+    names = [field.name for field in fields(parameters_type)]
+    if "build_parameters" not in table_globals:
+        logger.warning(
+            "%s table %s has no build_parameters global, so its build parameters are unknown "
+            "(NULL). Re-run %s to record them.",
+            table_kind,
+            table_path,
+            tool_name,
+        )
+        return parameters_type(**dict.fromkeys(names))
+    recorded = hl.eval(table_globals.build_parameters)
+    return parameters_type(**{name: recorded[name] for name in names})
+
+
+def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuildParameters:
+    """
+    Read the `build_parameters` global that `compute_haplotypes` writes on its output table.
 
     Args:
         haplotype_table_path: Path to a haplotype Hail table.
@@ -59,25 +95,29 @@ def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuil
     Returns:
         The recorded parameters, or all None when the table has no `build_parameters` global.
     """
-    table_globals = hl.read_table(str(haplotype_table_path)).index_globals()
-    if "build_parameters" not in table_globals:
-        logger.warning(
-            "Haplotype table %s has no build_parameters global, so its build parameters are "
-            "unknown (NULL). Re-run compute_haplotypes to record them.",
-            haplotype_table_path,
-        )
-        return HaplotypeBuildParameters(
-            variant_freq_threshold=None,
-            haplotype_freq_threshold=None,
-            haplotype_window_size=None,
-            min_call_rate=None,
-        )
-    recorded = hl.eval(table_globals.build_parameters)
-    return HaplotypeBuildParameters(
-        variant_freq_threshold=recorded.variant_freq_threshold,
-        haplotype_freq_threshold=recorded.haplotype_freq_threshold,
-        haplotype_window_size=recorded.haplotype_window_size,
-        min_call_rate=recorded.min_call_rate,
+    return _read_build_parameters(
+        table_path=haplotype_table_path,
+        parameters_type=HaplotypeBuildParameters,
+        table_kind="Haplotype",
+        tool_name="compute_haplotypes",
+    )
+
+
+def read_variant_build_parameters(sites_table_path: Path) -> VariantBuildParameters:
+    """
+    Read the `build_parameters` global that `extract_gnomad_single_afs` writes on its output table.
+
+    Args:
+        sites_table_path: Path to a gnomAD sites Hail table.
+
+    Returns:
+        The recorded parameters, or all None when the table has no `build_parameters` global.
+    """
+    return _read_build_parameters(
+        table_path=sites_table_path,
+        parameters_type=VariantBuildParameters,
+        table_kind="Sites",
+        tool_name="extract_gnomad_single_afs",
     )
 
 

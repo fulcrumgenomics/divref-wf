@@ -4,6 +4,7 @@ import json
 import logging
 from collections.abc import Iterator
 from collections.abc import Mapping
+from dataclasses import astuple
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,49 @@ class HaplotypeBuildParameters:
     min_call_rate: float | None
 
 
+@dataclass(frozen=True)
+class VariantBuildParameters:
+    """
+    The `extract_gnomad_single_afs` parameters that built one contig's sites table.
+
+    A field is None when the parameter was not recorded (a sites table built before the
+    parameters were recorded).
+
+    Attributes:
+        gnomad_version: gnomAD sites table the single variants came from.
+        freq_threshold: Minimum population AF to retain a variant.
+        apply_filters: Whether the variant filters (e.g. VQSR, AC0) were applied.
+    """
+
+    gnomad_version: str | None
+    freq_threshold: float | None
+    apply_filters: bool | None
+
+
+def _write_build_parameters_table(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    table_name: str,
+    columns_ddl: str,
+    parameters_by_contig: Mapping[str, HaplotypeBuildParameters]
+    | Mapping[str, VariantBuildParameters],
+) -> None:
+    """
+    Create a build-parameters table keyed by `contig` and insert one row per contig.
+
+    Args:
+        conn: Open DuckDB connection to the index being initialized.
+        table_name: Name of the table to create.
+        columns_ddl: Column definitions after `contig`, in the dataclass field order.
+        parameters_by_contig: Per-contig build parameters.
+    """
+    conn.execute(f"CREATE TABLE {table_name} (contig VARCHAR PRIMARY KEY, {columns_ddl})")
+    for contig, parameters in parameters_by_contig.items():
+        row = [contig, *astuple(parameters)]
+        placeholders = ", ".join("?" * len(row))
+        conn.execute(f"INSERT INTO {table_name} VALUES ({placeholders})", row)
+
+
 def write_metadata_tables(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -67,12 +111,14 @@ def write_metadata_tables(
     annotation_af_prefix: str,
     version: str,
     haplotype_build_parameters: Mapping[str, HaplotypeBuildParameters] | None,
+    variant_build_parameters: Mapping[str, VariantBuildParameters] | None,
 ) -> None:
     """
     Write the window_size, three *_pops_legend, annotation_af_prefix, and VERSION metadata tables.
 
     With `haplotype_build_parameters`, also write a `haplotype_build_parameters` table with one row
-    per haplotype contig, keyed by `contig`.
+    per haplotype contig, keyed by `contig`. With `variant_build_parameters`, likewise write a
+    `variant_build_parameters` table with one row per contig.
 
     Args:
         conn: Open DuckDB connection to the index being initialized.
@@ -86,6 +132,8 @@ def write_metadata_tables(
         version: Version identifier stored in the `VERSION` table.
         haplotype_build_parameters: Per-contig `compute_haplotypes` parameters, or None to skip
             the table (a TSV-built index). An empty mapping writes an empty table.
+        variant_build_parameters: Per-contig `extract_gnomad_single_afs` parameters, or None to
+            skip the table (a TSV-built index). An empty mapping writes an empty table.
     """
     # Write the tables in one transaction so an interrupted init leaves no partially
     # populated index (which a later append/finalize would then read as corrupt metadata).
@@ -110,22 +158,22 @@ def write_metadata_tables(
         )
         conn.execute("CREATE TABLE VERSION AS SELECT ? AS version", [version])
         if haplotype_build_parameters is not None:
-            conn.execute(
-                "CREATE TABLE haplotype_build_parameters (contig VARCHAR PRIMARY KEY, "
-                "variant_freq_threshold DOUBLE, haplotype_freq_threshold DOUBLE, "
-                "haplotype_window_size INTEGER, min_call_rate DOUBLE)"
+            _write_build_parameters_table(
+                conn,
+                table_name="haplotype_build_parameters",
+                columns_ddl=(
+                    "variant_freq_threshold DOUBLE, haplotype_freq_threshold DOUBLE, "
+                    "haplotype_window_size INTEGER, min_call_rate DOUBLE"
+                ),
+                parameters_by_contig=haplotype_build_parameters,
             )
-            for contig, parameters in haplotype_build_parameters.items():
-                conn.execute(
-                    "INSERT INTO haplotype_build_parameters VALUES (?, ?, ?, ?, ?)",
-                    [
-                        contig,
-                        parameters.variant_freq_threshold,
-                        parameters.haplotype_freq_threshold,
-                        parameters.haplotype_window_size,
-                        parameters.min_call_rate,
-                    ],
-                )
+        if variant_build_parameters is not None:
+            _write_build_parameters_table(
+                conn,
+                table_name="variant_build_parameters",
+                columns_ddl="gnomad_version VARCHAR, freq_threshold DOUBLE, apply_filters BOOLEAN",
+                parameters_by_contig=variant_build_parameters,
+            )
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
