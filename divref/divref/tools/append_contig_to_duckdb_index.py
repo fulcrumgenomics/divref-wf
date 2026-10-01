@@ -15,6 +15,7 @@ from divref import defaults
 from divref.duckdb_index import contig_already_appended
 from divref.duckdb_index import read_legend
 from divref.duckdb_index import read_stored_haplotype_build_parameters
+from divref.duckdb_index import read_stored_variant_build_parameters
 from divref.duckdb_index import read_window_size
 from divref.duckdb_index import sequences_row_count
 from divref.duckdb_index import sequences_tsv_columns
@@ -23,6 +24,7 @@ from divref.duckdb_index import table_exists
 from divref.gnomad_index_source import TablePair
 from divref.gnomad_index_source import read_and_validate_pops_legends
 from divref.gnomad_index_source import read_haplotype_build_parameters
+from divref.gnomad_index_source import read_variant_build_parameters
 from divref.haplotype import get_haplo_sequence
 from divref.haplotype import haplo_coordinates
 
@@ -441,6 +443,36 @@ def _check_haplotype_build_parameters(
         )
 
 
+def _check_variant_build_parameters(conn: duckdb.DuckDBPyConnection, table_pair: TablePair) -> None:
+    """
+    Check that the contig's sites table still matches what `init_duckdb_index` recorded.
+
+    Args:
+        conn: Open connection to the DuckDB index initialized by `init_duckdb_index`.
+        table_pair: The single contig's haplotype + gnomAD sites table pair.
+
+    Raises:
+        ValueError: If the contig has no stored row or different parameters.
+    """
+    stored = read_stored_variant_build_parameters(conn, table_pair.contig)
+    if stored is None:
+        if not table_exists(conn, "variant_build_parameters"):
+            raise ValueError(
+                f"The index was initialized before variant build parameters were recorded, so "
+                f"{table_pair.contig} cannot be checked; rebuild it with init_duckdb_index --force."
+            )
+        raise ValueError(
+            f"There is no variant_build_parameters row for {table_pair.contig}; re-run "
+            f"init_duckdb_index with the same table pairs."
+        )
+    current = read_variant_build_parameters(table_pair.sites_table_path)
+    if current != stored:
+        raise ValueError(
+            f"The {table_pair.contig} variant build parameters {current} do not match those "
+            f"recorded at init {stored}; re-run init_duckdb_index with the same table pairs."
+        )
+
+
 def _export_and_stream_contig(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -512,8 +544,8 @@ def append_contig_to_duckdb_index(
     `sequences` row count, so running contigs in canonical order reproduces a contiguous
     `DR-{version}-N` numbering across processes.
 
-    Like the legends and `window_size`, the contig's haplotype build parameters must still match
-    the row `init_duckdb_index` recorded.
+    Like the legends and `window_size`, the contig's haplotype and variant build parameters must
+    still match the rows `init_duckdb_index` recorded.
 
     Each contig is written in a single transaction, so a crash mid-stream rolls back and leaves the
     index unchanged. Appends are expected to run once per contig, in order; re-appending a contig
@@ -543,8 +575,8 @@ def append_contig_to_duckdb_index(
     Raises:
         ValueError: If Spark memory is below 1GB, the contig is not in the TSV, the stored window
             size disagrees with `window_size`, this contig's source legends disagree with the
-            stored legends, its haplotype build parameters disagree with the stored row, or the
-            contig already has rows in the index.
+            stored legends, its haplotype or variant build parameters disagree with the stored
+            rows, or the contig already has rows in the index.
     """
     assert_path_is_readable(in_table_pairs_tsv)
     assert_path_is_readable(reference_fasta)
@@ -594,6 +626,7 @@ def append_contig_to_duckdb_index(
 
         joint_pops_legend, remaps = _resolve_legends_and_remaps(conn, table_pair)
         _check_haplotype_build_parameters(conn, table_pair)
+        _check_variant_build_parameters(conn, table_pair)
 
         # Appends run once per contig, in canonical order, after init_duckdb_index. Re-appending
         # onto an index that already holds this contig's rows would duplicate them with fresh
