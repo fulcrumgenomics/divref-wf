@@ -1692,4 +1692,4 @@ def test_filter_low_call_rate(
     mt = mt.annotate_rows(locus=hl.locus(contig, position, reference_genome="GRCh38"))
     mt = mt.annotate_entries(GT=hl.or_missing(called[mt.col_idx], hl.call(0)))
     result = _filter_low_call_rate(mt, min_call_rate)
-    assert (result.count_rows() == 1) == expected_kept
+    assert (result.count_rows() == 1) is expected_kept
