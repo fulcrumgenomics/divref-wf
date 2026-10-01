@@ -1,9 +1,14 @@
 """Hail/gnomAD-specific per-contig legend inputs for the DuckDB index build."""
 
+import logging
 from pathlib import Path
 
 import hail as hl
 from fgmetric import Metric
+
+from divref.duckdb_index import HaplotypeBuildParameters
+
+logger = logging.getLogger(__name__)
 
 
 class TablePair(Metric):
@@ -39,6 +44,41 @@ def read_pops_legend(table_path: Path) -> list[str]:
         The ordered population codes.
     """
     return list(hl.eval(hl.read_table(str(table_path)).index_globals().pops))
+
+
+def read_haplotype_build_parameters(haplotype_table_path: Path) -> HaplotypeBuildParameters:
+    """
+    Read the `build_parameters` global that `compute_haplotypes` writes on its output table.
+
+    Reads only the table's globals file. A table built before the global existed yields
+    all-None parameters and a warning.
+
+    Args:
+        haplotype_table_path: Path to a haplotype Hail table.
+
+    Returns:
+        The recorded parameters, or all None when the table has no `build_parameters` global.
+    """
+    table_globals = hl.read_table(str(haplotype_table_path)).index_globals()
+    if "build_parameters" not in table_globals:
+        logger.warning(
+            "Haplotype table %s has no build_parameters global, so its build parameters are "
+            "unknown (NULL). Re-run compute_haplotypes to record them.",
+            haplotype_table_path,
+        )
+        return HaplotypeBuildParameters(
+            variant_freq_threshold=None,
+            haplotype_freq_threshold=None,
+            haplotype_window_size=None,
+            min_call_rate=None,
+        )
+    recorded = hl.eval(table_globals.build_parameters)
+    return HaplotypeBuildParameters(
+        variant_freq_threshold=recorded.variant_freq_threshold,
+        haplotype_freq_threshold=recorded.haplotype_freq_threshold,
+        haplotype_window_size=recorded.haplotype_window_size,
+        min_call_rate=recorded.min_call_rate,
+    )
 
 
 def read_and_validate_pops_legends(table_pairs: list[TablePair]) -> tuple[list[str], list[str]]:

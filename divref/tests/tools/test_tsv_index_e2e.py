@@ -21,7 +21,11 @@ def test_tsv_index_e2e(datadir: Path, tmp_path: Path) -> None:
 
     conn = duckdb.connect(str(f"{out_base}.index.duckdb"), read_only=True)
     got = conn.execute("SELECT * FROM sequences ORDER BY sequence_id").pl()
+    has_build_parameters = conn.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'haplotype_build_parameters'"
+    ).fetchone()
     conn.close()
+    assert has_build_parameters is None
 
     exp = pl.read_csv(
         datadir / "tsv_source" / "tsv_index_golden.sequences.tsv",
