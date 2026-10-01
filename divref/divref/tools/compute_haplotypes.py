@@ -13,7 +13,7 @@ from divref import defaults
 logger = logging.getLogger(__name__)
 
 
-def _is_excluded_on_chry(
+def _is_excluded_on_chry_nonpar(
     locus: hl.LocusExpression, sex_karyotype: hl.StringExpression
 ) -> hl.BooleanExpression:
     """
@@ -64,7 +64,7 @@ def _haploid_adjusted_call(
     is_haploid_male = (locus.in_x_nonpar() | is_y_nonpar) & is_male
     return (
         hl.case(missing_false=True)
-        .when(_is_excluded_on_chry(locus, sex_karyotype), hl.missing(hl.tcall))
+        .when(_is_excluded_on_chry_nonpar(locus, sex_karyotype), hl.missing(hl.tcall))
         .when(is_haploid_male, hl.call(gt[0]))
         .default(gt)
     )
@@ -93,7 +93,7 @@ def _carrier_strands(
     is_male = sex_karyotype == "XY"
     is_y_nonpar = locus.in_y_nonpar()
     is_haploid_locus = (locus.in_x_nonpar() & is_male) | is_y_nonpar
-    is_left = (gt[0] != 0) & ~_is_excluded_on_chry(locus, sex_karyotype)
+    is_left = (gt[0] != 0) & ~_is_excluded_on_chry_nonpar(locus, sex_karyotype)
     is_right = hl.if_else(gt.ploidy > 1, gt[1] != 0, False) & ~is_haploid_locus
     return is_left, is_right
 
@@ -103,8 +103,8 @@ def _filter_low_call_rate(mt: hl.MatrixTable, min_call_rate: float) -> hl.Matrix
     Drop rows where too few of the callable samples at the locus have a genotype call.
 
     Missing calls shrink AN and inflate the local AF. The denominator is every sample in `mt`,
-    except on chrY non-PAR, where only XY males count (see `_is_excluded_on_chry`). A chrY non-PAR
-    row with no XY males gives 0/0, which is NaN, so it drops.
+    except on chrY non-PAR, where only XY males count (see `_is_excluded_on_chry_nonpar`). A chrY
+    non-PAR row with no XY males gives 0/0, which is NaN, so it drops.
 
     Args:
         mt: Matrix table with `locus` row, `sex_karyotype` column, and `GT` entry fields.
@@ -113,7 +113,7 @@ def _filter_low_call_rate(mt: hl.MatrixTable, min_call_rate: float) -> hl.Matrix
     Returns:
         `mt` without the rows below `min_call_rate`.
     """
-    is_callable = ~_is_excluded_on_chry(mt.locus, mt.sex_karyotype)
+    is_callable = ~_is_excluded_on_chry_nonpar(mt.locus, mt.sex_karyotype)
     call_rate = hl.agg.count_where(is_callable & hl.is_defined(mt.GT)) / hl.agg.count_where(
         is_callable
     )
