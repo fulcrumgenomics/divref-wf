@@ -231,24 +231,6 @@ def read_stored_haplotype_build_parameters(
     )
 
 
-def variant_build_parameters_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
-    """
-    Return whether the index has a `variant_build_parameters` table.
-
-    Args:
-        conn: Open connection to the DuckDB index.
-
-    Returns:
-        True if the table is present.
-    """
-    return (
-        conn.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_name = 'variant_build_parameters'"
-        ).fetchone()
-        is not None
-    )
-
-
 def read_stored_variant_build_parameters(
     conn: duckdb.DuckDBPyConnection, contig: str
 ) -> VariantBuildParameters | None:
@@ -262,7 +244,7 @@ def read_stored_variant_build_parameters(
     Returns:
         The stored parameters, or None when the table or the contig's row is absent.
     """
-    if not variant_build_parameters_table_exists(conn):
+    if not table_exists(conn, "variant_build_parameters"):
         return None
     row = conn.execute(
         "SELECT gnomad_version, freq_threshold, apply_filters FROM variant_build_parameters "

@@ -21,7 +21,6 @@ from divref.duckdb_index import sequences_row_count
 from divref.duckdb_index import sequences_tsv_columns
 from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.duckdb_index import table_exists
-from divref.duckdb_index import variant_build_parameters_table_exists
 from divref.gnomad_index_source import TablePair
 from divref.gnomad_index_source import read_and_validate_pops_legends
 from divref.gnomad_index_source import read_haplotype_build_parameters
@@ -457,7 +456,7 @@ def _check_variant_build_parameters(conn: duckdb.DuckDBPyConnection, table_pair:
     """
     stored = read_stored_variant_build_parameters(conn, table_pair.contig)
     if stored is None:
-        if not variant_build_parameters_table_exists(conn):
+        if not table_exists(conn, "variant_build_parameters"):
             raise ValueError(
                 f"The index was initialized before variant build parameters were recorded, so "
                 f"{table_pair.contig} cannot be checked; rebuild it with init_duckdb_index --force."
