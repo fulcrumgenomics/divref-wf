@@ -153,7 +153,8 @@ def extract_gnomad_single_afs(
     Reads a gnomAD sites table and filters to variants above the frequency threshold in at least one
     population. Writes up to two outputs: a Hail table at `out_sites_hail_table` for downstream
     pipeline tools, and a flat TSV at `out_sites_tsv` with columns `variant` (contig:pos:ref:alt),
-    one allele-frequency column per population, `popmax_A[CFN]`, and `maxpop`.
+    one allele-frequency column per population, `popmax_A[CFN]`, and `maxpop`. The Hail table's
+    `build_parameters` global records `gnomad_version`, `freq_threshold`, and `apply_filters`.
 
     At least one of `out_sites_hail_table` or `out_sites_tsv` must be defined.
 
@@ -214,10 +215,18 @@ def extract_gnomad_single_afs(
             raise ValueError(f"Population {pop!r} not found in gnomAD frequency metadata")
         pop_indices.append(idx)
 
-    if not no_apply_filters:
+    apply_filters = not no_apply_filters
+    if apply_filters:
         va = _apply_filters(va, gnomad_version)
 
-    va = va.select_globals(pops=populations)
+    va = va.select_globals(
+        pops=populations,
+        build_parameters=hl.struct(
+            gnomad_version=gnomad_version.value,
+            freq_threshold=hl.float64(freq_threshold),
+            apply_filters=apply_filters,
+        ),
+    )
     row_freq = operator.attrgetter(schema.row_freq_field)(va)
     va = va.select(
         pop_freqs=hl.literal(pop_indices).map(lambda i: row_freq[i]),
