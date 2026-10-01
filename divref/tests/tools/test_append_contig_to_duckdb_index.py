@@ -587,7 +587,7 @@ def test_append_rejects_haplotype_build_parameter_drift(
         with duckdb.connect(str(_db_path(output_base))) as conn:
             conn.execute("ALTER TABLE haplotype_build_parameters DROP COLUMN sites_freq_threshold")
         append_pairs = _write_table_pairs_tsv(
-            tmp_path / "append_pairs.tsv", rows=[("chr1", "", sites)]
+            tmp_path / "append_pairs.tsv", rows=[("chr1", "", str(sites))]
         )
     else:
         append_pairs = _write_table_pairs_tsv(
