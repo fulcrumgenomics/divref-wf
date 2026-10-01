@@ -9,6 +9,7 @@ import pytest
 from divref.duckdb_index import HaplotypeBuildParameters
 from divref.duckdb_index import _stream_tsv_into_sequences
 from divref.duckdb_index import create_sequence_id_index
+from divref.duckdb_index import read_stored_haplotype_build_parameters
 from divref.duckdb_index import sequences_tsv_columns
 from divref.duckdb_index import stream_sequences_tsv_into_duckdb
 from divref.duckdb_index import with_compatibility_flag
@@ -385,3 +386,20 @@ def test_write_metadata_tables_haplotype_build_parameters(
             else None
         )
     assert rows == expected_rows
+
+
+def test_haplotype_build_parameters_round_trip(tmp_path: Path) -> None:
+    """Parameters written by `write_metadata_tables` read back unchanged, field by field."""
+    with duckdb.connect(str(tmp_path / "idx.duckdb")) as conn:
+        write_metadata_tables(
+            conn,
+            window_size=25,
+            haplotype_pops_legend=["afr"],
+            variant_pops_legend=["afr"],
+            joint_pops_legend=["afr"],
+            annotation_af_prefix="gnomAD",
+            version="9.9",
+            haplotype_build_parameters={"chrY": _CHRY_PARAMETERS},
+        )
+        assert read_stored_haplotype_build_parameters(conn, "chrY") == _CHRY_PARAMETERS
+        assert read_stored_haplotype_build_parameters(conn, "chr22") is None

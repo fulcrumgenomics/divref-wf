@@ -15,19 +15,20 @@ from divref.haplotype_compat import compatibility_flag
 logger = logging.getLogger(__name__)
 
 
-def sequences_table_exists(conn: duckdb.DuckDBPyConnection) -> bool:
+def table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     """
-    Return whether the `sequences` table exists in the connected DuckDB index.
+    Return whether a table exists in the connected DuckDB index.
 
     Args:
         conn: Open DuckDB connection to a DivRef index.
+        table_name: Name of the table to look for.
 
     Returns:
-        True if a `sequences` table is present.
+        True if the table is present.
     """
     return (
         conn.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_name = 'sequences'"
+            "SELECT 1 FROM information_schema.tables WHERE table_name = ?", [table_name]
         ).fetchone()
         is not None
     )
@@ -152,6 +153,36 @@ def read_legend(conn: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     return list(json.loads(row[0]))
 
 
+def read_stored_haplotype_build_parameters(
+    conn: duckdb.DuckDBPyConnection, contig: str
+) -> HaplotypeBuildParameters | None:
+    """
+    Read one contig's row from `haplotype_build_parameters`.
+
+    Args:
+        conn: Open connection to the DuckDB index.
+        contig: The contig to look up.
+
+    Returns:
+        The stored parameters, or None when the table or the contig's row is absent.
+    """
+    if not table_exists(conn, "haplotype_build_parameters"):
+        return None
+    row = conn.execute(
+        "SELECT variant_freq_threshold, haplotype_freq_threshold, haplotype_window_size, "
+        "min_call_rate FROM haplotype_build_parameters WHERE contig = ?",
+        [contig],
+    ).fetchone()
+    if row is None:
+        return None
+    return HaplotypeBuildParameters(
+        variant_freq_threshold=row[0],
+        haplotype_freq_threshold=row[1],
+        haplotype_window_size=row[2],
+        min_call_rate=row[3],
+    )
+
+
 def read_window_size(conn: duckdb.DuckDBPyConnection) -> int:
     """Read the stored window_size metadata value."""
     row = conn.execute("SELECT window_size FROM window_size").fetchone()
@@ -162,7 +193,7 @@ def read_window_size(conn: duckdb.DuckDBPyConnection) -> int:
 
 def sequences_row_count(conn: duckdb.DuckDBPyConnection) -> int:
     """Current number of rows in `sequences`, or 0 if the table does not exist yet."""
-    if not sequences_table_exists(conn):
+    if not table_exists(conn, "sequences"):
         return 0
     row = conn.execute("SELECT COUNT(*) FROM sequences").fetchone()
     if row is None:
@@ -172,7 +203,7 @@ def sequences_row_count(conn: duckdb.DuckDBPyConnection) -> int:
 
 def contig_already_appended(conn: duckdb.DuckDBPyConnection, contig: str) -> bool:
     """Whether the `sequences` table already holds any rows for `contig` (False if no table yet)."""
-    if not sequences_table_exists(conn):
+    if not table_exists(conn, "sequences"):
         return False
     row = conn.execute("SELECT 1 FROM sequences WHERE contig = ? LIMIT 1", [contig]).fetchone()
     return row is not None
@@ -399,7 +430,7 @@ def _stream_tsv_into_sequences(
     Returns:
         The number of rows appended for this contig.
     """
-    if not sequences_table_exists(conn):
+    if not table_exists(conn, "sequences"):
         # `haplotype_filter` is appended last in both the schema-defining empty frame and every
         # inserted chunk, so column order stays consistent across the CREATE and the INSERTs.
         empty_df = with_compatibility_flag(

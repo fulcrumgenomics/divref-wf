@@ -9,7 +9,7 @@ import polars
 from fgpyo.io import assert_path_is_readable
 from fgpyo.io import assert_path_is_writable
 
-from divref.duckdb_index import sequences_table_exists
+from divref.duckdb_index import table_exists
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def create_divref_fasta(
         assert_path_is_writable(out_path)
 
     with duckdb.connect(str(duckdb_path), read_only=True) as conn:
-        if not sequences_table_exists(conn):
+        if not table_exists(conn, "sequences"):
             raise ValueError(
                 f"DuckDB index {duckdb_path} has no 'sequences' table; "
                 f"run append_contig_to_duckdb_index and finalize_duckdb_index first."
