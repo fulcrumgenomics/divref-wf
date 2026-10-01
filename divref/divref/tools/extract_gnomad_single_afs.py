@@ -222,7 +222,7 @@ def extract_gnomad_single_afs(
     va = va.select_globals(
         pops=populations,
         build_parameters=hl.struct(
-            gnomad_version=str(gnomad_version),
+            gnomad_version=gnomad_version.value,
             freq_threshold=hl.float64(freq_threshold),
             apply_filters=apply_filters,
         ),
